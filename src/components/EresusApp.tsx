@@ -1438,8 +1438,8 @@ const CountersView: React.FC = () => {
 
 const CounterItem: React.FC<{ label: string; value: number; color: string; }> = ({ label, value, color }) => (
   <div className={`flex flex-col items-center ${color}`}>
-    <span className="font-mono font-bold text-2xl">{value}</span>
-    <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">{label}</span>
+    <span className="font-mono font-bold text-lg">{value}</span>
+    <span className="text-[10px] font-semibold uppercase text-gray-500 dark:text-gray-400">{label}</span>
   </div>
 );
 
@@ -1702,10 +1702,10 @@ const ActionGridView: React.FC<{
       <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
         <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Medications</h3>
         <div className="grid grid-cols-2 gap-3">
-          <ActionButton title="Adrenaline" icon={<Syringe size={18} />} backgroundColor="bg-pink-500" foregroundColor="text-white" onClick={props.onLogAdrenaline} disabled={!isAdrenalineAvailable} />
-          <ActionButton title="Amiodarone" icon={<Syringe size={18} />} backgroundColor="bg-purple-600" foregroundColor="text-white" onClick={props.onLogAmiodarone} disabled={!isAmiodaroneAvailable} />
-          <ActionButton title="Lidocaine" icon={<Syringe size={18} />} backgroundColor="bg-indigo-600" foregroundColor="text-white" onClick={props.onLogLidocaine} disabled={!isLidocaineAvailable} />
-          <ActionButton title="Other Meds..." icon={<Pill size={18} />} backgroundColor="bg-gray-500" foregroundColor="text-white" onClick={props.onShowOtherDrugs} />
+          <ActionButton title="Adrenaline" icon={<Syringe size={16} />} backgroundColor="bg-pink-500" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={props.onLogAdrenaline} disabled={!isAdrenalineAvailable} />
+          <ActionButton title="Amiodarone" icon={<Syringe size={16} />} backgroundColor="bg-purple-600" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={props.onLogAmiodarone} disabled={!isAmiodaroneAvailable} />
+          <ActionButton title="Lidocaine" icon={<Syringe size={16} />} backgroundColor="bg-indigo-600" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={props.onLogLidocaine} disabled={!isLidocaineAvailable} />
+          <ActionButton title="Other Meds..." icon={<Pill size={16} />} backgroundColor="bg-gray-500" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={props.onShowOtherDrugs} />
         </div>
       </div>
       
@@ -1713,8 +1713,8 @@ const ActionGridView: React.FC<{
       <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
         <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Procedures</h3>
         <div className="grid grid-cols-2 gap-3">
-          <ActionButton title="Adv. Airway" icon={<AirVent size={18} />} backgroundColor="bg-blue-500" foregroundColor="text-white" onClick={logAirwayPlaced} disabled={airwayPlaced} />
-          <ActionButton title="Log ETCO2" icon={<Gauge size={18} />} backgroundColor="bg-teal-500" foregroundColor="text-white" onClick={props.onShowEtco2} />
+          <ActionButton title="Adv. Airway" icon={<AirVent size={16} />} backgroundColor="bg-blue-500" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={logAirwayPlaced} disabled={airwayPlaced} />
+          <ActionButton title="Log ETCO2" icon={<Gauge size={16} />} backgroundColor="bg-teal-500" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={props.onShowEtco2} />
         </div>
       </div>
       
@@ -1722,8 +1722,8 @@ const ActionGridView: React.FC<{
       <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
         <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Patient Status</h3>
         <div className="grid grid-cols-2 gap-3">
-          <ActionButton title="ROSC" icon={<HeartPulse size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" onClick={achieveROSC} />
-          <ActionButton title="End Arrest" icon={<XSquare size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" onClick={endArrest} />
+          <ActionButton title="ROSC" icon={<HeartPulse size={16} />} backgroundColor="bg-green-600" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={achieveROSC} />
+          <ActionButton title="End Arrest" icon={<XSquare size={16} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-12" fontSize="text-sm" onClick={endArrest} />
         </div>
       </div>
     </div>
@@ -1831,7 +1831,7 @@ const AlgorithmGridView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void; }
         <button
           key={pdf.id}
           onClick={() => onShowPdf(pdf)}
-          className="p-3 h-20 flex items-center justify-center text-center font-semibold
+          className="p-2 h-14 flex items-center justify-center text-center text-sm font-semibold
            bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-2xl
            hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors active:scale-95"
         >
