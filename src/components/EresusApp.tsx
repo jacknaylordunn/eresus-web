@@ -1791,14 +1791,14 @@ const ActionGridView: React.FC<{
 };
 
 const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemaining }) => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-semibold">
+  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-semibold">
     <Timer size={20} />
     <span>Adrenaline due in: {TimeFormatter.format(timeRemaining)}</span>
   </div>
 );
 
 const AdrenalineDueWarning: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-red-600 text-white font-bold animate-pulse">
+  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse">
     <AlertTriangle size={20} />
     <span>Adrenaline Due</span>
   </div>
@@ -2373,12 +2373,12 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void; }> = ({ pdf
           Done
         </button>
       </div>
-      <div className="flex-1 overflow-hidden w-full">
+      <div className="flex-1 overflow-auto bg-gray-800 p-2">
         <iframe
-          src={`${pdf.pdfUrl}#view=FitH`}
+          src={`${pdf.pdfUrl}#zoom=page-width&view=Fit`}
           title={pdf.title}
-          className="w-screen h-full border-0"
-          style={{ margin: '0', padding: '0', position: 'absolute', left: '0', right: '0' }}
+          className="w-full min-h-full border-0 bg-white"
+          style={{ height: 'calc(100vh - 80px)' }}
         />
       </div>
     </div>
