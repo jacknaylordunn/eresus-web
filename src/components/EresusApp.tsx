@@ -1034,6 +1034,66 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
   );
 };
 
+// Install Instructions Modal for PWA
+const InstallInstructionsModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+}> = ({ isOpen, onClose }) => {
+  if (!isOpen) return null;
+  
+  const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  
+  const IosShareIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto mb-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+    </svg>
+  );
+  
+  const AndroidMenuIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto mb-2 text-gray-700 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+    </svg>
+  );
+  
+  return (
+    <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-gray-700 p-6">
+        <img 
+          src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg" 
+          className="w-24 h-24 mx-auto rounded-3xl mb-4"
+          alt="eResus logo"
+        />
+        <h2 className="text-2xl font-bold text-center mb-4 text-gray-900 dark:text-white">Welcome to eResus</h2>
+        
+        {isIos ? (
+          <div className="text-center text-gray-700 dark:text-gray-300">
+            <p className="text-lg mb-4">To install this app on your device:</p>
+            <p className="mb-2">1. Tap the <strong>Share</strong> icon in your browser.</p>
+            <IosShareIcon />
+            <p className="mt-2">2. Scroll down and tap on</p>
+            <p className="font-bold mt-1">"Add to Home Screen".</p>
+          </div>
+        ) : (
+          <div className="text-center text-gray-700 dark:text-gray-300">
+            <p className="text-lg mb-4">To install this app on your device:</p>
+            <p className="mb-2">1. Tap the <strong>Menu</strong> button (3 dots) in your browser.</p>
+            <AndroidMenuIcon />
+            <p className="mt-2">2. Tap on</p>
+            <p className="font-bold mt-1">"Install app" or "Add to Home Screen".</p>
+          </div>
+        )}
+        
+        <button 
+          onClick={onClose} 
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl mt-6 transition-colors"
+        >
+          Continue to App
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void; }> = ({ isOpen, onClose }) => {
   const { events, totalArrestTime, copySummaryToClipboard } = useArrest();
   
@@ -1540,7 +1600,7 @@ const ActiveArrestContentView: React.FC<{
   }, []);
 
   return (
-    <div className="p-4 space-y-6 pb-40">
+    <div className="p-4 space-y-6 pb-36">
       <div className="relative flex justify-center">
         <CPRTimerView />
         <button
@@ -1588,7 +1648,7 @@ const RoscView: React.FC<{
   const { reArrest, postROSCTasks, toggleChecklistItemCompletion, events } = useArrest();
 
   return (
-    <div className="p-4 space-y-6 pb-40">
+    <div className="p-4 space-y-6 pb-36">
       <ActionButton
         title="Patient Re-Arrested"
         icon={<RotateCw size={20} />}
@@ -1626,7 +1686,7 @@ const EndedView: React.FC<{
   const { postMortemTasks, toggleChecklistItemCompletion, events } = useArrest();
   
   return (
-    <div className="p-4 space-y-6 pb-40">
+    <div className="p-4 space-y-6 pb-36">
       <ChecklistView 
         title="Actions Following Death" 
         items={postMortemTasks} 
@@ -1849,7 +1909,7 @@ const BottomControlsView: React.FC<{
   const { undo, canUndo } = useArrest();
   
   return (
-    <div className="fixed bottom-16 left-0 right-0 p-3 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-30">
+    <div className="fixed bottom-0 left-0 right-0 p-3 pb-[72px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10">
       <div className="flex space-x-3">
         <ActionButton
           title="Undo"
@@ -2306,18 +2366,20 @@ const SettingToggle: React.FC<{
 //============================================================================
 const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void; }> = ({ pdf, onClose }) => {
   return (
-    <div className="fixed inset-0 bg-black/70 z-50 flex flex-col p-4">
-      <div className="flex justify-between items-center mb-4 flex-shrink-0">
-        <h2 className="text-xl font-semibold text-white">{pdf.title}</h2>
-        <button onClick={onClose} className="px-4 py-2 bg-blue-600 text-white rounded-xl">
+    <div className="fixed inset-0 bg-black/95 z-50 flex flex-col">
+      <div className="flex justify-between items-center p-4 flex-shrink-0 bg-gray-900">
+        <h2 className="text-lg font-semibold text-white truncate flex-1 mr-4">{pdf.title}</h2>
+        <button onClick={onClose} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex-shrink-0 transition-colors">
           Done
         </button>
       </div>
-      <iframe
-        src={pdf.pdfUrl}
-        title={pdf.title}
-        className="w-full h-full flex-grow rounded-lg border-4 border-gray-300"
-      />
+      <div className="flex-1 overflow-hidden">
+        <iframe
+          src={pdf.pdfUrl}
+          title={pdf.title}
+          className="w-full h-full border-0"
+        />
+      </div>
     </div>
   );
 };
@@ -2333,6 +2395,7 @@ type TabID = 'arrest' | 'logbook' | 'settings';
 const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabID>('arrest');
   const [pdfToShow, setPdfToShow] = useState<PDFIdentifiable | null>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
   
   // These hooks will now work because their providers are parents
   const arrestViewModel = useArrestViewModel();
@@ -2348,6 +2411,23 @@ const AppContent: React.FC = () => {
       root.classList.remove('dark');
     }
   }, [appearanceMode]);
+  
+  // Check if app should show install instructions (first time user)
+  useEffect(() => {
+    const hasSeenInstructions = localStorage.getItem('eResusSeenInstallInstructions');
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches 
+      || (window.navigator as any).standalone 
+      || document.referrer.includes('android-app://');
+    
+    if (!hasSeenInstructions && !isStandalone) {
+      setShowInstallModal(true);
+    }
+  }, []);
+  
+  const handleCloseInstallModal = () => {
+    localStorage.setItem('eResusSeenInstallInstructions', 'true');
+    setShowInstallModal(false);
+  };
 
   const renderTab = () => {
     switch (currentTab) {
@@ -2390,8 +2470,9 @@ const AppContent: React.FC = () => {
           />
         </nav>
 
-        {/* PDF Viewer Modal */}
+        {/* Modals */}
         {pdfToShow && <PDFView pdf={pdfToShow} onClose={() => setPdfToShow(null)} />}
+        <InstallInstructionsModal isOpen={showInstallModal} onClose={handleCloseInstallModal} />
       </div>
     </ArrestContext.Provider>
   );
