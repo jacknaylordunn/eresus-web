@@ -2366,20 +2366,27 @@ const SettingToggle: React.FC<{
 //============================================================================
 const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void; }> = ({ pdf, onClose }) => {
   return (
-    <div className="fixed inset-0 bg-black/95 z-50 flex flex-col">
+    <div className="fixed inset-0 bg-black z-50 flex flex-col">
       <div className="flex justify-between items-center p-4 flex-shrink-0 bg-gray-900">
         <h2 className="text-lg font-semibold text-white truncate flex-1 mr-4">{pdf.title}</h2>
         <button onClick={onClose} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex-shrink-0 transition-colors">
           Done
         </button>
       </div>
-      <div className="flex-1 overflow-auto bg-gray-800 p-2">
-        <iframe
-          src={`${pdf.pdfUrl}#zoom=page-width&view=Fit`}
-          title={pdf.title}
-          className="w-full min-h-full border-0 bg-white"
-          style={{ height: 'calc(100vh - 80px)' }}
-        />
+      <div className="flex-1 overflow-auto">
+        <object
+          data={pdf.pdfUrl}
+          type="application/pdf"
+          className="w-full h-full"
+          style={{ minHeight: 'calc(100vh - 80px)' }}
+        >
+          <iframe
+            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.pdfUrl)}&embedded=true`}
+            title={pdf.title}
+            className="w-full h-full border-0"
+            style={{ minHeight: 'calc(100vh - 80px)' }}
+          />
+        </object>
       </div>
     </div>
   );
