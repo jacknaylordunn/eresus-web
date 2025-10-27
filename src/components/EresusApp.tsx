@@ -504,37 +504,24 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
       const auth = getAuth(app);
-
-      onAuthStateChanged(auth, async (user) => {
-        let authedUser = user;
-        if (!authedUser) {
-          try {
-            if (initialAuthToken) {
-              const userCredential = await signInWithCustomToken(auth, initialAuthToken);
-              authedUser = userCredential.user;
-            } else {
-              const userCredential = await signInAnonymously(auth);
-              authedUser = userCredential.user;
-            }
-          } catch (authError) {
-            console.error("Firebase auth error:", authError);
-            // Fallback to anonymous sign-in if custom token fails
-            if (!auth.currentUser) {
-                const userCredential = await signInAnonymously(auth);
-                authedUser = userCredential.user;
-            }
-          }
-        }
-        
-        const userId = authedUser?.uid || crypto.randomUUID();
-        
-        setServices({
-          app,
-          db,
-          auth,
-          user: authedUser,
-          userId: userId,
-        });
+      
+      // Generate a userId from localStorage or create new one
+      const getOrCreateUserId = () => {
+        const stored = localStorage.getItem('eresus_user_id');
+        if (stored) return stored;
+        const newId = crypto.randomUUID();
+        localStorage.setItem('eresus_user_id', newId);
+        return newId;
+      };
+      
+      const userId = getOrCreateUserId();
+      
+      setServices({
+        app,
+        db,
+        auth,
+        user: null,
+        userId: userId,
       });
     } catch (e) {
       console.error("Failed to initialize Firebase", e);
