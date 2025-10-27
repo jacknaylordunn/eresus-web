@@ -320,27 +320,74 @@ class MetronomeService {
   private timer: NodeJS.Timeout | null = null;
   private _isPlaying = false;
   private bpm = 110;
+  private unlocked = false;
 
-  private getAudioContext(): AudioContext {
+  private async initAudioContext() {
     if (!this.audioContext) {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      try {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        console.log('AudioContext created, state:', this.audioContext.state);
+      } catch (e) {
+        console.error("Web Audio API not supported:", e);
+        return false;
+      }
     }
-    return this.audioContext;
+    
+    // Resume context if suspended (required for iOS Safari/PWA)
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+        console.log('AudioContext resumed, state:', this.audioContext.state);
+      } catch (e) {
+        console.error("Error resuming audio context:", e);
+        return false;
+      }
+    }
+    
+    return this.audioContext.state === 'running';
+  }
+
+  // Unlock audio on iOS - must be called from user interaction
+  public async unlock() {
+    if (this.unlocked) return true;
+    
+    const success = await this.initAudioContext();
+    if (success && this.audioContext) {
+      // Play a silent sound to unlock audio on iOS
+      try {
+        const oscillator = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        gain.gain.value = 0;
+        oscillator.connect(gain);
+        gain.connect(this.audioContext.destination);
+        oscillator.start(0);
+        oscillator.stop(0.001);
+        this.unlocked = true;
+        console.log('Audio unlocked successfully');
+        return true;
+      } catch (e) {
+        console.error('Failed to unlock audio:', e);
+        return false;
+      }
+    }
+    return false;
   }
 
   private playSound() {
+    if (!this.audioContext || this.audioContext.state !== 'running') {
+      console.warn('AudioContext not ready for playback');
+      return;
+    }
+    
     try {
-      const context = this.getAudioContext();
-      if (context.state === 'suspended') {
-        context.resume();
-      }
+      const context = this.audioContext;
       const oscillator = context.createOscillator();
       const gain = context.createGain();
       
       oscillator.type = 'sine';
       oscillator.frequency.setValueAtTime(880, context.currentTime);
-      gain.gain.setValueAtTime(1, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.05);
+      gain.gain.setValueAtTime(0.3, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.05);
       
       oscillator.connect(gain);
       gain.connect(context.destination);
@@ -352,18 +399,29 @@ class MetronomeService {
     }
   }
 
-  public toggle(bpm: number) {
+  public async toggle(bpm: number) {
     this.bpm = bpm;
     if (this._isPlaying) {
       this.stop();
+      return false;
     } else {
-      this.start();
+      await this.start();
+      return this._isPlaying;
     }
-    return this._isPlaying;
   }
 
-  public start() {
+  public async start() {
     if (this._isPlaying) return;
+    
+    // Ensure audio is unlocked and context is ready
+    await this.unlock();
+    const ready = await this.initAudioContext();
+    
+    if (!ready || !this.audioContext || this.audioContext.state !== 'running') {
+      console.error("Audio context not ready, state:", this.audioContext?.state);
+      return;
+    }
+    
     const interval = 60000 / this.bpm;
     this._isPlaying = true;
     this.playSound(); // Play immediately
@@ -1586,8 +1644,8 @@ const ActiveArrestContentView: React.FC<{
   const { metronomeBPM } = useSettings();
   const [isMetronomeOn, setIsMetronomeOn] = useState(metronomeService.isPlaying);
 
-  const toggleMetronome = () => {
-    const isPlaying = metronomeService.toggle(metronomeBPM);
+  const toggleMetronome = async () => {
+    const isPlaying = await metronomeService.toggle(metronomeBPM);
     setIsMetronomeOn(isPlaying);
   };
   
