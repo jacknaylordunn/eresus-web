@@ -1,14 +1,14 @@
-const CACHE_NAME = 'eresus-react-v2';
+const CACHE_NAME = 'eresus-react-v3';
 const urlsToCache = [
   '/',
   '/manifest.json',
   '/index.html',
   
-  // Core Resus Council Documents (for offline use)
-  'https://www.resus.org.uk/sites/default/files/2024-01/Adult%20Advanced%20Life%20Support%20Algorithm%202021%20Aug%202023.pdf',
-  'https://www.resus.org.uk/sites/default/files/2021-04/Paediatric%20ALS%20Algorithm%202021.pdf',
-  'https://www.resus.org.uk/sites/default/files/2021-05/Newborn%20Life%20Support%20Algorithm%202021.pdf',
-  'https://www.resus.org.uk/sites/default/files/2023-08/Post%20cardiac%20arrest%20rehabilitation%20algorithim%202023.pdf',
+  // Core Resus Council Documents 2025 (for offline use)
+  'https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf',
+  'https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf',
+  'https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf',
+  'https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf',
 ];
 
 self.addEventListener('install', event => {

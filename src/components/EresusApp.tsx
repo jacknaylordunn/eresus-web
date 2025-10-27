@@ -2450,7 +2450,7 @@ const AppContent: React.FC = () => {
 
   return (
     <ArrestContext.Provider value={arrestViewModel}>
-      <div className="h-screen w-screen flex flex-col font-sans">
+      <div className="h-screen w-screen flex flex-col font-sans bg-white dark:bg-gray-900">
         {/* Main Content */}
         <main className="flex-grow overflow-hidden">
           {renderTab()}
