@@ -1517,7 +1517,7 @@ const CPRTimerView: React.FC = () => {
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
-          strokeWidth="6"
+          strokeWidth="10"
           stroke="currentColor"
           fill="transparent"
           r="52"
@@ -1526,7 +1526,7 @@ const CPRTimerView: React.FC = () => {
         />
         <circle
           className={`transition-all duration-1000 linear ${isEnding ? 'text-red-500' : 'text-blue-600'}`}
-          strokeWidth="6"
+          strokeWidth="10"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
@@ -1805,21 +1805,21 @@ const AdrenalineDueWarning: React.FC = () => (
 );
 
 const AmiodaroneReminderView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-purple-600 text-white font-bold animate-pulse">
+  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse">
     <Syringe size={20} />
     <span>Consider 2nd Amiodarone Dose</span>
   </div>
 );
 
 const AdrenalinePromptView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-pink-500 text-white font-bold animate-pulse">
+  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-pink-500 text-white font-bold animate-pulse">
     <Syringe size={20} />
     <span>Consider giving Adrenaline</span>
   </div>
 );
 
 const AmiodaronePromptView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-purple-600 text-white font-bold animate-pulse">
+  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse">
     <Syringe size={20} />
     <span>Consider giving Amiodarone</span>
   </div>
