@@ -274,10 +274,10 @@ const AppConstants = {
   ].sort(),
 
   pdfAlgorithms: [
-    { id: 'adult', pdfUrl: "https://www.resus.org.uk/sites/default/files/2024-01/Adult%20Advanced%20Life%20Support%20Algorithm%202021%20Aug%202023.pdf", title: "Adult ALS" },
-    { id: 'paeds', pdfUrl: "https://www.resus.org.uk/sites/default/files/2021-04/Paediatric%20ALS%20Algorithm%202021.pdf", title: "Paediatric ALS" },
-    { id: 'newborn', pdfUrl: "https://www.resus.org.uk/sites/default/files/2021-05/Newborn%20Life%20Support%20Algorithm%202021.pdf", title: "Newborn LS" },
-    { id: 'post', pdfUrl: "https://www.resus.org.uk/sites/default/files/2023-08/Post%20cardiac%20arrest%20rehabilitation%20algorithim%202023.pdf", title: "Post Arrest Care" }
+    { id: 'adult', pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf", title: "Adult ALS" },
+    { id: 'paeds', pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf", title: "Paediatric ALS" },
+    { id: 'newborn', pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf", title: "Newborn LS" },
+    { id: 'post', pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf", title: "Post Arrest Care" }
   ]
 };
 
