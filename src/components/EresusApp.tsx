@@ -1749,11 +1749,11 @@ const ActionGridView: React.FC<{
       {uiState === UIState.ShockAdvised && (
         <ActionButton
           title="Deliver Shock"
-          icon={<Bolt size={24} />}
+          icon={<Bolt size={20} />}
           backgroundColor="bg-orange-500"
           foregroundColor="text-white"
-          height="h-20"
-          fontSize="text-2xl"
+          height="h-16"
+          fontSize="text-lg"
           onClick={deliverShock}
         />
       )}
@@ -2373,11 +2373,12 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void; }> = ({ pdf
           Done
         </button>
       </div>
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden w-full">
         <iframe
-          src={pdf.pdfUrl}
+          src={`${pdf.pdfUrl}#view=FitH`}
           title={pdf.title}
-          className="w-full h-full border-0"
+          className="w-screen h-full border-0"
+          style={{ margin: '0', padding: '0', position: 'absolute', left: '0', right: '0' }}
         />
       </div>
     </div>
