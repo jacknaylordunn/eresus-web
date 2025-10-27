@@ -1391,7 +1391,7 @@ const HeaderView: React.FC = () => {
         <div className="flex flex-col items-start space-y-1">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1>
           <span
-            className={`px-2 py-0.5 rounded-md text-xs font-black text-white ${stateInfo[arrestState].color}`}
+            className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${stateInfo[arrestState].color}`}
           >
             {stateInfo[arrestState].text}
           </span>
@@ -1453,7 +1453,7 @@ const CPRTimerView: React.FC = () => {
   const isEnding = cprTime <= 10;
   
   return (
-    <div className="relative w-64 h-64">
+    <div className="relative w-56 h-56">
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
@@ -1480,11 +1480,11 @@ const CPRTimerView: React.FC = () => {
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span 
-          className={`font-mono font-bold text-6xl ${isEnding ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}
+          className={`font-mono font-bold text-5xl ${isEnding ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}
         >
           {TimeFormatter.format(cprTime)}
         </span>
-        <span className="text-sm font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
+        <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
       </div>
     </div>
   );
@@ -1659,11 +1659,11 @@ const ActionGridView: React.FC<{
       {uiState === UIState.Default && (
         <ActionButton
           title="Analyse Rhythm"
-          icon={<Activity size={24} />}
+          icon={<Activity size={20} />}
           backgroundColor="bg-blue-600"
           foregroundColor="text-white"
-          height="h-20"
-          fontSize="text-2xl"
+          height="h-16"
+          fontSize="text-lg"
           onClick={analyseRhythm}
         />
       )}
@@ -1856,6 +1856,7 @@ const BottomControlsView: React.FC<{
           icon={<Undo size={18} />}
           backgroundColor="bg-gray-200 dark:bg-gray-700"
           foregroundColor="text-gray-800 dark:text-gray-200"
+          height="h-12"
           onClick={undo}
           disabled={!canUndo}
         />
@@ -1863,6 +1864,7 @@ const BottomControlsView: React.FC<{
           title="Summary"
           backgroundColor="bg-blue-600"
           foregroundColor="text-white"
+          height="h-12"
           onClick={onShowSummary}
         />
         <ActionButton
@@ -1870,6 +1872,7 @@ const BottomControlsView: React.FC<{
           icon={<RotateCw size={18} />}
           backgroundColor="bg-red-600"
           foregroundColor="text-white"
+          height="h-12"
           onClick={onShowReset}
         />
       </div>
@@ -2224,7 +2227,7 @@ const SettingsView: React.FC = () => {
               <button
                 key={opt.value}
                 onClick={() => setAppearanceMode(opt.value)}
-                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-lg border-2
+                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-xl border-2
                 ${appearanceMode === opt.value 
                   ? 'bg-blue-100 dark:bg-blue-900 border-blue-500 text-blue-700 dark:text-blue-300' 
                   : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400'
@@ -2306,7 +2309,7 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void; }> = ({ pdf
     <div className="fixed inset-0 bg-black/70 z-50 flex flex-col p-4">
       <div className="flex justify-between items-center mb-4 flex-shrink-0">
         <h2 className="text-xl font-semibold text-white">{pdf.title}</h2>
-        <button onClick={onClose} className="px-4 py-2 bg-blue-600 text-white rounded-lg">
+        <button onClick={onClose} className="px-4 py-2 bg-blue-600 text-white rounded-xl">
           Done
         </button>
       </div>
