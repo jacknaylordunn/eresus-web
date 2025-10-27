@@ -1457,7 +1457,7 @@ const CPRTimerView: React.FC = () => {
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
-          strokeWidth="15"
+          strokeWidth="6"
           stroke="currentColor"
           fill="transparent"
           r="52"
@@ -1466,7 +1466,7 @@ const CPRTimerView: React.FC = () => {
         />
         <circle
           className={`transition-all duration-1000 linear ${isEnding ? 'text-red-500' : 'text-blue-600'}`}
-          strokeWidth="15"
+          strokeWidth="6"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
@@ -1832,8 +1832,8 @@ const AlgorithmGridView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void; }
           key={pdf.id}
           onClick={() => onShowPdf(pdf)}
           className="p-3 h-20 flex items-center justify-center text-center font-semibold
-           bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg
-           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+           bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-2xl
+           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors active:scale-95"
         >
           {pdf.title}
         </button>
@@ -1861,7 +1861,6 @@ const BottomControlsView: React.FC<{
         />
         <ActionButton
           title="Summary"
-          icon={<Clipboard size={18} />}
           backgroundColor="bg-blue-600"
           foregroundColor="text-white"
           onClick={onShowSummary}

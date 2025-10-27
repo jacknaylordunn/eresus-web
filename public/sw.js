@@ -1,26 +1,14 @@
-const CACHE_NAME = 'eresus-react-v1';
+const CACHE_NAME = 'eresus-react-v2';
 const urlsToCache = [
-  // Core files
   '/',
   '/manifest.json',
-
-  // App icon (from manifest)
-  'https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg',
-
+  '/index.html',
+  
   // Core Resus Council Documents (for offline use)
   'https://www.resus.org.uk/sites/default/files/2024-01/Adult%20Advanced%20Life%20Support%20Algorithm%202021%20Aug%202023.pdf',
   'https://www.resus.org.uk/sites/default/files/2021-04/Paediatric%20ALS%20Algorithm%202021.pdf',
   'https://www.resus.org.uk/sites/default/files/2021-05/Newborn%20Life%20Support%20Algorithm%202021.pdf',
   'https://www.resus.org.uk/sites/default/files/2023-08/Post%20cardiac%20arrest%20rehabilitation%20algorithim%202023.pdf',
-  
-  // Third-party libraries
-  'https://cdn.tailwindcss.com',
-  // Note: Caching for CDN-based ESM modules like React/Firebase is complex.
-  // The fetch-first strategy below is generally safer for these.
-  // We will cache the main Firebase JS files as they are versioned and stable.
-  'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js',
-  'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js',
-  'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js'
 ];
 
 self.addEventListener('install', event => {
@@ -43,37 +31,54 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
+  
+  // Special handling for PDFs - always try network first, fallback to cache
+  if (url.href.includes('.pdf')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          // Cache successful PDF responses
+          if (response && response.status === 200) {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then(cache => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          // Network failed, try cache
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+  
+  // For all other requests, cache first strategy
   event.respondWith(
     caches.match(event.request)
       .then(response => {
-        // Cache hit - return response
         if (response) {
           return response;
         }
-
-        // Not in cache - fetch from network
+        
         return fetch(event.request).then(
           networkResponse => {
-            // Check if we received a valid response
-            if(!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-              // Don't cache non-basic (e.g., opaque) or error responses
+            if(!networkResponse || networkResponse.status !== 200) {
               return networkResponse;
             }
-
-            // Clone the response
+            
             const responseToCache = networkResponse.clone();
-
-            caches.open(CACHE_NAME)
-              .then(cache => {
-                cache.put(event.request, responseToCache);
-              });
-
+            caches.open(CACHE_NAME).then(cache => {
+              cache.put(event.request, responseToCache);
+            });
+            
             return networkResponse;
           }
         ).catch(err => {
-          // Network request failed, try to serve a fallback if available
-          // For now, we'll just let it fail, which is fine for most resources.
           console.error('Fetch failed:', err);
+          throw err;
         });
       })
   );
