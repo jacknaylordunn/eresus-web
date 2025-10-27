@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, createContext, useContext, useMemo } from 'react';
 // Firebase Firestore and App imports
-import { initializeApp } from "firebase/app";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import {
   getFirestore,
   doc,
@@ -13,7 +13,7 @@ import {
   addDoc,
   setLogLevel,
   Firestore
-} from "firebase/firestore";
+} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 // Lucide Icons
 import {
   Heart,
@@ -51,17 +51,12 @@ import {
 // GLOBAL FIREBASE CONFIG & APP ID
 //============================================================================
 
-// Firebase configuration from environment variables
-const appId = 'eresus-web-app';
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyApZm9LsylboePKP85bKe8x6RayZKbWneI",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "eresus-6e65e.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "eresus-6e65e",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "eresus-6e65e.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "118352301751",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:118352301751:web:22d9d6d5cae48b979e8732",
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-H2H7SMTZK7"
-};
+// These are provided by the canvas environment or need to be set manually
+declare const __app_id: string;
+declare const __firebase_config: string;
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'eResus-web-app'; // Default App ID if not provided
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
 
 let db: Firestore | null = null; // Initialize as null
 
@@ -724,7 +719,7 @@ const DosageEntryModal: React.FC<DosageEntryModalProps> = ({ drug, onClose }) =>
 //============================================================================
 // REUSABLE UI COMPONENTS
 //============================================================================
-const ActionButton: React.FC<{ title: string; icon?: React.ReactNode; backgroundColor: string; foregroundColor: string; onClick: () => void; disabled?: boolean; height?: string; fontSize?: string; className?: string }> = ({ title, icon, backgroundColor, foregroundColor, onClick, disabled = false, height = "h-16", fontSize = "text-base", className = "" }) => { const handleClick = () => { if (!disabled) { HapticManager.impact('light'); onClick(); } }; return ( <button onClick={handleClick} disabled={disabled} className={`w-full ${height} ${fontSize} ${backgroundColor} ${foregroundColor} ${className} font-semibold rounded-lg shadow-md flex items-center justify-center space-x-2 transition-all duration-150 ease-out active:scale-95 active:shadow-inner disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 focus:ring-blue-500`}>{icon}<span>{title}</span></button> ); };
+const ActionButton: React.FC<{...}> = ({ title, icon, backgroundColor, foregroundColor, onClick, disabled = false, height = "h-16", fontSize = "text-base", className = "" }) => { const handleClick = () => { if (!disabled) { HapticManager.impact('light'); onClick(); } }; return ( <button onClick={handleClick} disabled={disabled} className={`w-full ${height} ${fontSize} ${backgroundColor} ${foregroundColor} ${className} font-semibold rounded-lg shadow-md flex items-center justify-center space-x-2 transition-all duration-150 ease-out active:scale-95 active:shadow-inner disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 focus:ring-blue-500`}>{icon}<span>{title}</span></button> ); };
 const HeaderView: React.FC = () => { const { arrestState, masterTime, timeOffset, addTimeOffset } = useArrest(); const stateInfo = { [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" }, [ArrestState.Active]: { text: "ACTIVE", color: "bg-red-500 animate-pulse" }, [ArrestState.Rosc]: { text: "ROSC", color: "bg-green-500" }, [ArrestState.Ended]: { text: "DECEASED", color: "bg-gray-800 dark:bg-black" }, }; return ( <div className="p-4 bg-white dark:bg-gray-800 shadow-md dark:border-b dark:border-gray-700"> <div className="flex justify-between items-center mb-3"> <div className="flex flex-col items-start space-y-1"> <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1> <span className={`px-2 py-0.5 rounded-md text-xs font-black text-white ${stateInfo[arrestState].color}`}>{stateInfo[arrestState].text}</span> </div> <div className="flex flex-col items-end"> <div className="font-mono font-bold text-4xl text-blue-600 dark:text-blue-400 relative"> {timeOffset > 0 && ( <span className="absolute -left-10 top-0 text-2xl text-yellow-500">{`+${timeOffset / 60}m`}</span> )} {TimeFormatter.format(masterTime)} </div> {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && ( <div className="flex space-x-1 mt-1"> <button onClick={() => addTimeOffset(60)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+1m</button> <button onClick={() => addTimeOffset(300)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+5m</button> <button onClick={() => addTimeOffset(600)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+10m</button> </div> )} </div> </div> {arrestState !== ArrestState.Pending && <CountersView />} </div> ); };
 const CountersView: React.FC = () => { const { shockCount, adrenalineCount, amiodaroneCount, lidocaineCount } = useArrest(); const CounterItem: React.FC<{ label: string, value: number, color: string }> = ({ label, value, color }) => ( <div className={`flex flex-col items-center ${color}`}> <span className="font-mono font-bold text-xl">{value}</span> <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">{label}</span> </div> ); return ( <div className="flex justify-around pt-2 border-t border-gray-200 dark:border-gray-700"> <CounterItem label="Shocks" value={shockCount} color="text-orange-500" /> <CounterItem label="Adrenaline" value={adrenalineCount} color="text-pink-500" /> <CounterItem label="Amiodarone" value={amiodaroneCount} color="text-purple-500" /> <CounterItem label="Lidocaine" value={lidocaineCount} color="text-indigo-500" /> </div> ); };
 const CPRTimerView: React.FC = () => { const { cprTime } = useArrest(); const { cprCycleDuration, metronomeBPM } = useSettings(); const [isMetronomeOn, setIsMetronomeOn] = useState(false); const toggleMetronome = () => { const on = metronome.toggle(metronomeBPM); setIsMetronomeOn(on); HapticManager.impact('medium'); }; useEffect(() => { metronome.setBPM(metronomeBPM); }, [metronomeBPM]); const progress = Math.max(0, cprTime / cprCycleDuration); const circumference = 2 * Math.PI * 56; const offset = circumference - progress * circumference; const isEnding = cprTime <= 10; return ( <div className="relative w-64 h-64 flex-shrink-0 mx-auto"> <svg className="w-full h-full" viewBox="0 0 120 120"> <circle className="text-gray-200 dark:text-gray-700" strokeWidth="8" stroke="currentColor" fill="transparent" r="56" cx="60" cy="60" /> <circle className={`transition-all duration-300 ${isEnding ? 'text-red-500' : 'text-blue-500'}`} strokeWidth="8" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" stroke="currentColor" fill="transparent" r="56" cx="60" cy="60" transform="rotate(-90 60 60)" /> </svg> <div className="absolute inset-0 flex flex-col items-center justify-center"> <span className={`font-mono text-6xl font-bold ${isEnding ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}>{TimeFormatter.format(cprTime)}</span> <span className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">CPR Cycle</span> </div> <button onClick={toggleMetronome} className={`absolute -bottom-4 right-0 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMetronomeOn ? 'bg-blue-500 text-white' : 'bg-white dark:bg-gray-700 text-blue-500 dark:text-blue-400'}`}><Music size={24} /></button> </div> ); };
@@ -854,4 +849,3 @@ const AppWrapper: React.FC = () => {
 };
 
 export default AppWrapper;
-
