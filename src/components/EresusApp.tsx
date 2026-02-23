@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, createContext, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useRef, createContext, useContext, useMemo, lazy, Suspense } from 'react';
 import { initializeApp, FirebaseApp } from 'firebase/app';
 import { 
   getFirestore, 
@@ -50,8 +50,10 @@ import {
   Minus,
   Moon,
   Sun,
-  Laptop
+  Laptop,
+  Baby
 } from 'lucide-react';
+import NewbornLifeSupport from './NewbornLifeSupport';
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -1493,7 +1495,9 @@ const ActionButton: React.FC<ActionButtonProps> = ({
 
 // --- Header & Timers ---
 const HeaderView: React.FC = () => {
-  const { arrestState, masterTime, timeOffset, addTimeOffset } = useArrest();
+  const { arrestState, masterTime, timeOffset, addTimeOffset, cprTime, uiState } = useArrest();
+  
+  const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
   
   const stateInfo = {
     [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" },
@@ -1503,34 +1507,41 @@ const HeaderView: React.FC = () => {
   };
 
   return (
-    <div className="p-4 bg-white dark:bg-gray-800 shadow-md">
+    <div className={`p-4 shadow-md transition-colors duration-300 ${
+      isRhythmCheckDue 
+        ? 'bg-red-600 animate-pulse' 
+        : 'bg-white dark:bg-gray-800'
+    }`}>
       <div className="flex justify-between items-center mb-3">
-        {/* This div matches the Swift 'VStack(alignment: .leading, spacing: 4)' */}
         <div className="flex flex-col items-start space-y-1">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1>
+          {isRhythmCheckDue ? (
+            <h1 className="text-3xl font-bold text-white">Rhythm Check</h1>
+          ) : (
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1>
+          )}
           <span
-            className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${stateInfo[arrestState].color}`}
+            className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${isRhythmCheckDue ? 'bg-white/30' : stateInfo[arrestState].color}`}
           >
             {stateInfo[arrestState].text}
           </span>
         </div>
         
-        {/* Timer block - this already matches the Swift 'VStack(alignment: .trailing, spacing: 4)' */}
         <div className="flex flex-col items-end">
-          <div className="font-mono font-bold text-4xl text-blue-600 dark:text-blue-400 relative">
+          <div className={`font-mono font-bold text-4xl relative ${
+            isRhythmCheckDue ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+          }`}>
             {timeOffset > 0 && (
-              <span className="text-xl absolute -left-6 top-0 text-blue-500">
+              <span className={`text-xl absolute -left-6 top-0 ${isRhythmCheckDue ? 'text-white/70' : 'text-blue-500'}`}>
                 +{timeOffset / 60}
               </span>
             )}
             {TimeFormatter.format(masterTime)}
           </div>
-          {/* This logic is correct per Swift code and user request */}
           {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && (
             <div className="flex space-x-1 mt-1">
-              <button onClick={() => addTimeOffset(60)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+1m</button>
-              <button onClick={() => addTimeOffset(300)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+5m</button>
-              <button onClick={() => addTimeOffset(600)} className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600">+10m</button>
+              <button onClick={() => addTimeOffset(60)} className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? 'bg-white/20 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>+1m</button>
+              <button onClick={() => addTimeOffset(300)} className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? 'bg-white/20 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>+5m</button>
+              <button onClick={() => addTimeOffset(600)} className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? 'bg-white/20 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>+10m</button>
             </div>
           )}
         </div>
@@ -1609,7 +1620,10 @@ const CPRTimerView: React.FC = () => {
 };
 
 // --- Screen State Views ---
-const PendingView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void }> = ({ onShowPdf }) => {
+const PendingView: React.FC<{ 
+  onShowPdf: (pdf: PDFIdentifiable) => void;
+  onShowNewborn: () => void;
+}> = ({ onShowPdf, onShowNewborn }) => {
   const { startArrest } = useArrest();
 
   return (
@@ -1621,6 +1635,15 @@ const PendingView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void }> = ({ 
         height="h-20"
         fontSize="text-2xl"
         onClick={startArrest}
+      />
+      <ActionButton
+        title="Newborn Life Support"
+        icon={<Baby size={22} />}
+        backgroundColor="bg-purple-600"
+        foregroundColor="text-white"
+        height="h-16"
+        fontSize="text-lg"
+        onClick={onShowNewborn}
       />
       <AlgorithmGridView onShowPdf={onShowPdf} />
     </div>
@@ -1676,11 +1699,11 @@ const ActiveArrestContentView: React.FC<{
         <AdrenalineTimerView timeRemaining={timeUntilAdrenaline} />
       )}
       {timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0 && (
-        <AdrenalineDueWarning />
+        <AdrenalineDueWarning onClick={props.onLogAdrenaline} />
       )}
-      {shouldShowAdrenalinePrompt && <AdrenalinePromptView />}
-      {shouldShowAmiodaroneFirstDosePrompt && <AmiodaronePromptView />}
-      {shouldShowAmiodaroneReminder && <AmiodaroneReminderView />}
+      {shouldShowAdrenalinePrompt && <AdrenalinePromptView onClick={props.onLogAdrenaline} />}
+      {shouldShowAmiodaroneFirstDosePrompt && <AmiodaronePromptView onClick={props.onLogAmiodarone} />}
+      {shouldShowAmiodaroneReminder && <AmiodaroneReminderView onClick={props.onLogAmiodarone} />}
 
       {/* --- Action Grids --- */}
       <ActionGridView {...props} />
@@ -1855,32 +1878,32 @@ const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemainin
   </div>
 );
 
-const AdrenalineDueWarning: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse">
+const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
+  <button onClick={onClick} className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform">
     <AlertTriangle size={20} />
-    <span>Adrenaline Due</span>
-  </div>
+    <span>Adrenaline Due — Tap to Log</span>
+  </button>
 );
 
-const AmiodaroneReminderView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse">
+const AmiodaroneReminderView: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
+  <button onClick={onClick} className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform">
     <Syringe size={20} />
-    <span>Consider 2nd Amiodarone Dose</span>
-  </div>
+    <span>Consider 2nd Amiodarone — Tap to Log</span>
+  </button>
 );
 
-const AdrenalinePromptView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-pink-500 text-white font-bold animate-pulse">
+const AdrenalinePromptView: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
+  <button onClick={onClick} className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-pink-500 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform">
     <Syringe size={20} />
-    <span>Consider giving Adrenaline</span>
-  </div>
+    <span>Consider Adrenaline — Tap to Log</span>
+  </button>
 );
 
-const AmiodaronePromptView: React.FC = () => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse">
+const AmiodaronePromptView: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
+  <button onClick={onClick} className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform">
     <Syringe size={20} />
-    <span>Consider giving Amiodarone</span>
-  </div>
+    <span>Consider Amiodarone — Tap to Log</span>
+  </button>
 );
 
 const ChecklistView: React.FC<{ 
@@ -2021,7 +2044,8 @@ const getEventTypeColor = (type: EventType): string => {
 // --- ArrestView ---
 const ArrestView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
-}> = ({ onShowPdf }) => {
+  onShowNewborn: () => void;
+}> = ({ onShowPdf, onShowNewborn }) => {
   const viewModel = useArrest();
   const { showDosagePrompts } = useSettings();
   
@@ -2086,7 +2110,7 @@ const ArrestView: React.FC<{
       <HeaderView />
       
       <div className="flex-grow overflow-y-auto bg-gray-100 dark:bg-gray-900">
-        {viewModel.arrestState === ArrestState.Pending && <PendingView onShowPdf={onShowPdf} />}
+        {viewModel.arrestState === ArrestState.Pending && <PendingView onShowPdf={onShowPdf} onShowNewborn={onShowNewborn} />}
         {viewModel.arrestState === ArrestState.Active && (
           <ActiveArrestContentView
             onShowPdf={onShowPdf}
@@ -2462,6 +2486,7 @@ const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabID>('arrest');
   const [pdfToShow, setPdfToShow] = useState<PDFIdentifiable | null>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const [showNewborn, setShowNewborn] = useState(false);
   
   // These hooks will now work because their providers are parents
   const arrestViewModel = useArrestViewModel();
@@ -2498,7 +2523,7 @@ const AppContent: React.FC = () => {
   const renderTab = () => {
     switch (currentTab) {
       case 'arrest':
-        return <ArrestView onShowPdf={setPdfToShow} />;
+        return <ArrestView onShowPdf={setPdfToShow} onShowNewborn={() => setShowNewborn(true)} />;
       case 'logbook':
         return <LogbookView />;
       case 'settings':
@@ -2509,32 +2534,38 @@ const AppContent: React.FC = () => {
   return (
     <ArrestContext.Provider value={arrestViewModel}>
       <div className="h-screen w-screen flex flex-col font-sans bg-white dark:bg-gray-900">
-        {/* Main Content */}
-        <main className="flex-grow overflow-hidden">
-          {renderTab()}
-        </main>
-        
-        {/* Tab Bar */}
-        <nav className="flex justify-around p-2 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-20">
-          <TabButton
-            label="Arrest"
-            icon={<HeartPulse size={24} />}
-            isActive={currentTab === 'arrest'}
-            onClick={() => setCurrentTab('arrest')}
-          />
-          <TabButton
-            label="Logbook"
-            icon={<Book size={24} />}
-            isActive={currentTab === 'logbook'}
-            onClick={() => setCurrentTab('logbook')}
-          />
-          <TabButton
-            label="Settings"
-            icon={<Settings size={24} />}
-            isActive={currentTab === 'settings'}
-            onClick={() => setCurrentTab('settings')}
-          />
-        </nav>
+        {showNewborn ? (
+          <NewbornLifeSupport onBack={() => setShowNewborn(false)} />
+        ) : (
+          <>
+            {/* Main Content */}
+            <main className="flex-grow overflow-hidden">
+              {renderTab()}
+            </main>
+            
+            {/* Tab Bar */}
+            <nav className="flex justify-around p-2 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-20">
+              <TabButton
+                label="Arrest"
+                icon={<HeartPulse size={24} />}
+                isActive={currentTab === 'arrest'}
+                onClick={() => setCurrentTab('arrest')}
+              />
+              <TabButton
+                label="Logbook"
+                icon={<Book size={24} />}
+                isActive={currentTab === 'logbook'}
+                onClick={() => setCurrentTab('logbook')}
+              />
+              <TabButton
+                label="Settings"
+                icon={<Settings size={24} />}
+                isActive={currentTab === 'settings'}
+                onClick={() => setCurrentTab('settings')}
+              />
+            </nav>
+          </>
+        )}
 
         {/* Modals */}
         {pdfToShow && <PDFView pdf={pdfToShow} onClose={() => setPdfToShow(null)} />}
