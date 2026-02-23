@@ -50,8 +50,7 @@ import {
   Minus,
   Moon,
   Sun,
-  Laptop,
-  Baby
+  Laptop
 } from 'lucide-react';
 import NewbornLifeSupport from './NewbornLifeSupport';
 
@@ -1620,6 +1619,42 @@ const CPRTimerView: React.FC = () => {
 };
 
 // --- Screen State Views ---
+const IosAppStoreBanner: React.FC = () => {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem('eResusAppStoreBannerDismissed') === 'true');
+  const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  
+  if (!isIos || dismissed) return null;
+  
+  const handleDismiss = () => {
+    localStorage.setItem('eResusAppStoreBannerDismissed', 'true');
+    setDismissed(true);
+  };
+  
+  return (
+    <div className="p-4 bg-blue-50 dark:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 flex items-center space-x-3">
+      <img 
+        src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg" 
+        className="w-12 h-12 rounded-xl flex-shrink-0"
+        alt="eResus"
+      />
+      <div className="flex-grow min-w-0">
+        <p className="text-sm font-semibold text-gray-900 dark:text-white">eResus is now on the App Store</p>
+        <a
+          href="https://apps.apple.com/gb/app/eresus/id6753123316"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-blue-600 dark:text-blue-400 font-medium"
+        >
+          Download for iOS →
+        </a>
+      </div>
+      <button onClick={handleDismiss} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex-shrink-0">
+        <XSquare size={20} />
+      </button>
+    </div>
+  );
+};
+
 const PendingView: React.FC<{ 
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
@@ -1628,6 +1663,7 @@ const PendingView: React.FC<{
 
   return (
     <div className="p-4 space-y-8">
+      <IosAppStoreBanner />
       <ActionButton
         title="Start Arrest"
         backgroundColor="bg-red-600"
