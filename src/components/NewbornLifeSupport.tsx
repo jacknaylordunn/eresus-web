@@ -527,7 +527,6 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
 const StartStep: React.FC<{ onStart: (type: NLSBirthType) => void }> = ({ onStart }) => (
   <div className="space-y-6">
     <div className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-lg text-center space-y-4">
-      <Baby size={48} className="mx-auto text-blue-500" />
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Newborn Life Support</h2>
       <p className="text-gray-600 dark:text-gray-400">RCUK Guidelines 2025</p>
       <p className="text-sm text-gray-500 dark:text-gray-400">

@@ -1638,7 +1638,6 @@ const PendingView: React.FC<{
       />
       <ActionButton
         title="Newborn Life Support"
-        icon={<Baby size={22} />}
         backgroundColor="bg-purple-600"
         foregroundColor="text-white"
         height="h-16"
