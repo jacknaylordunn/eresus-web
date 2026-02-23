@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  Baby,
   Heart,
   Wind,
   Activity,
@@ -13,11 +12,19 @@ import {
   ChevronRight,
   XSquare,
   Syringe,
-  Thermometer,
   Volume2,
   VolumeX,
   ArrowLeft,
+  Undo,
+  Zap,
 } from 'lucide-react';
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  Timestamp,
+} from 'firebase/firestore';
+import { initializeApp, getApps } from 'firebase/app';
 
 // ============================================================================
 // NLS TYPES & ENUMS
@@ -73,8 +80,8 @@ const getChestNotMovingChecklist = () => [
   { id: 'mask', label: 'Check mask seal', done: false },
   { id: 'head', label: 'Reposition head & jaw', done: false },
   { id: 'twoperson', label: '2-person airway support', done: false },
-  { id: 'suction', label: 'Consider suction (if visible obstruction)', done: false },
-  { id: 'oropharyngeal', label: 'Consider oropharyngeal airway', done: false },
+  { id: 'suction', label: 'Suction (if visible obstruction)', done: false },
+  { id: 'oropharyngeal', label: 'Oropharyngeal airway', done: false },
 ];
 
 const getPostStabilisationChecklist = () => [
@@ -83,15 +90,90 @@ const getPostStabilisationChecklist = () => [
   { id: 'debrief', label: 'Debrief team', done: false },
   { id: 'temp', label: 'Check temperature', done: false },
   { id: 'glucose', label: 'Check blood glucose', done: false },
-  { id: 'transfer', label: 'Arrange appropriate transfer/care', done: false },
+  { id: 'transfer', label: 'Arrange transfer/care', done: false },
 ];
 
 const getConsiderFactors = () => [
   { id: 'hypovolaemia', label: 'Hypovolaemia', done: false },
   { id: 'pneumothorax', label: 'Pneumothorax', done: false },
   { id: 'congenital', label: 'Congenital abnormality', done: false },
-  { id: 'glucose', label: 'Check blood glucose', done: false },
+  { id: 'glucose', label: 'Blood glucose', done: false },
 ];
+
+// ============================================================================
+// FIREBASE HELPERS
+// ============================================================================
+const getFirebaseDb = () => {
+  const apps = getApps();
+  if (apps.length > 0) {
+    return getFirestore(apps[0]);
+  }
+  return null;
+};
+
+const getUserId = (): string => {
+  const stored = localStorage.getItem('eresus_user_id');
+  if (stored) return stored;
+  const newId = crypto.randomUUID();
+  localStorage.setItem('eresus_user_id', newId);
+  return newId;
+};
+
+// ============================================================================
+// SHARED UI COMPONENTS (matching arrest page style)
+// ============================================================================
+
+const ActionButton: React.FC<{
+  title: string;
+  icon?: React.ReactNode;
+  backgroundColor: string;
+  foregroundColor: string;
+  height?: string;
+  fontSize?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+}> = ({ title, icon, backgroundColor, foregroundColor, height = "h-14", fontSize = "text-base", onClick, disabled = false, className = "" }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className={`
+      flex items-center justify-center space-x-2 w-full px-4 rounded-xl 
+      font-semibold shadow-md
+      transition-all duration-150 ease-in-out
+      active:scale-95 active:shadow-inner
+      disabled:opacity-40 disabled:cursor-not-allowed
+      ${height} ${fontSize} ${backgroundColor} ${foregroundColor} ${className}
+    `}
+  >
+    {icon}
+    <span>{title}</span>
+  </button>
+);
+
+const CounterItem: React.FC<{ label: string; value: number | string; color: string }> = ({ label, value, color }) => (
+  <div className={`flex flex-col items-center ${color}`}>
+    <span className="font-mono font-bold text-lg">{value}</span>
+    <span className="text-[10px] font-semibold uppercase text-gray-500 dark:text-gray-400">{label}</span>
+  </div>
+);
+
+const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+            <XSquare size={24} />
+          </button>
+        </div>
+        <div className="p-4 overflow-y-auto max-h-[70vh]">{children}</div>
+      </div>
+    </div>
+  );
+};
 
 // ============================================================================
 // MAIN NLS COMPONENT
@@ -111,12 +193,26 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
   const startTimeRef = useRef<Date | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Undo
+  const [undoStack, setUndoStack] = useState<Array<{
+    step: NLSStep;
+    events: NLSEvent[];
+    inflationBreathsGiven: number;
+    chestMoving: boolean | null;
+    ventilationStartTime: number | null;
+    compressionCycles: number;
+    fio2: string;
+    adrenalineGiven: number;
+    volumeGiven: boolean;
+    vascularAccess: boolean;
+  }>>([]);
+
   // Step-specific state
   const [inflationBreathsGiven, setInflationBreathsGiven] = useState(0);
   const [chestMoving, setChestMoving] = useState<boolean | null>(null);
   const [ventilationStartTime, setVentilationStartTime] = useState<number | null>(null);
   const [compressionCycles, setCompressionCycles] = useState(0);
-  const [fio2, setFio2] = useState('21'); // % oxygen
+  const [fio2, setFio2] = useState('21');
   const [heartRate, setHeartRate] = useState<string>('');
   const [adrenalineGiven, setAdrenalineGiven] = useState(0);
   const [volumeGiven, setVolumeGiven] = useState(false);
@@ -127,9 +223,9 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
   const [postStabilisation, setPostStabilisation] = useState(getPostStabilisationChecklist());
   const [considerFactors, setConsiderFactors] = useState(getConsiderFactors());
 
-  // Show modals
+  // Modals
   const [showSummary, setShowSummary] = useState(false);
-  const [showConfirmEnd, setShowConfirmEnd] = useState(false);
+  const [showReset, setShowReset] = useState(false);
   const [showConfirmBack, setShowConfirmBack] = useState(false);
 
   // --- Timer ---
@@ -146,121 +242,82 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
     };
   }, [isRunning]);
 
+  // --- Save undo snapshot ---
+  const saveUndo = () => {
+    setUndoStack(prev => [...prev.slice(-19), {
+      step,
+      events: [...events],
+      inflationBreathsGiven,
+      chestMoving,
+      ventilationStartTime,
+      compressionCycles,
+      fio2,
+      adrenalineGiven,
+      volumeGiven,
+      vascularAccess,
+    }]);
+  };
+
+  const undo = () => {
+    if (undoStack.length === 0) return;
+    const last = undoStack[undoStack.length - 1];
+    setStep(last.step);
+    setEvents(last.events);
+    setInflationBreathsGiven(last.inflationBreathsGiven);
+    setChestMoving(last.chestMoving);
+    setVentilationStartTime(last.ventilationStartTime);
+    setCompressionCycles(last.compressionCycles);
+    setFio2(last.fio2);
+    setAdrenalineGiven(last.adrenalineGiven);
+    setVolumeGiven(last.volumeGiven);
+    setVascularAccess(last.vascularAccess);
+    setUndoStack(prev => prev.slice(0, -1));
+    if (navigator.vibrate) navigator.vibrate(10);
+  };
+
   // --- Event Logger ---
   const logEvent = (message: string, category: string = 'action') => {
     setEvents(prev => [{ timestamp: elapsedTime, message, category }, ...prev]);
   };
 
-  // --- Actions ---
-  const startClock = (type: NLSBirthType) => {
-    startTimeRef.current = new Date();
-    setIsRunning(true);
-    setBirthType(type);
-    setStep(NLSStep.InitialAssessment);
-    logEvent(`Clock started — ${type === NLSBirthType.Preterm ? 'Preterm (<32 weeks)' : 'Term/Near-term'} birth`, 'status');
-    if (navigator.vibrate) navigator.vibrate(20);
-  };
+  // --- Save to logbook ---
+  const saveToLogbook = async () => {
+    if (!startTimeRef.current) return;
+    try {
+      const db = getFirebaseDb();
+      if (!db) return;
+      const userId = getUserId();
+      const appId = 'eresus-6e65e';
+      const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
+      
+      const outcome = step === NLSStep.Stabilised ? 'Stabilised' : 
+                       step === NLSStep.Ended ? 'NLS Complete' : 'NLS Incomplete';
 
-  const completeInitialAssessment = () => {
-    setStep(NLSStep.BreathingAssessment);
-    logEvent('Initial assessment complete: Dried, stimulated, thermal care applied', 'assessment');
-    if (birthType === NLSBirthType.Preterm) {
-      logEvent('Baby placed in plastic bag (preterm)', 'assessment');
+      const logDoc = {
+        startTime: Timestamp.fromDate(startTimeRef.current),
+        totalDuration: elapsedTime,
+        finalOutcome: outcome,
+        userId: userId,
+        type: 'NLS',
+        birthType: birthType,
+      };
+
+      const logDocRef = await addDoc(collection(db, logsCollectionPath), logDoc);
+
+      const eventsCollectionRef = collection(db, `${logsCollectionPath}/${logDocRef.id}/events`);
+      for (const event of events) {
+        await addDoc(eventsCollectionRef, {
+          timestamp: event.timestamp,
+          message: event.message,
+          type: event.category,
+        });
+      }
+    } catch (e) {
+      console.error("Error saving NLS log:", e);
     }
   };
 
-  const assessBreathing = (breathing: boolean) => {
-    if (breathing) {
-      setStep(NLSStep.CPAP);
-      logEvent('Baby IS breathing — initiating CPAP', 'assessment');
-    } else {
-      setStep(NLSStep.InflationBreaths);
-      logEvent('Baby NOT breathing — proceeding to inflation breaths', 'assessment');
-    }
-  };
-
-  const logInflationBreath = () => {
-    const newCount = inflationBreathsGiven + 1;
-    setInflationBreathsGiven(newCount);
-    logEvent(`Inflation breath ${newCount} delivered`, 'intervention');
-    if (newCount >= 5) {
-      logEvent('5 inflation breaths completed', 'milestone');
-    }
-  };
-
-  const proceedToReassess = () => {
-    setStep(NLSStep.ReassessAfterInflation);
-    logEvent('Reassessing heart rate and chest rise after inflation breaths', 'assessment');
-  };
-
-  const assessChestMovement = (moving: boolean) => {
-    setChestMoving(moving);
-    if (moving) {
-      setStep(NLSStep.VentilationBreaths);
-      setVentilationStartTime(elapsedTime);
-      logEvent('Chest IS moving — continuing ventilation breaths', 'assessment');
-    } else {
-      logEvent('Chest NOT moving — checking airway', 'assessment');
-    }
-  };
-
-  const proceedToCompressions = () => {
-    setStep(NLSStep.ChestCompressions);
-    logEvent('HR <60 after 30s ventilation — starting chest compressions 3:1', 'intervention');
-    logEvent('Increase FiO2 to 100%', 'intervention');
-    setFio2('100');
-  };
-
-  const logCompressionCycle = () => {
-    const newCount = compressionCycles + 1;
-    setCompressionCycles(newCount);
-    logEvent(`Compression cycle ${newCount} completed (15 sets of 3:1)`, 'intervention');
-  };
-
-  const proceedToDrugs = () => {
-    setStep(NLSStep.DrugsAndAccess);
-    logEvent('HR remains <60 — considering drugs and vascular access', 'intervention');
-  };
-
-  const logAdrenaline = () => {
-    const newCount = adrenalineGiven + 1;
-    setAdrenalineGiven(newCount);
-    logEvent(`Adrenaline dose ${newCount} given (10-30 mcg/kg IV)`, 'drug');
-  };
-
-  const logVascularAccess = () => {
-    setVascularAccess(true);
-    logEvent('Vascular access obtained (UVC/IO)', 'intervention');
-  };
-
-  const logVolume = () => {
-    setVolumeGiven(true);
-    logEvent('Intravascular volume given (10 ml/kg 0.9% NaCl)', 'drug');
-  };
-
-  const stabilise = () => {
-    setStep(NLSStep.Stabilised);
-    logEvent('Baby stabilised — HR >60', 'status');
-  };
-
-  const endResuscitation = () => {
-    setStep(NLSStep.Ended);
-    setIsRunning(false);
-    logEvent('Resuscitation ended', 'status');
-  };
-
-  const logFiO2Change = (newFio2: string) => {
-    setFio2(newFio2);
-    logEvent(`FiO2 changed to ${newFio2}%`, 'intervention');
-  };
-
-  const logHR = () => {
-    if (heartRate) {
-      logEvent(`Heart rate: ${heartRate} bpm`, 'assessment');
-      setHeartRate('');
-    }
-  };
-
+  // --- Copy summary ---
   const copySummary = () => {
     const sorted = [...events].reverse();
     const text = `eResus — Newborn Life Support Summary
@@ -269,7 +326,146 @@ Birth Type: ${birthType === NLSBirthType.Preterm ? 'Preterm (<32 weeks)' : 'Term
 
 --- Event Log ---
 ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
-    navigator.clipboard.writeText(text).catch(console.error);
+    navigator.clipboard.writeText(text.trim()).catch(console.error);
+    if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
+  };
+
+  // --- Actions ---
+  const startClock = (type: NLSBirthType) => {
+    startTimeRef.current = new Date();
+    setIsRunning(true);
+    setBirthType(type);
+    setStep(NLSStep.InitialAssessment);
+    logEvent(`Clock started — ${type === NLSBirthType.Preterm ? 'Preterm' : 'Term'} birth`, 'status');
+    if (navigator.vibrate) navigator.vibrate(20);
+  };
+
+  const completeInitialAssessment = () => {
+    saveUndo();
+    setStep(NLSStep.BreathingAssessment);
+    logEvent('Initial assessment complete', 'status');
+  };
+
+  const assessBreathing = (breathing: boolean) => {
+    saveUndo();
+    if (breathing) {
+      setStep(NLSStep.CPAP);
+      logEvent('Breathing — CPAP initiated', 'status');
+    } else {
+      setStep(NLSStep.InflationBreaths);
+      logEvent('Not breathing — inflation breaths', 'status');
+    }
+  };
+
+  const logInflationBreath = () => {
+    saveUndo();
+    const newCount = inflationBreathsGiven + 1;
+    setInflationBreathsGiven(newCount);
+    logEvent(`Inflation breath ${newCount}`, 'action');
+    if (newCount >= 5) logEvent('5 inflation breaths complete', 'status');
+  };
+
+  const proceedToReassess = () => {
+    saveUndo();
+    setStep(NLSStep.ReassessAfterInflation);
+    logEvent('Reassessing HR & chest rise', 'status');
+  };
+
+  const assessChestMovement = (moving: boolean) => {
+    saveUndo();
+    setChestMoving(moving);
+    if (moving) {
+      setStep(NLSStep.VentilationBreaths);
+      setVentilationStartTime(elapsedTime);
+      logEvent('Chest moving — ventilation', 'status');
+    } else {
+      logEvent('Chest not moving — check airway', 'status');
+    }
+  };
+
+  const proceedToCompressions = () => {
+    saveUndo();
+    setStep(NLSStep.ChestCompressions);
+    logEvent('HR <60 — compressions 3:1', 'action');
+    setFio2('100');
+    logEvent('FiO₂ increased to 100%', 'action');
+  };
+
+  const logCompressionCycle = () => {
+    saveUndo();
+    const newCount = compressionCycles + 1;
+    setCompressionCycles(newCount);
+    logEvent(`Compression cycle ${newCount}`, 'action');
+  };
+
+  const proceedToDrugs = () => {
+    saveUndo();
+    setStep(NLSStep.DrugsAndAccess);
+    logEvent('HR <60 — drugs & vascular access', 'action');
+  };
+
+  const logAdrenaline = () => {
+    saveUndo();
+    const newCount = adrenalineGiven + 1;
+    setAdrenalineGiven(newCount);
+    logEvent(`Adrenaline dose ${newCount} (10-30 mcg/kg IV)`, 'drug');
+  };
+
+  const logVascularAccess = () => {
+    saveUndo();
+    setVascularAccess(true);
+    logEvent('Vascular access (UVC/IO)', 'action');
+  };
+
+  const logVolume = () => {
+    saveUndo();
+    setVolumeGiven(true);
+    logEvent('Volume 10ml/kg 0.9% NaCl', 'drug');
+  };
+
+  const stabilise = () => {
+    saveUndo();
+    setStep(NLSStep.Stabilised);
+    logEvent('Baby stabilised — HR ≥60', 'status');
+  };
+
+  const endResuscitation = () => {
+    setStep(NLSStep.Ended);
+    setIsRunning(false);
+    logEvent('Resuscitation ended', 'status');
+  };
+
+  const logHR = () => {
+    if (heartRate) {
+      saveUndo();
+      logEvent(`Heart rate: ${heartRate} bpm`, 'status');
+      setHeartRate('');
+    }
+  };
+
+  const performReset = async (shouldSave: boolean, shouldCopy: boolean) => {
+    if (shouldSave) await saveToLogbook();
+    if (shouldCopy) copySummary();
+    if (timerRef.current) clearInterval(timerRef.current);
+    setIsRunning(false);
+    setStep(NLSStep.Start);
+    setBirthType(null);
+    setElapsedTime(0);
+    setEvents([]);
+    setUndoStack([]);
+    setInflationBreathsGiven(0);
+    setChestMoving(null);
+    setVentilationStartTime(null);
+    setCompressionCycles(0);
+    setFio2('21');
+    setHeartRate('');
+    setAdrenalineGiven(0);
+    setVolumeGiven(false);
+    setVascularAccess(false);
+    setChestNotMovingChecks(getChestNotMovingChecklist());
+    setPostStabilisation(getPostStabilisationChecklist());
+    setConsiderFactors(getConsiderFactors());
+    startTimeRef.current = null;
   };
 
   const handleBack = () => {
@@ -280,16 +476,46 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     }
   };
 
-  const confirmBack = () => {
+  const confirmBack = async () => {
+    await saveToLogbook();
     if (timerRef.current) clearInterval(timerRef.current);
     setIsRunning(false);
     setShowConfirmBack(false);
     onBack();
   };
 
-  // Ventilation timer (30s countdown to check HR)
+  // Ventilation timer
   const ventilationElapsed = ventilationStartTime !== null ? elapsedTime - ventilationStartTime : 0;
   const ventilation30sDue = ventilationElapsed >= 30 && step === NLSStep.VentilationBreaths;
+
+  // Header state
+  const isReassessDue = ventilation30sDue;
+  
+  const stepLabel = (() => {
+    switch (step) {
+      case NLSStep.InitialAssessment: return 'ASSESSMENT';
+      case NLSStep.BreathingAssessment: return 'BREATHING';
+      case NLSStep.CPAP: return 'CPAP';
+      case NLSStep.InflationBreaths: return 'INFLATION';
+      case NLSStep.ReassessAfterInflation: return 'REASSESS';
+      case NLSStep.VentilationBreaths: return 'VENTILATION';
+      case NLSStep.ChestCompressions: return 'COMPRESSIONS';
+      case NLSStep.DrugsAndAccess: return 'DRUGS';
+      case NLSStep.Stabilised: return 'STABILISED';
+      case NLSStep.Ended: return 'COMPLETE';
+      default: return 'PENDING';
+    }
+  })();
+
+  const stepColor = (() => {
+    switch (step) {
+      case NLSStep.Stabilised: return 'bg-green-500';
+      case NLSStep.Ended: return 'bg-gray-600';
+      case NLSStep.ChestCompressions: 
+      case NLSStep.DrugsAndAccess: return 'bg-red-500';
+      default: return 'bg-blue-500';
+    }
+  })();
 
   // ============================================================================
   // RENDER
@@ -297,141 +523,353 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
 
   return (
     <div className="flex flex-col h-full bg-gray-100 dark:bg-gray-900">
-      {/* Header */}
+      {/* ===== HEADER (matching arrest page) ===== */}
       <div className={`p-4 shadow-md transition-colors duration-300 ${
-        ventilation30sDue ? 'bg-red-600 animate-pulse' : 'bg-white dark:bg-gray-800'
+        isReassessDue ? 'bg-red-600 animate-pulse' : 'bg-white dark:bg-gray-800'
       }`}>
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center mb-3">
           <div className="flex items-center space-x-3">
-            <button onClick={handleBack} className={`p-1 rounded ${ventilation30sDue ? 'text-white' : 'text-gray-600 dark:text-gray-400'}`}>
+            <button onClick={handleBack} className={`p-1 rounded ${isReassessDue ? 'text-white' : 'text-gray-600 dark:text-gray-400'}`}>
               <ArrowLeft size={24} />
             </button>
-            <div>
-              <h1 className={`text-2xl font-bold ${ventilation30sDue ? 'text-white' : 'text-gray-900 dark:text-white'}`}>
-                {ventilation30sDue ? 'Reassess HR' : 'Newborn LS'}
-              </h1>
-              {birthType && (
-                <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                  birthType === NLSBirthType.Preterm 
-                    ? 'bg-purple-500 text-white' 
-                    : 'bg-blue-500 text-white'
-                }`}>
-                  {birthType === NLSBirthType.Preterm ? 'PRETERM' : 'TERM'}
-                </span>
+            <div className="flex flex-col items-start space-y-1">
+              {isReassessDue ? (
+                <h1 className="text-3xl font-bold text-white">Reassess HR</h1>
+              ) : (
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Newborn LS</h1>
               )}
+              <div className="flex items-center space-x-2">
+                <span className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${isReassessDue ? 'bg-white/30' : stepColor}`}>
+                  {stepLabel}
+                </span>
+                {birthType && (
+                  <span className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${
+                    birthType === NLSBirthType.Preterm ? 'bg-purple-500' : 'bg-blue-500'
+                  }`}>
+                    {birthType === NLSBirthType.Preterm ? 'PRETERM' : 'TERM'}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-          <div className={`font-mono font-bold text-3xl ${ventilation30sDue ? 'text-white' : 'text-blue-600 dark:text-blue-400'}`}>
+          <div className={`font-mono font-bold text-4xl ${isReassessDue ? 'text-white' : 'text-blue-600 dark:text-blue-400'}`}>
             {formatTime(elapsedTime)}
           </div>
         </div>
+
+        {/* Counters row */}
+        {isRunning && step !== NLSStep.Start && (
+          <div className="flex justify-around pt-2 border-t border-gray-200 dark:border-gray-700">
+            <CounterItem label="Breaths" value={inflationBreathsGiven} color={isReassessDue ? 'text-white' : 'text-orange-500'} />
+            <CounterItem label="Cycles" value={compressionCycles} color={isReassessDue ? 'text-white' : 'text-red-500'} />
+            <CounterItem label="Adrenaline" value={adrenalineGiven} color={isReassessDue ? 'text-white' : 'text-pink-500'} />
+            <CounterItem label="FiO₂" value={`${fio2}%`} color={isReassessDue ? 'text-white' : 'text-cyan-500'} />
+          </div>
+        )}
       </div>
 
-      {/* Main content area */}
+      {/* ===== MAIN CONTENT ===== */}
       <div className="flex-grow overflow-y-auto p-4 space-y-4 pb-36">
-        {step === NLSStep.Start && <StartStep onStart={startClock} />}
         
+        {/* START */}
+        {step === NLSStep.Start && (
+          <div className="space-y-6 pt-4">
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Newborn Life Support</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">RCUK Guidelines 2025</p>
+            </div>
+            <ActionButton
+              title="Term / Near-term Birth"
+              backgroundColor="bg-blue-600"
+              foregroundColor="text-white"
+              height="h-16"
+              fontSize="text-lg"
+              onClick={() => startClock(NLSBirthType.Term)}
+            />
+            <ActionButton
+              title="Preterm Birth (<32 weeks)"
+              backgroundColor="bg-purple-600"
+              foregroundColor="text-white"
+              height="h-16"
+              fontSize="text-lg"
+              onClick={() => startClock(NLSBirthType.Preterm)}
+            />
+          </div>
+        )}
+
+        {/* INITIAL ASSESSMENT */}
         {step === NLSStep.InitialAssessment && (
-          <InitialAssessmentStep 
-            birthType={birthType!} 
-            onComplete={completeInitialAssessment} 
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Initial Assessment (~60s)</h3>
+              <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                {birthType === NLSBirthType.Preterm ? (
+                  <>
+                    <TaskItem label="Plastic bag (undried)" highlight />
+                    <TaskItem label="Delay cord clamping" />
+                  </>
+                ) : (
+                  <>
+                    <TaskItem label="Dry the baby" />
+                    <TaskItem label="Delay cord clamping" />
+                  </>
+                )}
+                <TaskItem label="Stimulate & thermal care" />
+                <TaskItem label="SpO₂ ± ECG monitoring" />
+              </div>
+            </div>
+            <ActionButton
+              title="Assessment Complete"
+              icon={<ChevronRight size={18} />}
+              backgroundColor="bg-green-600"
+              foregroundColor="text-white"
+              height="h-16"
+              fontSize="text-lg"
+              onClick={completeInitialAssessment}
+            />
+          </div>
         )}
 
+        {/* BREATHING ASSESSMENT */}
         {step === NLSStep.BreathingAssessment && (
-          <BreathingAssessmentStep onAssess={assessBreathing} />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Is the baby breathing?</h3>
+            </div>
+            <ActionButton title="Breathing" backgroundColor="bg-green-600" foregroundColor="text-white" height="h-16" fontSize="text-lg" onClick={() => assessBreathing(true)} />
+            <ActionButton title="Not Breathing" backgroundColor="bg-red-600" foregroundColor="text-white" height="h-16" fontSize="text-lg" onClick={() => assessBreathing(false)} />
+          </div>
         )}
 
+        {/* CPAP */}
         {step === NLSStep.CPAP && (
-          <CPAPStep 
-            birthType={birthType!}
-            fio2={fio2}
-            onFio2Change={logFiO2Change}
-            onNotBreathing={() => {
-              logEvent('Baby stopped breathing — moving to inflation breaths', 'assessment');
-              setStep(NLSStep.InflationBreaths);
-            }}
-            onStabilised={stabilise}
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">CPAP 5-8 cm H₂O</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                FiO₂: {birthType === NLSBirthType.Preterm ? '>30%' : '21%'} — titrate to SpO₂
+              </p>
+            </div>
+            <ActionButton title="Breathing Inadequate" icon={<AlertTriangle size={18} />} backgroundColor="bg-orange-500" foregroundColor="text-white" height="h-14" onClick={() => { saveUndo(); logEvent('Breathing inadequate — inflation breaths', 'status'); setStep(NLSStep.InflationBreaths); }} />
+            <ActionButton title="Baby Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" height="h-14" onClick={stabilise} />
+          </div>
         )}
 
+        {/* INFLATION BREATHS */}
         {step === NLSStep.InflationBreaths && (
-          <InflationBreathsStep
-            birthType={birthType!}
-            breathsGiven={inflationBreathsGiven}
-            onLogBreath={logInflationBreath}
-            onProceed={proceedToReassess}
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">
+                5 Inflation Breaths — {birthType === NLSBirthType.Preterm ? '25' : '30'} cm H₂O
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {birthType === NLSBirthType.Preterm ? 'FiO₂ >30% • PEEP 6 cm H₂O' : 'Air (21%)'}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center space-x-4">
+              <span className="text-5xl font-bold font-mono text-gray-900 dark:text-white">{inflationBreathsGiven}/5</span>
+            </div>
+            
+            <ActionButton
+              title="Log Breath"
+              icon={<Wind size={18} />}
+              backgroundColor={inflationBreathsGiven >= 5 ? 'bg-gray-400' : 'bg-orange-500'}
+              foregroundColor="text-white"
+              height="h-14"
+              onClick={logInflationBreath}
+              disabled={inflationBreathsGiven >= 5}
+            />
+
+            {inflationBreathsGiven >= 5 && (
+              <ActionButton
+                title="Reassess"
+                icon={<ChevronRight size={18} />}
+                backgroundColor="bg-blue-600"
+                foregroundColor="text-white"
+                height="h-16"
+                fontSize="text-lg"
+                onClick={proceedToReassess}
+              />
+            )}
+          </div>
         )}
 
+        {/* REASSESS AFTER INFLATION */}
         {step === NLSStep.ReassessAfterInflation && (
-          <ReassessStep
-            chestNotMovingChecks={chestNotMovingChecks}
-            onToggleCheck={(id) => setChestNotMovingChecks(prev => 
-              prev.map(c => c.id === id ? { ...c, done: !c.done } : c)
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Chest moving with ventilation?</h3>
+            </div>
+
+            {chestMoving === null && (
+              <div className="grid grid-cols-2 gap-3">
+                <ActionButton title="Moving" backgroundColor="bg-green-600" foregroundColor="text-white" onClick={() => assessChestMovement(true)} />
+                <ActionButton title="Not Moving" backgroundColor="bg-red-600" foregroundColor="text-white" onClick={() => assessChestMovement(false)} />
+              </div>
             )}
-            onChestMoving={() => assessChestMovement(true)}
-            onChestNotMoving={() => assessChestMovement(false)}
-            onRetryInflation={() => {
-              logEvent('Retrying inflation breaths after airway adjustments', 'intervention');
-              setInflationBreathsGiven(0);
-              setStep(NLSStep.InflationBreaths);
-            }}
-            chestMoving={chestMoving}
-          />
+
+            {chestMoving === false && (
+              <div className="space-y-3">
+                <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+                  <h3 className="font-semibold text-gray-700 dark:text-gray-300">Airway Checks</h3>
+                  {chestNotMovingChecks.map(check => (
+                    <button key={check.id} onClick={() => setChestNotMovingChecks(prev => prev.map(c => c.id === check.id ? { ...c, done: !c.done } : c))} className="flex items-center space-x-3 w-full text-left">
+                      {check.done ? <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" /> : <Circle size={20} className="text-gray-400 flex-shrink-0" />}
+                      <span className={`text-sm text-gray-800 dark:text-gray-200 ${check.done ? 'line-through' : ''}`}>{check.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <ActionButton title="Retry Inflation Breaths" icon={<RotateCw size={18} />} backgroundColor="bg-orange-500" foregroundColor="text-white" onClick={() => { saveUndo(); logEvent('Retrying inflation breaths', 'action'); setInflationBreathsGiven(0); setStep(NLSStep.InflationBreaths); }} />
+                <ActionButton title="Chest Now Moving" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" onClick={() => assessChestMovement(true)} />
+              </div>
+            )}
+          </div>
         )}
 
+        {/* VENTILATION */}
         {step === NLSStep.VentilationBreaths && (
-          <VentilationStep
-            ventilationElapsed={ventilationElapsed}
-            is30sDue={ventilation30sDue}
-            heartRate={heartRate}
-            onHeartRateChange={setHeartRate}
-            onLogHR={logHR}
-            onHRAbove60={stabilise}
-            onHRBelow60={proceedToCompressions}
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Ventilation ~30 breaths/min</h3>
+              <div className="text-center">
+                <span className={`font-mono text-4xl font-bold ${ventilation30sDue ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}>
+                  {formatTime(ventilationElapsed)}
+                </span>
+                <p className="text-xs text-gray-500 dark:text-gray-400">ventilation time</p>
+              </div>
+            </div>
+
+            {ventilation30sDue && (
+              <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse">
+                <AlertTriangle size={20} />
+                <span>30s — Reassess Heart Rate</span>
+              </div>
+            )}
+
+            <div className="flex items-center space-x-2">
+              <input
+                type="number"
+                value={heartRate}
+                onChange={(e) => setHeartRate(e.target.value)}
+                placeholder="HR (bpm)"
+                className="flex-grow p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-xl text-gray-900 dark:text-white text-center text-lg"
+              />
+              <ActionButton title="Log HR" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={logHR} disabled={!heartRate} className="w-28 flex-shrink-0" />
+            </div>
+
+            <ActionButton title="HR ≥60 — Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" height="h-14" onClick={stabilise} />
+            {ventilation30sDue && (
+              <ActionButton title="HR <60 — Compressions" icon={<Heart size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-14" onClick={proceedToCompressions} />
+            )}
+          </div>
         )}
 
+        {/* CHEST COMPRESSIONS */}
         {step === NLSStep.ChestCompressions && (
-          <CompressionsStep
-            compressionCycles={compressionCycles}
-            onLogCycle={logCompressionCycle}
-            onHRAbove60={stabilise}
-            onHRStillBelow60={proceedToDrugs}
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Compressions 3:1</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Lower ⅓ sternum • 100% O₂ • 15 cycles then reassess</p>
+            </div>
+
+            <ActionButton title="Log Cycle" icon={<Heart size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-14" onClick={logCompressionCycle} />
+            <ActionButton title="HR ≥60 — Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" onClick={stabilise} />
+            <ActionButton title="HR <60 — Drugs" icon={<Syringe size={18} />} backgroundColor="bg-orange-600" foregroundColor="text-white" onClick={proceedToDrugs} />
+          </div>
         )}
 
+        {/* DRUGS & ACCESS */}
         {step === NLSStep.DrugsAndAccess && (
-          <DrugsStep
-            vascularAccess={vascularAccess}
-            adrenalineGiven={adrenalineGiven}
-            volumeGiven={volumeGiven}
-            considerFactors={considerFactors}
-            onLogVascularAccess={logVascularAccess}
-            onLogAdrenaline={logAdrenaline}
-            onLogVolume={logVolume}
-            onToggleFactor={(id) => setConsiderFactors(prev =>
-              prev.map(c => c.id === id ? { ...c, done: !c.done } : c)
-            )}
-            onHRAbove60={stabilise}
-          />
+          <div className="space-y-4">
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Drugs & Vascular Access</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <ActionButton
+                  title={vascularAccess ? "Access ✓" : "Vascular Access"}
+                  icon={<Zap size={16} />}
+                  backgroundColor={vascularAccess ? 'bg-green-600' : 'bg-blue-600'}
+                  foregroundColor="text-white"
+                  height="h-12"
+                  fontSize="text-sm"
+                  onClick={logVascularAccess}
+                  disabled={vascularAccess}
+                />
+                <ActionButton
+                  title={`Adrenaline (${adrenalineGiven})`}
+                  icon={<Syringe size={16} />}
+                  backgroundColor="bg-pink-600"
+                  foregroundColor="text-white"
+                  height="h-12"
+                  fontSize="text-sm"
+                  onClick={logAdrenaline}
+                />
+                <ActionButton
+                  title={volumeGiven ? "Volume ✓" : "Volume 10ml/kg"}
+                  icon={<Activity size={16} />}
+                  backgroundColor={volumeGiven ? 'bg-green-600' : 'bg-indigo-600'}
+                  foregroundColor="text-white"
+                  height="h-12"
+                  fontSize="text-sm"
+                  onClick={logVolume}
+                  disabled={volumeGiven}
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Consider</h3>
+              {considerFactors.map(f => (
+                <button key={f.id} onClick={() => setConsiderFactors(prev => prev.map(c => c.id === f.id ? { ...c, done: !c.done } : c))} className="flex items-center space-x-3 w-full text-left">
+                  {f.done ? <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" /> : <Circle size={20} className="text-gray-400 flex-shrink-0" />}
+                  <span className={`text-sm text-gray-800 dark:text-gray-200 ${f.done ? 'line-through' : ''}`}>{f.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <ActionButton title="HR ≥60 — Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" height="h-14" onClick={stabilise} />
+          </div>
         )}
 
+        {/* STABILISED / ENDED */}
         {(step === NLSStep.Stabilised || step === NLSStep.Ended) && (
-          <StabilisedStep
-            postStabilisation={postStabilisation}
-            onToggle={(id) => setPostStabilisation(prev =>
-              prev.map(c => c.id === id ? { ...c, done: !c.done } : c)
+          <div className="space-y-4">
+            <div className={`p-4 rounded-xl text-center ${step === NLSStep.Ended ? 'bg-gray-200 dark:bg-gray-700' : 'bg-green-100 dark:bg-green-900/30'}`}>
+              <CheckCircle2 size={40} className={`mx-auto mb-2 ${step === NLSStep.Ended ? 'text-gray-500' : 'text-green-600'}`} />
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                {step === NLSStep.Ended ? 'Complete' : 'Baby Stabilised'}
+              </h2>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300">Post-stabilisation</h3>
+              {postStabilisation.map(task => (
+                <button key={task.id} onClick={() => setPostStabilisation(prev => prev.map(c => c.id === task.id ? { ...c, done: !c.done } : c))} className="flex items-center space-x-3 w-full text-left">
+                  {task.done ? <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" /> : <Circle size={20} className="text-gray-400 flex-shrink-0" />}
+                  <span className={`text-sm text-gray-800 dark:text-gray-200 ${task.done ? 'line-through' : ''}`}>{task.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {step !== NLSStep.Ended && (
+              <ActionButton title="End Resuscitation" icon={<XSquare size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" onClick={endResuscitation} />
             )}
-            isEnded={step === NLSStep.Ended}
-            onEnd={endResuscitation}
-          />
+          </div>
         )}
 
-        {/* SpO2 Targets Reference - always visible during resuscitation */}
+        {/* SpO2 Reference */}
         {isRunning && step !== NLSStep.Start && (
-          <SpO2Reference />
+          <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
+            <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-center text-sm">Pre-ductal SpO₂ Targets</h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              {getSpO2Targets().map(t => (
+                <div key={t.time} className="flex justify-between px-3 py-1 bg-gray-50 dark:bg-gray-700 rounded">
+                  <span className="text-gray-500 dark:text-gray-400">{t.time}</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">{t.target}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Event Log */}
@@ -441,9 +879,7 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
             <div className="space-y-2 max-h-60 overflow-y-auto font-mono text-sm">
               {events.map((event, i) => (
                 <div key={i} className="flex">
-                  <span className="font-bold w-16 flex-shrink-0 text-blue-500">
-                    [{formatTime(event.timestamp)}]
-                  </span>
+                  <span className="font-bold w-16 flex-shrink-0 text-blue-500">[{formatTime(event.timestamp)}]</span>
                   <span className="ml-2 text-gray-800 dark:text-gray-200">{event.message}</span>
                 </div>
               ))}
@@ -452,640 +888,111 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
         )}
       </div>
 
-      {/* Bottom Controls */}
+      {/* ===== BOTTOM CONTROLS (matching arrest footer) ===== */}
       {isRunning && (
         <div className="fixed bottom-0 left-0 right-0 p-3 pb-[72px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10">
           <div className="flex space-x-3">
-            <NLSButton
+            <ActionButton
+              title="Undo"
+              icon={<Undo size={18} />}
+              backgroundColor="bg-gray-200 dark:bg-gray-700"
+              foregroundColor="text-gray-800 dark:text-gray-200"
+              height="h-12"
+              onClick={undo}
+              disabled={undoStack.length === 0}
+            />
+            <ActionButton
               title="Summary"
-              bgColor="bg-blue-600"
+              backgroundColor="bg-blue-600"
+              foregroundColor="text-white"
+              height="h-12"
               onClick={() => setShowSummary(true)}
             />
-            <NLSButton
-              title="End"
-              bgColor="bg-red-600"
-              onClick={() => setShowConfirmEnd(true)}
+            <ActionButton
+              title="Reset"
+              icon={<RotateCw size={18} />}
+              backgroundColor="bg-red-600"
+              foregroundColor="text-white"
+              height="h-12"
+              onClick={() => setShowReset(true)}
             />
           </div>
         </div>
       )}
 
-      {/* Summary Modal */}
-      {showSummary && (
-        <NLSModal title="NLS Event Summary" onClose={() => setShowSummary(false)}>
-          <div className="space-y-4">
-            <p className="text-lg font-semibold text-gray-900 dark:text-white">
-              Total Time: {formatTime(elapsedTime)}
-            </p>
-            <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
-              {[...events].reverse().map((e, i) => (
-                <div key={i} className="flex">
-                  <span className="font-bold w-16 flex-shrink-0 text-blue-500">[{formatTime(e.timestamp)}]</span>
-                  <span className="ml-2 text-gray-800 dark:text-gray-200">{e.message}</span>
-                </div>
-              ))}
-            </div>
-            <NLSButton title="Copy to Clipboard" bgColor="bg-blue-600" onClick={() => { copySummary(); setShowSummary(false); }} />
+      {/* ===== MODALS ===== */}
+      <Modal isOpen={showSummary} onClose={() => setShowSummary(false)} title="NLS Event Summary">
+        <div className="flex flex-col space-y-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            Total Time: {formatTime(elapsedTime)}
+          </h3>
+          <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
+            {[...events].reverse().map((e, i) => (
+              <div key={i} className="flex">
+                <span className="font-bold w-16 flex-shrink-0 text-blue-500">[{formatTime(e.timestamp)}]</span>
+                <span className="ml-2 text-gray-800 dark:text-gray-200">{e.message}</span>
+              </div>
+            ))}
           </div>
-        </NLSModal>
-      )}
+          <ActionButton
+            title="Copy to Clipboard"
+            icon={<Clipboard size={18} />}
+            backgroundColor="bg-blue-600"
+            foregroundColor="text-white"
+            onClick={() => { copySummary(); setShowSummary(false); }}
+          />
+        </div>
+      </Modal>
 
-      {/* Confirm End Modal */}
-      {showConfirmEnd && (
-        <NLSModal title="End Resuscitation?" onClose={() => setShowConfirmEnd(false)}>
-          <div className="text-center space-y-4">
-            <p className="text-gray-700 dark:text-gray-300">This will stop the timer and end the session.</p>
-            <div className="flex space-x-3">
-              <NLSButton title="Cancel" bgColor="bg-gray-400" onClick={() => setShowConfirmEnd(false)} />
-              <NLSButton title="Copy & End" bgColor="bg-blue-600" onClick={() => { copySummary(); endResuscitation(); setShowConfirmEnd(false); }} />
-              <NLSButton title="End" bgColor="bg-red-600" onClick={() => { endResuscitation(); setShowConfirmEnd(false); }} />
-            </div>
-          </div>
-        </NLSModal>
-      )}
+      <Modal isOpen={showReset} onClose={() => setShowReset(false)} title="Reset NLS?">
+        <div className="flex flex-col items-center text-center space-y-4">
+          <RotateCw size={48} className="text-red-500" />
+          <p className="text-lg text-gray-700 dark:text-gray-300">
+            This will save the current log. This action cannot be undone.
+          </p>
+          <ActionButton
+            title="Copy, Save & Reset"
+            icon={<Clipboard size={18} />}
+            backgroundColor="bg-blue-600"
+            foregroundColor="text-white"
+            onClick={() => { performReset(true, true); setShowReset(false); }}
+          />
+          <ActionButton
+            title="Reset & Save"
+            icon={<RotateCw size={18} />}
+            backgroundColor="bg-red-600"
+            foregroundColor="text-white"
+            onClick={() => { performReset(true, false); setShowReset(false); }}
+          />
+          <button onClick={() => setShowReset(false)} className="text-gray-600 dark:text-gray-400 font-medium py-2 px-4 rounded-lg">
+            Cancel
+          </button>
+        </div>
+      </Modal>
 
-      {/* Confirm Back Modal */}
-      {showConfirmBack && (
-        <NLSModal title="Leave NLS?" onClose={() => setShowConfirmBack(false)}>
-          <div className="text-center space-y-4">
-            <p className="text-gray-700 dark:text-gray-300">Resuscitation is still in progress. Are you sure?</p>
-            <div className="flex space-x-3">
-              <NLSButton title="Stay" bgColor="bg-gray-400" onClick={() => setShowConfirmBack(false)} />
-              <NLSButton title="Leave" bgColor="bg-red-600" onClick={confirmBack} />
-            </div>
+      <Modal isOpen={showConfirmBack} onClose={() => setShowConfirmBack(false)} title="Leave NLS?">
+        <div className="text-center space-y-4">
+          <p className="text-gray-700 dark:text-gray-300">Session will be saved to logbook.</p>
+          <div className="flex space-x-3">
+            <ActionButton title="Stay" backgroundColor="bg-gray-200 dark:bg-gray-700" foregroundColor="text-gray-800 dark:text-gray-200" onClick={() => setShowConfirmBack(false)} />
+            <ActionButton title="Save & Leave" backgroundColor="bg-red-600" foregroundColor="text-white" onClick={confirmBack} />
           </div>
-        </NLSModal>
-      )}
+        </div>
+      </Modal>
     </div>
   );
 };
 
 // ============================================================================
-// STEP COMPONENTS
+// SMALL HELPER COMPONENTS
 // ============================================================================
-
-const StartStep: React.FC<{ onStart: (type: NLSBirthType) => void }> = ({ onStart }) => (
-  <div className="space-y-6">
-    <div className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-lg text-center space-y-4">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Newborn Life Support</h2>
-      <p className="text-gray-600 dark:text-gray-400">RCUK Guidelines 2025</p>
-      <p className="text-sm text-gray-500 dark:text-gray-400">
-        Select birth type to start the clock and begin guided resuscitation.
-      </p>
-    </div>
-    <NLSButton
-      title="Term / Near-term Birth"
-      bgColor="bg-blue-600"
-      height="h-16"
-      fontSize="text-lg"
-      onClick={() => onStart(NLSBirthType.Term)}
-    />
-    <NLSButton
-      title="Preterm Birth (<32 weeks)"
-      bgColor="bg-purple-600"
-      height="h-16"
-      fontSize="text-lg"
-      onClick={() => onStart(NLSBirthType.Preterm)}
-    />
-  </div>
-);
-
-const InitialAssessmentStep: React.FC<{
-  birthType: NLSBirthType;
-  onComplete: () => void;
-}> = ({ birthType, onComplete }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Initial Assessment"
-      subtitle="Approx 60 seconds"
-      icon={<Activity size={24} className="text-blue-500" />}
-    >
-      <div className="space-y-3">
-        <TaskItem label="Start clock / note time of birth" />
-        {birthType === NLSBirthType.Preterm ? (
-          <>
-            <TaskItem label="Place undried body in plastic bag" highlight />
-            <TaskItem label="Delay cord clamping" />
-          </>
-        ) : (
-          <>
-            <TaskItem label="Dry the baby" />
-            <TaskItem label="Delay cord clamping if possible" />
-          </>
-        )}
-        <TaskItem label="Stimulate" />
-        <TaskItem label="Thermal care + radiant heat" />
-        <TaskItem label="Keep baby warm" />
-        <TaskItem label="Call for help if needed" />
-        <TaskItem label="Apply SpO₂ ± ECG monitoring" />
-      </div>
-    </StepCard>
-    <NLSButton
-      title="Initial Assessment Complete →"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={onComplete}
-    />
-  </div>
-);
-
-const BreathingAssessmentStep: React.FC<{
-  onAssess: (breathing: boolean) => void;
-}> = ({ onAssess }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Assess Breathing"
-      icon={<Wind size={24} className="text-cyan-500" />}
-    >
-      <p className="text-gray-600 dark:text-gray-400">
-        Is the baby making adequate respiratory effort?
-      </p>
-    </StepCard>
-    <NLSButton
-      title="Baby IS Breathing"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={() => onAssess(true)}
-    />
-    <NLSButton
-      title="Baby NOT Breathing"
-      bgColor="bg-red-600"
-      height="h-14"
-      onClick={() => onAssess(false)}
-    />
-  </div>
-);
-
-const CPAPStep: React.FC<{
-  birthType: NLSBirthType;
-  fio2: string;
-  onFio2Change: (v: string) => void;
-  onNotBreathing: () => void;
-  onStabilised: () => void;
-}> = ({ birthType, fio2, onFio2Change, onNotBreathing, onStabilised }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="CPAP"
-      icon={<Wind size={24} className="text-green-500" />}
-    >
-      <div className="space-y-2">
-        <p className="text-gray-700 dark:text-gray-300 font-semibold">CPAP 5-8 cm H₂O</p>
-        <p className="text-gray-600 dark:text-gray-400">
-          FiO₂: {birthType === NLSBirthType.Preterm ? '>30%' : '21% (air)'} — titrate to SpO₂ targets
-        </p>
-        <div className="flex items-center space-x-2 mt-2">
-          <label className="text-sm text-gray-600 dark:text-gray-400">FiO₂ %:</label>
-          <input
-            type="number"
-            value={fio2}
-            onChange={(e) => onFio2Change(e.target.value)}
-            className="w-20 p-2 text-center border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded text-gray-900 dark:text-white"
-          />
-        </div>
-      </div>
-    </StepCard>
-    <p className="text-center text-sm text-gray-500 dark:text-gray-400">
-      Monitor breathing continuously. If breathing becomes inadequate:
-    </p>
-    <NLSButton
-      title="Breathing Inadequate → Inflation Breaths"
-      bgColor="bg-orange-500"
-      height="h-14"
-      onClick={onNotBreathing}
-    />
-    <NLSButton
-      title="Baby Stabilised ✓"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={onStabilised}
-    />
-  </div>
-);
-
-const InflationBreathsStep: React.FC<{
-  birthType: NLSBirthType;
-  breathsGiven: number;
-  onLogBreath: () => void;
-  onProceed: () => void;
-}> = ({ birthType, breathsGiven, onLogBreath, onProceed }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Inflation Breaths"
-      icon={<Wind size={24} className="text-orange-500" />}
-    >
-      <div className="space-y-2">
-        <p className="text-gray-700 dark:text-gray-300 font-semibold">
-          Give 5 inflation breaths at {birthType === NLSBirthType.Preterm ? '25' : '30'} cm H₂O
-        </p>
-        <p className="text-gray-600 dark:text-gray-400">
-          FiO₂: {birthType === NLSBirthType.Preterm ? '>30%' : 'Air (21%)'}
-        </p>
-        {birthType === NLSBirthType.Preterm && (
-          <p className="text-gray-600 dark:text-gray-400">PEEP 6 cm H₂O</p>
-        )}
-        <p className="text-gray-600 dark:text-gray-400">Look for chest rise with each breath</p>
-      </div>
-    </StepCard>
-
-    <div className="flex items-center justify-center space-x-4">
-      <span className="text-4xl font-bold text-gray-900 dark:text-white">{breathsGiven}/5</span>
-      <NLSButton
-        title="Log Breath"
-        bgColor={breathsGiven >= 5 ? 'bg-gray-400' : 'bg-orange-500'}
-        onClick={onLogBreath}
-        disabled={breathsGiven >= 5}
-        className="w-40"
-      />
-    </div>
-
-    {breathsGiven >= 5 && (
-      <NLSButton
-        title="Reassess Heart Rate & Chest Rise →"
-        bgColor="bg-blue-600"
-        height="h-14"
-        onClick={onProceed}
-      />
-    )}
-  </div>
-);
-
-const ReassessStep: React.FC<{
-  chestNotMovingChecks: Array<{ id: string; label: string; done: boolean }>;
-  onToggleCheck: (id: string) => void;
-  onChestMoving: () => void;
-  onChestNotMoving: () => void;
-  onRetryInflation: () => void;
-  chestMoving: boolean | null;
-}> = ({ chestNotMovingChecks, onToggleCheck, onChestMoving, onChestNotMoving, onRetryInflation, chestMoving }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Reassess Heart Rate & Chest Rise"
-      icon={<Heart size={24} className="text-red-500" />}
-    >
-      <p className="text-gray-600 dark:text-gray-400">Is the chest moving with ventilation?</p>
-    </StepCard>
-
-    {chestMoving === null && (
-      <div className="grid grid-cols-2 gap-3">
-        <NLSButton title="Chest Moving ✓" bgColor="bg-green-600" onClick={onChestMoving} />
-        <NLSButton title="Chest NOT Moving" bgColor="bg-red-600" onClick={onChestNotMoving} />
-      </div>
-    )}
-
-    {chestMoving === false && (
-      <div className="space-y-3">
-        <StepCard title="Chest Not Moving — Check:" icon={<AlertTriangle size={24} className="text-red-500" />}>
-          <div className="space-y-2">
-            {chestNotMovingChecks.map(check => (
-              <button
-                key={check.id}
-                onClick={() => onToggleCheck(check.id)}
-                className="flex items-center space-x-3 w-full text-left"
-              >
-                {check.done ? (
-                  <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" />
-                ) : (
-                  <Circle size={20} className="text-gray-400 flex-shrink-0" />
-                )}
-                <span className={`text-gray-800 dark:text-gray-200 ${check.done ? 'line-through' : ''}`}>
-                  {check.label}
-                </span>
-              </button>
-            ))}
-          </div>
-        </StepCard>
-        <NLSButton
-          title="Retry Inflation Breaths"
-          bgColor="bg-orange-500"
-          height="h-14"
-          onClick={onRetryInflation}
-        />
-        <NLSButton
-          title="Chest Now Moving ✓"
-          bgColor="bg-green-600"
-          height="h-14"
-          onClick={onChestMoving}
-        />
-      </div>
-    )}
-  </div>
-);
-
-const VentilationStep: React.FC<{
-  ventilationElapsed: number;
-  is30sDue: boolean;
-  heartRate: string;
-  onHeartRateChange: (v: string) => void;
-  onLogHR: () => void;
-  onHRAbove60: () => void;
-  onHRBelow60: () => void;
-}> = ({ ventilationElapsed, is30sDue, heartRate, onHeartRateChange, onLogHR, onHRAbove60, onHRBelow60 }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Ventilation Breaths"
-      subtitle="Continue ventilation at ~30 breaths/min"
-      icon={<Wind size={24} className="text-blue-500" />}
-    >
-      <div className="space-y-2">
-        <p className="text-gray-600 dark:text-gray-400">
-          Maintain chest movement with ventilation breaths. Reassess HR after 30 seconds.
-        </p>
-        <div className="text-center">
-          <span className={`font-mono text-3xl font-bold ${is30sDue ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}>
-            {formatTime(ventilationElapsed)}
-          </span>
-          <p className="text-xs text-gray-500">ventilation time</p>
-        </div>
-      </div>
-    </StepCard>
-
-    {is30sDue && (
-      <div className="p-4 bg-red-100 dark:bg-red-900/30 rounded-xl border-2 border-red-500 space-y-3 animate-pulse">
-        <h3 className="font-bold text-red-700 dark:text-red-300 text-center">
-          ⚠️ 30 Seconds — Reassess Heart Rate
-        </h3>
-        <p className="text-center text-gray-700 dark:text-gray-300">
-          If HR is still &lt;60 after effective ventilation for 30 seconds → start chest compressions
-        </p>
-      </div>
-    )}
-
-    <div className="flex items-center space-x-2">
-      <input
-        type="number"
-        value={heartRate}
-        onChange={(e) => onHeartRateChange(e.target.value)}
-        placeholder="HR (bpm)"
-        className="flex-grow p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-xl text-gray-900 dark:text-white text-center text-lg"
-      />
-      <NLSButton title="Log HR" bgColor="bg-blue-600" onClick={onLogHR} disabled={!heartRate} className="w-28" />
-    </div>
-
-    <NLSButton
-      title="HR ≥60 — Baby Stabilising ✓"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={onHRAbove60}
-    />
-    {is30sDue && (
-      <NLSButton
-        title="HR <60 → Start Chest Compressions"
-        bgColor="bg-red-600"
-        height="h-14"
-        onClick={onHRBelow60}
-      />
-    )}
-  </div>
-);
-
-const CompressionsStep: React.FC<{
-  compressionCycles: number;
-  onLogCycle: () => void;
-  onHRAbove60: () => void;
-  onHRStillBelow60: () => void;
-}> = ({ compressionCycles, onLogCycle, onHRAbove60, onHRStillBelow60 }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Chest Compressions"
-      subtitle="3 compressions : 1 ventilation"
-      icon={<Heart size={24} className="text-red-600" />}
-    >
-      <div className="space-y-2">
-        <p className="text-gray-700 dark:text-gray-300 font-semibold">Synchronise 3:1 ratio</p>
-        <p className="text-gray-600 dark:text-gray-400">Lower 1/3 of sternum, depth ~1/3 of chest AP diameter</p>
-        <p className="text-gray-600 dark:text-gray-400">100% Oxygen</p>
-        <p className="text-gray-600 dark:text-gray-400">
-          15 cycles of 3 compressions : 1 ventilation, then reassess
-        </p>
-      </div>
-    </StepCard>
-
-    <div className="flex items-center justify-center space-x-4">
-      <span className="text-3xl font-bold text-gray-900 dark:text-white">Cycles: {compressionCycles}</span>
-      <NLSButton title="Log Cycle" bgColor="bg-red-600" onClick={onLogCycle} className="w-32" />
-    </div>
-
-    <NLSButton
-      title="HR ≥60 — Baby Stabilising ✓"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={onHRAbove60}
-    />
-    <NLSButton
-      title="HR Remains <60 → Consider Drugs"
-      bgColor="bg-orange-600"
-      height="h-14"
-      onClick={onHRStillBelow60}
-    />
-  </div>
-);
-
-const DrugsStep: React.FC<{
-  vascularAccess: boolean;
-  adrenalineGiven: number;
-  volumeGiven: boolean;
-  considerFactors: Array<{ id: string; label: string; done: boolean }>;
-  onLogVascularAccess: () => void;
-  onLogAdrenaline: () => void;
-  onLogVolume: () => void;
-  onToggleFactor: (id: string) => void;
-  onHRAbove60: () => void;
-}> = ({ vascularAccess, adrenalineGiven, volumeGiven, considerFactors, onLogVascularAccess, onLogAdrenaline, onLogVolume, onToggleFactor, onHRAbove60 }) => (
-  <div className="space-y-4">
-    <StepCard
-      title="Drugs & Vascular Access"
-      subtitle="HR remains <60 bpm"
-      icon={<Syringe size={24} className="text-purple-600" />}
-    >
-      <div className="space-y-2">
-        <p className="text-gray-600 dark:text-gray-400">Continue chest compressions while obtaining access and giving drugs.</p>
-      </div>
-    </StepCard>
-
-    <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
-      <h3 className="font-semibold text-gray-700 dark:text-gray-300">Interventions</h3>
-      <NLSButton
-        title={vascularAccess ? "Vascular Access ✓" : "Log Vascular Access (UVC/IO)"}
-        bgColor={vascularAccess ? 'bg-green-600' : 'bg-blue-600'}
-        onClick={onLogVascularAccess}
-        disabled={vascularAccess}
-      />
-      <NLSButton
-        title={`Adrenaline (10-30 mcg/kg IV) — Dose ${adrenalineGiven + 1}`}
-        bgColor="bg-pink-600"
-        onClick={onLogAdrenaline}
-      />
-      <NLSButton
-        title={volumeGiven ? "Volume Given ✓" : "Give Volume (10ml/kg 0.9% NaCl)"}
-        bgColor={volumeGiven ? 'bg-green-600' : 'bg-indigo-600'}
-        onClick={onLogVolume}
-        disabled={volumeGiven}
-      />
-    </div>
-
-    <StepCard title="Consider Other Factors" icon={<AlertTriangle size={24} className="text-orange-500" />}>
-      <div className="space-y-2">
-        {considerFactors.map(f => (
-          <button
-            key={f.id}
-            onClick={() => onToggleFactor(f.id)}
-            className="flex items-center space-x-3 w-full text-left"
-          >
-            {f.done ? (
-              <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" />
-            ) : (
-              <Circle size={20} className="text-gray-400 flex-shrink-0" />
-            )}
-            <span className={`text-gray-800 dark:text-gray-200 ${f.done ? 'line-through' : ''}`}>
-              {f.label}
-            </span>
-          </button>
-        ))}
-      </div>
-    </StepCard>
-
-    <NLSButton
-      title="HR ≥60 — Baby Stabilising ✓"
-      bgColor="bg-green-600"
-      height="h-14"
-      onClick={onHRAbove60}
-    />
-  </div>
-);
-
-const StabilisedStep: React.FC<{
-  postStabilisation: Array<{ id: string; label: string; done: boolean }>;
-  onToggle: (id: string) => void;
-  isEnded: boolean;
-  onEnd: () => void;
-}> = ({ postStabilisation, onToggle, isEnded, onEnd }) => (
-  <div className="space-y-4">
-    <div className="p-6 bg-green-100 dark:bg-green-900/30 rounded-xl text-center space-y-2">
-      <CheckCircle2 size={48} className="mx-auto text-green-600" />
-      <h2 className="text-2xl font-bold text-green-800 dark:text-green-300">
-        {isEnded ? 'Resuscitation Complete' : 'Baby Stabilised'}
-      </h2>
-    </div>
-
-    <StepCard title="Post-stabilisation Tasks" icon={<Clipboard size={24} className="text-blue-500" />}>
-      <div className="space-y-2">
-        {postStabilisation.map(task => (
-          <button
-            key={task.id}
-            onClick={() => onToggle(task.id)}
-            className="flex items-center space-x-3 w-full text-left"
-          >
-            {task.done ? (
-              <CheckCircle2 size={20} className="text-green-500 flex-shrink-0" />
-            ) : (
-              <Circle size={20} className="text-gray-400 flex-shrink-0" />
-            )}
-            <span className={`text-gray-800 dark:text-gray-200 ${task.done ? 'line-through' : ''}`}>
-              {task.label}
-            </span>
-          </button>
-        ))}
-      </div>
-    </StepCard>
-
-    {!isEnded && (
-      <NLSButton
-        title="End Resuscitation"
-        bgColor="bg-red-600"
-        height="h-14"
-        onClick={onEnd}
-      />
-    )}
-  </div>
-);
-
-// ============================================================================
-// SHARED NLS UI COMPONENTS
-// ============================================================================
-
-const SpO2Reference: React.FC = () => (
-  <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
-    <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-center">
-      Acceptable Pre-ductal SpO₂
-    </h3>
-    <div className="grid grid-cols-2 gap-2 text-sm">
-      {getSpO2Targets().map(t => (
-        <div key={t.time} className="flex justify-between px-3 py-1 bg-gray-50 dark:bg-gray-700 rounded">
-          <span className="text-gray-600 dark:text-gray-400">{t.time}</span>
-          <span className="font-semibold text-gray-900 dark:text-white">{t.target}</span>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const StepCard: React.FC<{
-  title: string;
-  subtitle?: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}> = ({ title, subtitle, icon, children }) => (
-  <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-3">
-    <div className="flex items-center space-x-3">
-      {icon}
-      <div>
-        <h3 className="font-bold text-gray-900 dark:text-white">{title}</h3>
-        {subtitle && <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>}
-      </div>
-    </div>
-    {children}
-  </div>
-);
 
 const TaskItem: React.FC<{ label: string; highlight?: boolean }> = ({ label, highlight }) => (
   <div className="flex items-center space-x-2">
-    <ChevronRight size={16} className={highlight ? 'text-purple-500' : 'text-gray-400'} />
+    <ChevronRight size={14} className={highlight ? 'text-purple-500' : 'text-gray-400'} />
     <span className={`text-sm ${highlight ? 'font-semibold text-purple-700 dark:text-purple-300' : 'text-gray-700 dark:text-gray-300'}`}>
       {label}
     </span>
-  </div>
-);
-
-const NLSButton: React.FC<{
-  title: string;
-  bgColor: string;
-  height?: string;
-  fontSize?: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}> = ({ title, bgColor, height = 'h-12', fontSize = 'text-base', onClick, disabled = false, className = '' }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className={`
-      flex items-center justify-center w-full px-4 rounded-xl 
-      font-semibold text-white shadow-md
-      transition-all duration-150 ease-in-out
-      active:scale-95 active:shadow-inner
-      disabled:opacity-40 disabled:cursor-not-allowed
-      ${height} ${fontSize} ${bgColor} ${className}
-    `}
-  >
-    {title}
-  </button>
-);
-
-const NLSModal: React.FC<{
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}> = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4" onClick={onClose}>
-    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
-      <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-          <XSquare size={24} />
-        </button>
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
   </div>
 );
 
