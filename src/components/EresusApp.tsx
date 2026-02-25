@@ -610,38 +610,57 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
 // CORE LOGIC: ArrestViewModel -> useArrestViewModel (React Hook)
 //============================================================================
 
+const ARREST_SESSION_KEY = 'eresus_arrest_session';
+
 const useArrestViewModel = () => {
   const { db, userId } = useFirebase();
   const { cprCycleDuration, adrenalineInterval, showDosagePrompts } = useSettings();
 
+  // --- Restore saved session ---
+  const savedSession = useRef<any>(null);
+  const didRestore = useRef(false);
+  
+  if (!didRestore.current) {
+    try {
+      const raw = localStorage.getItem(ARREST_SESSION_KEY);
+      if (raw) savedSession.current = JSON.parse(raw);
+    } catch { /* ignore */ }
+    didRestore.current = true;
+  }
+  const s = savedSession.current;
+
+  const hasRecoverableArrest = s != null && (s.arrestState === ArrestState.Active || s.arrestState === ArrestState.Rosc);
+
   // --- Published State Properties ---
-  const [arrestState, setArrestState] = useState<ArrestState>(ArrestState.Pending);
+  const [arrestState, setArrestState] = useState<ArrestState>(hasRecoverableArrest ? ArrestState.Pending : (s?.arrestState ?? ArrestState.Pending));
   const [masterTime, setMasterTime] = useState<number>(0);
   const [cprTime, setCprTime] = useState<number>(cprCycleDuration);
-  const [timeOffset, setTimeOffset] = useState<number>(0);
-  const [uiState, setUiState] = useState<UIState>(UIState.Default);
-  const [events, setEvents] = useState<Event[]>([]);
+  const [timeOffset, setTimeOffset] = useState<number>(s?.timeOffset ?? 0);
+  const [uiState, setUiState] = useState<UIState>(s?.uiState ?? UIState.Default);
+  const [events, setEvents] = useState<Event[]>(s?.events ?? []);
 
-  const [shockCount, setShockCount] = useState(0);
-  const [adrenalineCount, setAdrenalineCount] = useState(0);
-  const [amiodaroneCount, setAmiodaroneCount] = useState(0);
-  const [lidocaineCount, setLidocaineCount] = useState(0);
+  const [shockCount, setShockCount] = useState(s?.shockCount ?? 0);
+  const [adrenalineCount, setAdrenalineCount] = useState(s?.adrenalineCount ?? 0);
+  const [amiodaroneCount, setAmiodaroneCount] = useState(s?.amiodaroneCount ?? 0);
+  const [lidocaineCount, setLidocaineCount] = useState(s?.lidocaineCount ?? 0);
 
-  const [airwayPlaced, setAirwayPlaced] = useState(false);
-  const [antiarrhythmicGiven, setAntiarrhythmicGiven] = useState<AntiarrhythmicDrug>(AntiarrhythmicDrug.None);
+  const [airwayPlaced, setAirwayPlaced] = useState(s?.airwayPlaced ?? false);
+  const [antiarrhythmicGiven, setAntiarrhythmicGiven] = useState<AntiarrhythmicDrug>(s?.antiarrhythmicGiven ?? AntiarrhythmicDrug.None);
 
-  const [reversibleCauses, setReversibleCauses] = useState<ChecklistItem[]>(AppConstants.reversibleCausesTemplate());
-  const [postROSCTasks, setPostROSCTasks] = useState<ChecklistItem[]>(AppConstants.postROSCTasksTemplate());
-  const [postMortemTasks, setPostMortemTasks] = useState<ChecklistItem[]>(AppConstants.postMortemTasksTemplate());
-  const [patientAgeCategory, setPatientAgeCategory] = useState<PatientAgeCategory | null>(null);
+  const [reversibleCauses, setReversibleCauses] = useState<ChecklistItem[]>(s?.reversibleCauses ?? AppConstants.reversibleCausesTemplate());
+  const [postROSCTasks, setPostROSCTasks] = useState<ChecklistItem[]>(s?.postROSCTasks ?? AppConstants.postROSCTasksTemplate());
+  const [postMortemTasks, setPostMortemTasks] = useState<ChecklistItem[]>(s?.postMortemTasks ?? AppConstants.postMortemTasksTemplate());
+  const [patientAgeCategory, setPatientAgeCategory] = useState<PatientAgeCategory | null>(s?.patientAgeCategory ?? null);
 
   // --- Private State Properties ---
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const startTimeRef = useRef<Date | null>(null);
-  const cprCycleStartTimeRef = useRef<number>(0);
-  const lastAdrenalineTimeRef = useRef<number | null>(null);
-  const shockCountForAmiodarone1Ref = useRef<number | null>(null);
+  const startTimeRef = useRef<Date | null>(s?.startTime ? new Date(s.startTime) : null);
+  const cprCycleStartTimeRef = useRef<number>(s?.cprCycleStartTime ?? 0);
+  const lastAdrenalineTimeRef = useRef<number | null>(s?.lastAdrenalineTime ?? null);
+  const shockCountForAmiodarone1Ref = useRef<number | null>(s?.shockCountForAmiodarone1 ?? null);
+  const savedArrestStateRef = useRef<ArrestState | null>(hasRecoverableArrest ? s.arrestState : null);
   const [undoHistory, setUndoHistory] = useState<UndoState[]>([]);
+  const [showRecoveryPrompt, setShowRecoveryPrompt] = useState(hasRecoverableArrest);
 
   // --- Computed Properties ---
   const totalArrestTime = useMemo(() => masterTime + timeOffset, [masterTime, timeOffset]);
@@ -683,6 +702,94 @@ const useArrestViewModel = () => {
   const shouldShowAdrenalinePrompt = useMemo(() => {
     return shockCount >= 3 && adrenalineCount === 0 && isAdrenalineAvailable;
   }, [shockCount, adrenalineCount, isAdrenalineAvailable]);
+
+  // --- Session Persistence ---
+  // Save session to localStorage on every meaningful state change
+  useEffect(() => {
+    if (arrestState === ArrestState.Pending) {
+      localStorage.removeItem(ARREST_SESSION_KEY);
+      return;
+    }
+    const session = {
+      arrestState,
+      timeOffset,
+      uiState,
+      events,
+      shockCount,
+      adrenalineCount,
+      amiodaroneCount,
+      lidocaineCount,
+      airwayPlaced,
+      antiarrhythmicGiven,
+      reversibleCauses,
+      postROSCTasks,
+      postMortemTasks,
+      patientAgeCategory,
+      startTime: startTimeRef.current?.toISOString() ?? null,
+      cprCycleStartTime: cprCycleStartTimeRef.current,
+      lastAdrenalineTime: lastAdrenalineTimeRef.current,
+      shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
+    };
+    try {
+      localStorage.setItem(ARREST_SESSION_KEY, JSON.stringify(session));
+    } catch { /* storage full — non-critical */ }
+  }, [arrestState, timeOffset, uiState, events, shockCount, adrenalineCount, 
+      amiodaroneCount, lidocaineCount, airwayPlaced, antiarrhythmicGiven, 
+      reversibleCauses, postROSCTasks, postMortemTasks, patientAgeCategory]);
+
+  // Recovery: resume timer if session was active
+  const resumeRecoveredSession = () => {
+    setShowRecoveryPrompt(false);
+    // Restore the saved arrest state — timer will auto-start via the arrestState effect
+    if (savedArrestStateRef.current) {
+      setArrestState(savedArrestStateRef.current);
+      savedArrestStateRef.current = null;
+    }
+  };
+
+  const discardRecoveredSession = async () => {
+    setShowRecoveryPrompt(false);
+    // Save the interrupted session to logbook before discarding
+    if (startTimeRef.current && events.length > 0) {
+      try {
+        const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
+        const newLogDoc: Omit<SavedArrestLog, 'id'> = {
+          startTime: Timestamp.fromDate(startTimeRef.current),
+          totalDuration: totalArrestTime,
+          finalOutcome: "Incomplete (recovered)",
+          userId,
+        };
+        const logDocRef = await addDoc(collection(db, logsCollectionPath), newLogDoc);
+        const eventsCollectionRef = collection(db, `${logsCollectionPath}/${logDocRef.id}/events`);
+        for (const event of events) {
+          await addDoc(eventsCollectionRef, event);
+        }
+      } catch (e) {
+        console.error("Error saving recovered session:", e);
+      }
+    }
+    // Reset state
+    setArrestState(ArrestState.Pending);
+    setMasterTime(0);
+    setCprTime(cprCycleDuration);
+    setTimeOffset(0);
+    setUiState(UIState.Default);
+    setEvents([]);
+    setShockCount(0);
+    setAdrenalineCount(0);
+    setAmiodaroneCount(0);
+    setLidocaineCount(0);
+    setAirwayPlaced(false);
+    setAntiarrhythmicGiven(AntiarrhythmicDrug.None);
+    lastAdrenalineTimeRef.current = null;
+    shockCountForAmiodarone1Ref.current = null;
+    startTimeRef.current = null;
+    setPatientAgeCategory(null);
+    setReversibleCauses(AppConstants.reversibleCausesTemplate());
+    setPostROSCTasks(AppConstants.postROSCTasksTemplate());
+    setPostMortemTasks(AppConstants.postMortemTasksTemplate());
+    localStorage.removeItem(ARREST_SESSION_KEY);
+  };
 
   // --- Core Timer Logic ---
   const stopTimer = () => {
@@ -1027,6 +1134,7 @@ ${[...events].reverse().map(e => `[${TimeFormatter.format(e.timestamp)}] ${e.mes
     setReversibleCauses(AppConstants.reversibleCausesTemplate());
     setPostROSCTasks(AppConstants.postROSCTasksTemplate());
     setPostMortemTasks(AppConstants.postMortemTasksTemplate());
+    localStorage.removeItem(ARREST_SESSION_KEY);
   };
 
   return {
@@ -1040,6 +1148,9 @@ ${[...events].reverse().map(e => `[${TimeFormatter.format(e.timestamp)}] ${e.mes
     totalArrestTime, canUndo, isAdrenalineAvailable, isAmiodaroneAvailable,
     isLidocaineAvailable, timeUntilAdrenaline, shouldShowAmiodaroneReminder,
     shouldShowAdrenalinePrompt, shouldShowAmiodaroneFirstDosePrompt,
+    
+    // Recovery
+    showRecoveryPrompt, resumeRecoveredSession, discardRecoveredSession,
     
     // Actions
     startArrest, analyseRhythm, logRhythm, deliverShock, resumeCPR,
@@ -1660,10 +1771,37 @@ const PendingView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
 }> = ({ onShowPdf, onShowNewborn }) => {
-  const { startArrest } = useArrest();
+  const { startArrest, showRecoveryPrompt, resumeRecoveredSession, discardRecoveredSession } = useArrest();
 
   return (
     <div className="p-4 space-y-8">
+      {showRecoveryPrompt && (
+        <div className="p-4 bg-orange-50 dark:bg-orange-900/30 border-2 border-orange-400 dark:border-orange-600 rounded-xl space-y-3">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle size={24} className="text-orange-500 flex-shrink-0" />
+            <h3 className="font-bold text-gray-900 dark:text-white">Session Recovery</h3>
+          </div>
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            An active arrest session was interrupted. Would you like to resume it?
+          </p>
+          <div className="flex space-x-3">
+            <ActionButton
+              title="Resume"
+              backgroundColor="bg-green-600"
+              foregroundColor="text-white"
+              height="h-12"
+              onClick={resumeRecoveredSession}
+            />
+            <ActionButton
+              title="Save & Discard"
+              backgroundColor="bg-gray-500"
+              foregroundColor="text-white"
+              height="h-12"
+              onClick={discardRecoveredSession}
+            />
+          </div>
+        </div>
+      )}
       <IosAppStoreBanner />
       <ActionButton
         title="Start Arrest"
@@ -2522,13 +2660,18 @@ const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabID>('arrest');
   const [pdfToShow, setPdfToShow] = useState<PDFIdentifiable | null>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
-  const [showNewborn, setShowNewborn] = useState(false);
+  const [showNewborn, setShowNewborn] = useState(() => {
+    return localStorage.getItem('eresus_active_view') === 'nls';
+  });
   
-  // These hooks will now work because their providers are parents
+  // Persist active view
+  useEffect(() => {
+    localStorage.setItem('eresus_active_view', showNewborn ? 'nls' : 'main');
+  }, [showNewborn]);
+
   const arrestViewModel = useArrestViewModel();
   const { appearanceMode } = useSettings();
 
-  // Apply dark mode
   useEffect(() => {
     const root = window.document.documentElement;
     if (appearanceMode === AppearanceMode.Dark || 
