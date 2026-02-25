@@ -782,10 +782,11 @@ const useArrestViewModel = () => {
             HapticManager.notification('warning');
           }
           
-          // Check if cycle reset is needed
-          if (newCprTime < -0.9) {
-            cprCycleStartTimeRef.current = totalArrestTime; // Use the *current* totalArrestTime from this render
-            return cprCycleDuration;
+          // Keep timer at 0 — do NOT auto-reset.
+          // The red "Rhythm Check" header stays until the user
+          // clicks Analyse Rhythm (which calls resumeCPR).
+          if (newCprTime < 0) {
+            return 0;
           }
           
           return newCprTime;
