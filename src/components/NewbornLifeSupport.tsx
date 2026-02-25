@@ -101,6 +101,11 @@ const getConsiderFactors = () => [
 ];
 
 // ============================================================================
+// SESSION PERSISTENCE
+// ============================================================================
+const NLS_SESSION_KEY = 'eresus_nls_session';
+
+// ============================================================================
 // FIREBASE HELPERS
 // ============================================================================
 const getFirebaseDb = () => {
@@ -184,14 +189,33 @@ interface NewbornLifeSupportProps {
 }
 
 const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
+  // --- Restore saved session ---
+  const savedNls = useRef<any>(null);
+  const didRestoreNls = useRef(false);
+  
+  if (!didRestoreNls.current) {
+    try {
+      const raw = localStorage.getItem(NLS_SESSION_KEY);
+      if (raw) savedNls.current = JSON.parse(raw);
+    } catch { /* ignore */ }
+    didRestoreNls.current = true;
+  }
+  const ns = savedNls.current;
+
+  const hasRecoverableSession = ns != null && ns.step !== NLSStep.Start && ns.step !== NLSStep.Ended;
+
   // --- State ---
-  const [step, setStep] = useState<NLSStep>(NLSStep.Start);
-  const [birthType, setBirthType] = useState<NLSBirthType | null>(null);
+  const [step, setStep] = useState<NLSStep>(hasRecoverableSession ? NLSStep.Start : (ns?.step ?? NLSStep.Start));
+  const [birthType, setBirthType] = useState<NLSBirthType | null>(ns?.birthType ?? null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
-  const [events, setEvents] = useState<NLSEvent[]>([]);
-  const startTimeRef = useRef<Date | null>(null);
+  const [events, setEvents] = useState<NLSEvent[]>(ns?.events ?? []);
+  const startTimeRef = useRef<Date | null>(ns?.startTime ? new Date(ns.startTime) : null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const savedStepRef = useRef<NLSStep | null>(hasRecoverableSession ? ns.step : null);
+
+  // Recovery prompt
+  const [showRecoveryPrompt, setShowRecoveryPrompt] = useState(hasRecoverableSession);
 
   // Undo
   const [undoStack, setUndoStack] = useState<Array<{
@@ -210,19 +234,19 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
   }>>([]);
 
   // Step-specific state
-  const [inflationBreathsGiven, setInflationBreathsGiven] = useState(0);
-  const [chestMoving, setChestMoving] = useState<boolean | null>(null);
-  const [ventilationStartTime, setVentilationStartTime] = useState<number | null>(null);
-  const [compressionCycles, setCompressionCycles] = useState(0);
-  const [fio2, setFio2] = useState('21');
+  const [inflationBreathsGiven, setInflationBreathsGiven] = useState(ns?.inflationBreathsGiven ?? 0);
+  const [chestMoving, setChestMoving] = useState<boolean | null>(ns?.chestMoving ?? null);
+  const [ventilationStartTime, setVentilationStartTime] = useState<number | null>(ns?.ventilationStartTime ?? null);
+  const [compressionCycles, setCompressionCycles] = useState(ns?.compressionCycles ?? 0);
+  const [fio2, setFio2] = useState(ns?.fio2 ?? '21');
   const [heartRate, setHeartRate] = useState<string>('');
-  const [adrenalineGiven, setAdrenalineGiven] = useState(0);
-  const [volumeGiven, setVolumeGiven] = useState(false);
-  const [vascularAccess, setVascularAccess] = useState(false);
+  const [adrenalineGiven, setAdrenalineGiven] = useState(ns?.adrenalineGiven ?? 0);
+  const [volumeGiven, setVolumeGiven] = useState(ns?.volumeGiven ?? false);
+  const [vascularAccess, setVascularAccess] = useState(ns?.vascularAccess ?? false);
 
   // Reassess flags — persist until user acknowledges
-  const [reassessDismissed, setReassessDismissed] = useState(false);
-  const [compressionReassessDismissed, setCompressionReassessDismissed] = useState(false);
+  const [reassessDismissed, setReassessDismissed] = useState(ns?.reassessDismissed ?? false);
+  const [compressionReassessDismissed, setCompressionReassessDismissed] = useState(ns?.compressionReassessDismissed ?? false);
 
   // Checklists
   const [chestNotMovingChecks, setChestNotMovingChecks] = useState(getChestNotMovingChecklist());
@@ -233,6 +257,82 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
   const [showSummary, setShowSummary] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [showConfirmBack, setShowConfirmBack] = useState(false);
+
+  // --- Session Persistence ---
+  useEffect(() => {
+    if (step === NLSStep.Start) {
+      localStorage.removeItem(NLS_SESSION_KEY);
+      return;
+    }
+    const session = {
+      step, birthType, events, inflationBreathsGiven, chestMoving,
+      ventilationStartTime, compressionCycles, fio2, adrenalineGiven,
+      volumeGiven, vascularAccess, reassessDismissed, compressionReassessDismissed,
+      startTime: startTimeRef.current?.toISOString() ?? null,
+    };
+    try {
+      localStorage.setItem(NLS_SESSION_KEY, JSON.stringify(session));
+    } catch { /* storage full */ }
+  }, [step, birthType, events, inflationBreathsGiven, chestMoving,
+      ventilationStartTime, compressionCycles, fio2, adrenalineGiven,
+      volumeGiven, vascularAccess, reassessDismissed, compressionReassessDismissed]);
+
+  // Resume recovered session
+  const resumeNlsSession = () => {
+    setShowRecoveryPrompt(false);
+    if (savedStepRef.current) {
+      setStep(savedStepRef.current);
+      savedStepRef.current = null;
+    }
+    if (startTimeRef.current) {
+      setIsRunning(true);
+    }
+  };
+
+  const discardNlsSession = async () => {
+    setShowRecoveryPrompt(false);
+    // Save interrupted session to logbook
+    if (startTimeRef.current && events.length > 0) {
+      try {
+        const db = getFirebaseDb();
+        if (db) {
+          const userId = getUserId();
+          const appId = 'eresus-6e65e';
+          const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
+          const logDoc = {
+            startTime: Timestamp.fromDate(startTimeRef.current),
+            totalDuration: elapsedTime,
+            finalOutcome: 'NLS Incomplete (recovered)',
+            userId,
+            type: 'NLS',
+            birthType,
+          };
+          const logDocRef = await addDoc(collection(db, logsCollectionPath), logDoc);
+          const eventsCollectionRef = collection(db, `${logsCollectionPath}/${logDocRef.id}/events`);
+          for (const event of events) {
+            await addDoc(eventsCollectionRef, { timestamp: event.timestamp, message: event.message, type: event.category });
+          }
+        }
+      } catch (e) { console.error("Error saving recovered NLS:", e); }
+    }
+    // Reset
+    setStep(NLSStep.Start);
+    setBirthType(null);
+    setElapsedTime(0);
+    setEvents([]);
+    setInflationBreathsGiven(0);
+    setChestMoving(null);
+    setVentilationStartTime(null);
+    setCompressionCycles(0);
+    setFio2('21');
+    setAdrenalineGiven(0);
+    setVolumeGiven(false);
+    setVascularAccess(false);
+    setReassessDismissed(false);
+    setCompressionReassessDismissed(false);
+    startTimeRef.current = null;
+    localStorage.removeItem(NLS_SESSION_KEY);
+  };
 
   // --- Timer ---
   useEffect(() => {
@@ -495,12 +595,14 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     setPostStabilisation(getPostStabilisationChecklist());
     setConsiderFactors(getConsiderFactors());
     startTimeRef.current = null;
+    localStorage.removeItem(NLS_SESSION_KEY);
   };
 
   const handleBack = () => {
     if (isRunning) {
       setShowConfirmBack(true);
     } else {
+      localStorage.removeItem(NLS_SESSION_KEY);
       onBack();
     }
   };
@@ -510,6 +612,7 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     if (timerRef.current) clearInterval(timerRef.current);
     setIsRunning(false);
     setShowConfirmBack(false);
+    localStorage.removeItem(NLS_SESSION_KEY);
     onBack();
   };
 
@@ -606,6 +709,33 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
         {/* START */}
         {step === NLSStep.Start && (
           <div className="space-y-6 pt-4">
+            {showRecoveryPrompt && (
+              <div className="p-4 bg-orange-50 dark:bg-orange-900/30 border-2 border-orange-400 dark:border-orange-600 rounded-xl space-y-3">
+                <div className="flex items-center space-x-2">
+                  <AlertTriangle size={24} className="text-orange-500 flex-shrink-0" />
+                  <h3 className="font-bold text-gray-900 dark:text-white">Session Recovery</h3>
+                </div>
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  An active NLS session was interrupted. Would you like to resume it?
+                </p>
+                <div className="flex space-x-3">
+                  <ActionButton
+                    title="Resume"
+                    backgroundColor="bg-green-600"
+                    foregroundColor="text-white"
+                    height="h-12"
+                    onClick={resumeNlsSession}
+                  />
+                  <ActionButton
+                    title="Save & Discard"
+                    backgroundColor="bg-gray-500"
+                    foregroundColor="text-white"
+                    height="h-12"
+                    onClick={discardNlsSession}
+                  />
+                </div>
+              </div>
+            )}
             <div className="text-center space-y-2">
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Newborn Life Support</h2>
               <p className="text-sm text-gray-500 dark:text-gray-400">RCUK Guidelines 2025</p>
