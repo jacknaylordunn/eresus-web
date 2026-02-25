@@ -205,6 +205,8 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
     adrenalineGiven: number;
     volumeGiven: boolean;
     vascularAccess: boolean;
+    reassessDismissed: boolean;
+    compressionReassessDismissed: boolean;
   }>>([]);
 
   // Step-specific state
@@ -217,6 +219,10 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
   const [adrenalineGiven, setAdrenalineGiven] = useState(0);
   const [volumeGiven, setVolumeGiven] = useState(false);
   const [vascularAccess, setVascularAccess] = useState(false);
+
+  // Reassess flags — persist until user acknowledges
+  const [reassessDismissed, setReassessDismissed] = useState(false);
+  const [compressionReassessDismissed, setCompressionReassessDismissed] = useState(false);
 
   // Checklists
   const [chestNotMovingChecks, setChestNotMovingChecks] = useState(getChestNotMovingChecklist());
@@ -255,6 +261,8 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
       adrenalineGiven,
       volumeGiven,
       vascularAccess,
+      reassessDismissed,
+      compressionReassessDismissed,
     }]);
   };
 
@@ -271,6 +279,8 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack }) => {
     setAdrenalineGiven(last.adrenalineGiven);
     setVolumeGiven(last.volumeGiven);
     setVascularAccess(last.vascularAccess);
+    setReassessDismissed(last.reassessDismissed);
+    setCompressionReassessDismissed(last.compressionReassessDismissed);
     setUndoStack(prev => prev.slice(0, -1));
     if (navigator.vibrate) navigator.vibrate(10);
   };
@@ -368,6 +378,7 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
   const proceedToReassess = () => {
     saveUndo();
     setStep(NLSStep.ReassessAfterInflation);
+    setChestMoving(null);
     logEvent('Reassessing HR & chest rise', 'status');
   };
 
@@ -377,16 +388,25 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     if (moving) {
       setStep(NLSStep.VentilationBreaths);
       setVentilationStartTime(elapsedTime);
-      logEvent('Chest moving — ventilation', 'status');
+      setReassessDismissed(false);
+      logEvent('Chest moving — ventilation breaths', 'status');
     } else {
       logEvent('Chest not moving — check airway', 'status');
     }
   };
 
+  const acknowledgeReassess = () => {
+    saveUndo();
+    setReassessDismissed(true);
+    logEvent('HR reassessed after 30s ventilation', 'status');
+  };
+
   const proceedToCompressions = () => {
     saveUndo();
     setStep(NLSStep.ChestCompressions);
-    logEvent('HR <60 — compressions 3:1', 'action');
+    setCompressionCycles(0);
+    setCompressionReassessDismissed(false);
+    logEvent('HR <60 — chest compressions 3:1', 'action');
     setFio2('100');
     logEvent('FiO₂ increased to 100%', 'action');
   };
@@ -398,10 +418,17 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     logEvent(`Compression cycle ${newCount}`, 'action');
   };
 
+  const acknowledgeCompressionReassess = () => {
+    saveUndo();
+    setCompressionReassessDismissed(true);
+    setCompressionCycles(0);
+    logEvent('HR reassessed after 15 compression cycles', 'status');
+  };
+
   const proceedToDrugs = () => {
     saveUndo();
     setStep(NLSStep.DrugsAndAccess);
-    logEvent('HR <60 — drugs & vascular access', 'action');
+    logEvent('HR remains <60 — drugs & vascular access', 'action');
   };
 
   const logAdrenaline = () => {
@@ -462,6 +489,8 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     setAdrenalineGiven(0);
     setVolumeGiven(false);
     setVascularAccess(false);
+    setReassessDismissed(false);
+    setCompressionReassessDismissed(false);
     setChestNotMovingChecks(getChestNotMovingChecklist());
     setPostStabilisation(getPostStabilisationChecklist());
     setConsiderFactors(getConsiderFactors());
@@ -484,12 +513,15 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
     onBack();
   };
 
-  // Ventilation timer
+  // Ventilation timer — 30s trigger (persists until acknowledged)
   const ventilationElapsed = ventilationStartTime !== null ? elapsedTime - ventilationStartTime : 0;
-  const ventilation30sDue = ventilationElapsed >= 30 && step === NLSStep.VentilationBreaths;
+  const ventilation30sDue = ventilationElapsed >= 30 && step === NLSStep.VentilationBreaths && !reassessDismissed;
 
-  // Header state
-  const isReassessDue = ventilation30sDue;
+  // Compression reassess — after 15 cycles (persists until acknowledged)
+  const compressionReassessDue = compressionCycles >= 15 && step === NLSStep.ChestCompressions && !compressionReassessDismissed;
+
+  // Header state — pulsating red when reassessment is needed
+  const isReassessDue = ventilation30sDue || compressionReassessDue;
   
   const stepLabel = (() => {
     switch (step) {
@@ -741,10 +773,13 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
             </div>
 
             {ventilation30sDue && (
-              <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse">
+              <button
+                onClick={acknowledgeReassess}
+                className="flex items-center justify-center space-x-2 p-3 w-full rounded-2xl bg-red-600 text-white font-bold animate-pulse"
+              >
                 <AlertTriangle size={20} />
-                <span>30s — Reassess Heart Rate</span>
-              </div>
+                <span>30s — Tap to Confirm HR Reassessed</span>
+              </button>
             )}
 
             <div className="flex items-center space-x-2">
@@ -759,9 +794,7 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
             </div>
 
             <ActionButton title="HR ≥60 — Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" height="h-14" onClick={stabilise} />
-            {ventilation30sDue && (
-              <ActionButton title="HR <60 — Compressions" icon={<Heart size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-14" onClick={proceedToCompressions} />
-            )}
+            <ActionButton title="HR <60 — Compressions" icon={<Heart size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-14" onClick={proceedToCompressions} />
           </div>
         )}
 
@@ -770,8 +803,20 @@ ${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
           <div className="space-y-4">
             <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
               <h3 className="font-semibold text-gray-700 dark:text-gray-300">Compressions 3:1</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Lower ⅓ sternum • 100% O₂ • 15 cycles then reassess</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Lower ⅓ sternum • 100% O₂ • {compressionCycles}/15 cycles
+              </p>
             </div>
+
+            {compressionReassessDue && (
+              <button
+                onClick={acknowledgeCompressionReassess}
+                className="flex items-center justify-center space-x-2 p-3 w-full rounded-2xl bg-red-600 text-white font-bold animate-pulse"
+              >
+                <AlertTriangle size={20} />
+                <span>15 Cycles — Tap to Confirm HR Reassessed</span>
+              </button>
+            )}
 
             <ActionButton title="Log Cycle" icon={<Heart size={18} />} backgroundColor="bg-red-600" foregroundColor="text-white" height="h-14" onClick={logCompressionCycle} />
             <ActionButton title="HR ≥60 — Stabilised" icon={<CheckCircle2 size={18} />} backgroundColor="bg-green-600" foregroundColor="text-white" onClick={stabilise} />
