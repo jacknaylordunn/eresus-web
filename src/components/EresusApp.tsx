@@ -840,7 +840,7 @@ const extractLastEventTime = (events: Event[], searchPatterns: string[], startTi
 };
 
 const useArrestViewModel = () => {
-  const { db, userId } = useFirebase();
+  const { db, userId, user } = useFirebase();
   const { cprCycleDuration, adrenalineInterval, showDosagePrompts, researchModeEnabled, askForPatientInfo, userOrganization } = useSettings();
 
   const savedSession = useRef<any>(null);
@@ -1567,7 +1567,7 @@ ${[...events].sort((a, b) => a.timestamp - b.timestamp).map(e => `[${TimeFormatt
 
   // Offline Log Sweeper
   const syncOfflineLogs = useCallback(async () => {
-    if (!researchModeEnabled) return;
+    if (!researchModeEnabled || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
       const q = query(collection(db, logsCollectionPath), where("isSynced", "==", false));
@@ -1610,7 +1610,7 @@ ${[...events].sort((a, b) => a.timestamp - b.timestamp).map(e => `[${TimeFormatt
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, researchModeEnabled]);
+  }, [db, userId, user, researchModeEnabled]);
 
   useEffect(() => {
     syncOfflineLogs();
@@ -3953,7 +3953,7 @@ const ArrestView: React.FC<{
 
 // LogbookView
 const LogbookView: React.FC = () => {
-  const { db, userId } = useFirebase();
+  const { db, userId, user } = useFirebase();
   const { askForPatientInfo, researchModeEnabled } = useSettings();
   const [logs, setLogs] = useState<any[]>([]);
   const [selectedLog, setSelectedLog] = useState<any | null>(null);
@@ -3962,6 +3962,10 @@ const LogbookView: React.FC = () => {
   const [longPressLog, setLongPressLog] = useState<string | null>(null);
   
   useEffect(() => {
+    if (!user) {
+      setLogs([]);
+      return;
+    }
     const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
     const q = query(collection(db, logsCollectionPath), where("userId", "==", userId));
     
@@ -3977,7 +3981,7 @@ const LogbookView: React.FC = () => {
     });
     
     return () => unsubscribe();
-  }, [db, userId]);
+  }, [db, userId, user]);
 
   const openLog = async (log: any) => {
     if (!log.id) return;
