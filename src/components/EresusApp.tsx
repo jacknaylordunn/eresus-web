@@ -4269,6 +4269,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
 
   const handleSignOut = async () => {
     try {
+      settings.setResearchModeEnabled(false);
       await signOut(auth);
       onClose();
     } catch (e: any) {
