@@ -3953,7 +3953,7 @@ const ArrestView: React.FC<{
 
 // LogbookView
 const LogbookView: React.FC = () => {
-  const { db, userId } = useFirebase();
+  const { db, userId, user } = useFirebase();
   const { askForPatientInfo, researchModeEnabled } = useSettings();
   const [logs, setLogs] = useState<any[]>([]);
   const [selectedLog, setSelectedLog] = useState<any | null>(null);
