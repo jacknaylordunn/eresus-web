@@ -3962,6 +3962,10 @@ const LogbookView: React.FC = () => {
   const [longPressLog, setLongPressLog] = useState<string | null>(null);
   
   useEffect(() => {
+    if (!user) {
+      setLogs([]);
+      return;
+    }
     const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
     const q = query(collection(db, logsCollectionPath), where("userId", "==", userId));
     
@@ -3977,7 +3981,7 @@ const LogbookView: React.FC = () => {
     });
     
     return () => unsubscribe();
-  }, [db, userId]);
+  }, [db, userId, user]);
 
   const openLog = async (log: any) => {
     if (!log.id) return;
