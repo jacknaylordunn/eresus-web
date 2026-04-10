@@ -1567,7 +1567,7 @@ ${[...events].sort((a, b) => a.timestamp - b.timestamp).map(e => `[${TimeFormatt
 
   // Offline Log Sweeper
   const syncOfflineLogs = useCallback(async () => {
-    if (!researchModeEnabled) return;
+    if (!researchModeEnabled || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
       const q = query(collection(db, logsCollectionPath), where("isSynced", "==", false));
@@ -1610,7 +1610,7 @@ ${[...events].sort((a, b) => a.timestamp - b.timestamp).map(e => `[${TimeFormatt
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, researchModeEnabled]);
+  }, [db, userId, user, researchModeEnabled]);
 
   useEffect(() => {
     syncOfflineLogs();
