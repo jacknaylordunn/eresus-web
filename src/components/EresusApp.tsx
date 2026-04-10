@@ -840,7 +840,7 @@ const extractLastEventTime = (events: Event[], searchPatterns: string[], startTi
 };
 
 const useArrestViewModel = () => {
-  const { db, userId } = useFirebase();
+  const { db, userId, user } = useFirebase();
   const { cprCycleDuration, adrenalineInterval, showDosagePrompts, researchModeEnabled, askForPatientInfo, userOrganization } = useSettings();
 
   const savedSession = useRef<any>(null);
