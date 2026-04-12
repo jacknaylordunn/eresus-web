@@ -327,8 +327,8 @@ const useAppSettings = () => {
         if (data.researchModeEnabled !== undefined) setResearchModeEnabled(data.researchModeEnabled);
         if (data.askForPatientInfo !== undefined) setAskForPatientInfo(data.askForPatientInfo);
         if (data.userOrganization) setUserOrganization(data.userOrganization);
-        if (data.hasRespondedToResearchTerms !== undefined)
-          setHasRespondedToResearchTerms(data.hasRespondedToResearchTerms);
+        if (data.hasRespondedToResearchTerms === true)
+          setHasRespondedToResearchTerms(true);
         _setSettingsSyncedFrom(userId);
       }
     } catch (e) {
