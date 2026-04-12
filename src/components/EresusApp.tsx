@@ -5858,6 +5858,7 @@ const AppContent: React.FC = () => {
   const [showAccountPrompt, setShowAccountPrompt] = useState(false);
   const [showResearchConsent, setShowResearchConsent] = useState(false);
   const settingsSyncedRef = useRef(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   useEffect(() => {
     if (!settingsSyncedRef.current) return;
@@ -5865,40 +5866,36 @@ const AppContent: React.FC = () => {
   }, [researchModeEnabled, askForPatientInfo, userOrganization, hasRespondedToResearchTerms, db, userId, isAnonymous]);
 
   useEffect(() => {
+    setSettingsLoaded(false);
     if (!isAnonymous && user) {
       loadSettingsFromFirestore(db, userId).then(() => {
         settingsSyncedRef.current = true;
+        setSettingsLoaded(true);
       });
     } else {
       settingsSyncedRef.current = true;
+      setSettingsLoaded(true);
     }
   }, [isAnonymous, userId, user]);
-
-  useEffect(() => {
-    const root = window.document.documentElement;
-    if (
-      appearanceMode === AppearanceMode.Dark ||
-      (appearanceMode === AppearanceMode.System && window.matchMedia("(prefers-color-scheme: dark)").matches)
-    ) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-  }, [appearanceMode]);
 
   const hasSeenAccountPrompt = localStorage.getItem("eResusSeenAccountPrompt");
 
   useEffect(() => {
     if (!showInstallModal && !hasSeenAccountPrompt && isAnonymous) {
       setShowAccountPrompt(true);
-    } else if (!showInstallModal && !hasRespondedToResearchTerms) {
+    } else if (!showInstallModal && settingsLoaded && !hasRespondedToResearchTerms) {
       setShowResearchConsent(true);
     }
-  }, [showInstallModal, hasRespondedToResearchTerms, isAnonymous]);
+  }, [showInstallModal, hasRespondedToResearchTerms, isAnonymous, settingsLoaded]);
 
   const handleCloseAccountPrompt = () => {
     localStorage.setItem("eResusSeenAccountPrompt", "true");
     setShowAccountPrompt(false);
+    // If user just signed in, don't immediately show research consent —
+    // wait for settings to load from Firestore (the effect above will handle it)
+    if (!isAnonymous && user && !settingsLoaded) {
+      return;
+    }
     if (!hasRespondedToResearchTerms) {
       setShowResearchConsent(true);
     }
