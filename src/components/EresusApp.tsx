@@ -1400,7 +1400,7 @@ const useArrestViewModel = () => {
       : '';
     
     // Extract real-world times
-    const firstIVIO = extractFirstEventTime(events, ['vascular access'], startTimeRef.current);
+    const firstIVIO = extractFirstEventTime(events, ['vascular access', 'iv access', 'io access'], startTimeRef.current);
     const firstAirway = extractFirstEventTime(events, ['advanced airway'], startTimeRef.current);
     const firstAdrenaline = extractFirstEventTime(events, ['adrenaline'], startTimeRef.current);
     const lastAdrenaline = extractLastEventTime(events, ['adrenaline'], startTimeRef.current);
@@ -2573,7 +2573,7 @@ const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void; }> = ({ isOp
     return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   };
   
-  const firstIVIO = extractFirstEventTime(events, ['vascular access'], startTime);
+  const firstIVIO = extractFirstEventTime(events, ['vascular access', 'iv access', 'io access'], startTime);
   const firstAirway = extractFirstEventTime(events, ['advanced airway'], startTime);
   const firstAdrenaline = extractFirstEventTime(events, ['adrenaline'], startTime);
   const lastAdrenaline = extractLastEventTime(events, ['adrenaline'], startTime);
@@ -4140,7 +4140,7 @@ const LogbookView: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600 dark:text-gray-400">First IV / IO:</span>
-                <span className="font-bold text-gray-900 dark:text-white">{extractFirstEventTime(selectedLogEvents, ['vascular access'], selectedLog.startTime?.toDate()) || 'None'}</span>
+                <span className="font-bold text-gray-900 dark:text-white">{extractFirstEventTime(selectedLogEvents, ['vascular access', 'iv access', 'io access'], selectedLog.startTime?.toDate()) || 'None'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600 dark:text-gray-400">First Airway:</span>
