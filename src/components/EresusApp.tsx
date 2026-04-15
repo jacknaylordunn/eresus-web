@@ -336,6 +336,42 @@ const useAppSettings = () => {
     }
   }, []);
 
+  // Apply dark mode to document
+  useEffect(() => {
+    const applyTheme = (mode: AppearanceMode) => {
+      const root = document.documentElement;
+      if (mode === AppearanceMode.Dark) {
+        root.classList.add('dark');
+      } else if (mode === AppearanceMode.Light) {
+        root.classList.remove('dark');
+      } else {
+        // System
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (prefersDark) {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+      }
+    };
+
+    applyTheme(appearanceMode);
+
+    // Listen for system theme changes when in System mode
+    if (appearanceMode === AppearanceMode.System) {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const handler = (e: MediaQueryListEvent) => {
+        if (e.matches) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      };
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    }
+  }, [appearanceMode]);
+
   return {
     cprCycleDuration,
     setCprCycleDuration,
