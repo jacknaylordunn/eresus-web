@@ -1817,32 +1817,53 @@ ${[...events]
         finalOutcome = "Incomplete";
     }
 
+    const logData: any = {
+      startTime: startTimeRef.current.toISOString(),
+      totalDuration: totalArrestTime,
+      finalOutcome,
+      userId,
+      shockCount,
+      adrenalineCount,
+      amiodaroneCount,
+      lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
+      roscTime: roscTime ?? null,
+      torTime: torTime ?? null,
+      vodTime: vodTime ?? null,
+      patientAge: patientAgeStr || null,
+      patientGender: patientGenderStr || null,
+      initialRhythm: initialRhythm || null,
+      organization: userOrganization || null,
+      isSynced: false,
+    };
+
+    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type }));
+
+    if (!navigator.onLine) {
+      // Queue for later sync
+      addToOfflineLogQueue({
+        logData,
+        events: eventsCopy,
+        userId,
+        researchModeEnabled,
+        queuedAt: Date.now(),
+      });
+      console.log("Offline: arrest log queued for sync");
+      HapticManager.notification("warning");
+      return;
+    }
+
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
 
-      const newLogDoc: any = {
+      const firestoreLogDoc = {
+        ...logData,
         startTime: Timestamp.fromDate(startTimeRef.current),
-        totalDuration: totalArrestTime,
-        finalOutcome: finalOutcome,
-        userId: userId,
-        shockCount,
-        adrenalineCount,
-        amiodaroneCount,
-        lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
-        roscTime: roscTime ?? null,
-        torTime: torTime ?? null,
-        vodTime: vodTime ?? null,
-        patientAge: patientAgeStr || null,
-        patientGender: patientGenderStr || null,
-        initialRhythm: initialRhythm || null,
-        organization: userOrganization || null,
-        isSynced: false,
       };
 
-      const logDocRef = await addDoc(collection(db, logsCollectionPath), newLogDoc);
+      const logDocRef = await addDoc(collection(db, logsCollectionPath), firestoreLogDoc);
 
       const eventsCollectionRef = collection(db, `${logsCollectionPath}/${logDocRef.id}/events`);
-      for (const event of events) {
+      for (const event of eventsCopy) {
         await addDoc(eventsCollectionRef, event);
       }
 
@@ -1869,7 +1890,7 @@ ${[...events]
 
           await setDoc(doc(db, "arrestLogs", logDocRef.id), researchData);
 
-          for (const event of events) {
+          for (const event of eventsCopy) {
             await addDoc(collection(db, `arrestLogs/${logDocRef.id}/events`), {
               timestamp: event.timestamp,
               message: event.message,
@@ -1883,7 +1904,16 @@ ${[...events]
         }
       }
     } catch (e) {
-      console.error("Error saving log to Firestore: ", e);
+      console.error("Error saving log to Firestore, queuing offline: ", e);
+      // Queue for later sync on any Firestore failure
+      addToOfflineLogQueue({
+        logData,
+        events: eventsCopy,
+        userId,
+        researchModeEnabled,
+        queuedAt: Date.now(),
+      });
+      HapticManager.notification("warning");
     }
   };
 
