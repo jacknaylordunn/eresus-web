@@ -1964,8 +1964,87 @@ ${[...events]
     localStorage.removeItem(ARREST_SESSION_KEY);
   };
 
-  // Offline Log Sweeper
+  // Flush localStorage offline queue
+  const flushOfflineLogQueue = useCallback(async () => {
+    if (!navigator.onLine) return;
+    const queue = getOfflineLogQueue();
+    if (queue.length === 0) return;
+
+    console.log(`Flushing ${queue.length} offline queued logs`);
+    const failedIndices: number[] = [];
+
+    for (let i = 0; i < queue.length; i++) {
+      const entry = queue[i];
+      try {
+        const logsCollectionPath = `/artifacts/${appId}/users/${entry.userId}/logs`;
+        const firestoreLogDoc = {
+          ...entry.logData,
+          startTime: Timestamp.fromDate(new Date(entry.logData.startTime)),
+        };
+        const logDocRef = await addDoc(collection(db, logsCollectionPath), firestoreLogDoc);
+
+        for (const event of entry.events) {
+          await addDoc(collection(db, `${logsCollectionPath}/${logDocRef.id}/events`), event);
+        }
+
+        if (entry.researchModeEnabled) {
+          try {
+            const researchData: any = {
+              startTime: Timestamp.fromDate(new Date(entry.logData.startTime)),
+              totalDuration: entry.logData.totalDuration,
+              finalOutcome: entry.logData.finalOutcome,
+              shockCount: entry.logData.shockCount ?? 0,
+              adrenalineCount: entry.logData.adrenalineCount ?? 0,
+              amiodaroneCount: entry.logData.amiodaroneCount ?? 0,
+              lidocaineCount: entry.logData.lidocaineCount ?? 0,
+              patientAge: entry.logData.patientAge || "Unknown",
+              patientGender: entry.logData.patientGender || "Unknown",
+              initialRhythm: entry.logData.initialRhythm || "Unknown",
+              organization: entry.logData.organization || "Unknown",
+              uid: entry.userId,
+              timestamp: serverTimestamp(),
+            };
+            if (entry.logData.roscTime !== null) researchData.roscTime = entry.logData.roscTime;
+            if (entry.logData.torTime !== null) researchData.torTime = entry.logData.torTime;
+            if (entry.logData.vodTime !== null) researchData.vodTime = entry.logData.vodTime;
+
+            await setDoc(doc(db, "arrestLogs", logDocRef.id), researchData);
+            for (const event of entry.events) {
+              await addDoc(collection(db, `arrestLogs/${logDocRef.id}/events`), {
+                timestamp: event.timestamp,
+                message: event.message,
+                type: event.type,
+              });
+            }
+            await updateDoc(doc(db, logsCollectionPath, logDocRef.id), { isSynced: true });
+          } catch (e) {
+            console.error("Error syncing queued research data:", e);
+          }
+        }
+      } catch (e) {
+        console.error("Error flushing queued log:", e);
+        failedIndices.push(i);
+      }
+    }
+
+    // Keep only failed entries
+    if (failedIndices.length === 0) {
+      clearOfflineLogQueue();
+    } else {
+      const remaining = failedIndices.map(i => queue[i]);
+      try { localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(remaining)); } catch { }
+    }
+
+    if (queue.length - failedIndices.length > 0) {
+      console.log(`Successfully synced ${queue.length - failedIndices.length} queued logs`);
+    }
+  }, [db]);
+
+  // Offline Log Sweeper (existing Firestore-based)
   const syncOfflineLogs = useCallback(async () => {
+    // Always try to flush the localStorage queue first
+    await flushOfflineLogQueue();
+
     if (!researchModeEnabled || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
@@ -2009,17 +2088,23 @@ ${[...events]
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, user, researchModeEnabled]);
+  }, [db, userId, user, researchModeEnabled, flushOfflineLogQueue]);
 
   useEffect(() => {
     syncOfflineLogs();
     const handleFocus = () => syncOfflineLogs();
+    const handleOnline = () => {
+      console.log("Device back online, syncing queued logs...");
+      syncOfflineLogs();
+    };
     window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") syncOfflineLogs();
     });
     return () => {
       window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleOnline);
     };
   }, [syncOfflineLogs]);
 
