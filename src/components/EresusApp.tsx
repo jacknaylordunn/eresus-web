@@ -993,6 +993,46 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
 };
 
 //============================================================================
+// OFFLINE LOG QUEUE
+//============================================================================
+const OFFLINE_LOG_QUEUE_KEY = "eresus_offline_log_queue";
+
+interface OfflineLogEntry {
+  logData: any;
+  events: Event[];
+  userId: string;
+  researchModeEnabled: boolean;
+  queuedAt: number;
+}
+
+const getOfflineLogQueue = (): OfflineLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(OFFLINE_LOG_QUEUE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+const addToOfflineLogQueue = (entry: OfflineLogEntry) => {
+  try {
+    const queue = getOfflineLogQueue();
+    queue.push(entry);
+    localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(queue));
+  } catch { /* storage full */ }
+};
+
+const clearOfflineLogQueue = () => {
+  try { localStorage.removeItem(OFFLINE_LOG_QUEUE_KEY); } catch { }
+};
+
+const removeFromOfflineLogQueue = (index: number) => {
+  try {
+    const queue = getOfflineLogQueue();
+    queue.splice(index, 1);
+    localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(queue));
+  } catch { }
+};
+
+//============================================================================
 // CORE LOGIC: useArrestViewModel
 //============================================================================
 
