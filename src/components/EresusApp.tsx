@@ -249,6 +249,8 @@ export interface UndoState {
 export interface PDFIdentifiable {
   id: string;
   pdfUrl: string;
+  /** Original cross-origin URL (for fallback viewers like Google Docs) */
+  upstreamUrl?: string;
   title: string;
 }
 
