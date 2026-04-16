@@ -6017,7 +6017,7 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf,
           style={{ minHeight: "calc(100vh - 80px)" }}
         >
           <iframe
-            src={`https://docs.google.com/viewer?url=${encodeURIComponent((pdf as { upstreamUrl?: string }).upstreamUrl ?? pdf.pdfUrl)}&embedded=true`}
+            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.upstreamUrl ?? pdf.pdfUrl)}&embedded=true`}
             title={pdf.title}
             className="w-full h-full border-0"
             style={{ minHeight: "calc(100vh - 80px)" }}
