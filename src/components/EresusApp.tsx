@@ -993,6 +993,46 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
 };
 
 //============================================================================
+// OFFLINE LOG QUEUE
+//============================================================================
+const OFFLINE_LOG_QUEUE_KEY = "eresus_offline_log_queue";
+
+interface OfflineLogEntry {
+  logData: any;
+  events: Event[];
+  userId: string;
+  researchModeEnabled: boolean;
+  queuedAt: number;
+}
+
+const getOfflineLogQueue = (): OfflineLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(OFFLINE_LOG_QUEUE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+const addToOfflineLogQueue = (entry: OfflineLogEntry) => {
+  try {
+    const queue = getOfflineLogQueue();
+    queue.push(entry);
+    localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(queue));
+  } catch { /* storage full */ }
+};
+
+const clearOfflineLogQueue = () => {
+  try { localStorage.removeItem(OFFLINE_LOG_QUEUE_KEY); } catch { }
+};
+
+const removeFromOfflineLogQueue = (index: number) => {
+  try {
+    const queue = getOfflineLogQueue();
+    queue.splice(index, 1);
+    localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(queue));
+  } catch { }
+};
+
+//============================================================================
 // CORE LOGIC: useArrestViewModel
 //============================================================================
 
@@ -1777,32 +1817,53 @@ ${[...events]
         finalOutcome = "Incomplete";
     }
 
+    const logData: any = {
+      startTime: startTimeRef.current.toISOString(),
+      totalDuration: totalArrestTime,
+      finalOutcome,
+      userId,
+      shockCount,
+      adrenalineCount,
+      amiodaroneCount,
+      lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
+      roscTime: roscTime ?? null,
+      torTime: torTime ?? null,
+      vodTime: vodTime ?? null,
+      patientAge: patientAgeStr || null,
+      patientGender: patientGenderStr || null,
+      initialRhythm: initialRhythm || null,
+      organization: userOrganization || null,
+      isSynced: false,
+    };
+
+    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type }));
+
+    if (!navigator.onLine) {
+      // Queue for later sync
+      addToOfflineLogQueue({
+        logData,
+        events: eventsCopy,
+        userId,
+        researchModeEnabled,
+        queuedAt: Date.now(),
+      });
+      console.log("Offline: arrest log queued for sync");
+      HapticManager.notification("warning");
+      return;
+    }
+
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
 
-      const newLogDoc: any = {
+      const firestoreLogDoc = {
+        ...logData,
         startTime: Timestamp.fromDate(startTimeRef.current),
-        totalDuration: totalArrestTime,
-        finalOutcome: finalOutcome,
-        userId: userId,
-        shockCount,
-        adrenalineCount,
-        amiodaroneCount,
-        lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
-        roscTime: roscTime ?? null,
-        torTime: torTime ?? null,
-        vodTime: vodTime ?? null,
-        patientAge: patientAgeStr || null,
-        patientGender: patientGenderStr || null,
-        initialRhythm: initialRhythm || null,
-        organization: userOrganization || null,
-        isSynced: false,
       };
 
-      const logDocRef = await addDoc(collection(db, logsCollectionPath), newLogDoc);
+      const logDocRef = await addDoc(collection(db, logsCollectionPath), firestoreLogDoc);
 
       const eventsCollectionRef = collection(db, `${logsCollectionPath}/${logDocRef.id}/events`);
-      for (const event of events) {
+      for (const event of eventsCopy) {
         await addDoc(eventsCollectionRef, event);
       }
 
@@ -1829,7 +1890,7 @@ ${[...events]
 
           await setDoc(doc(db, "arrestLogs", logDocRef.id), researchData);
 
-          for (const event of events) {
+          for (const event of eventsCopy) {
             await addDoc(collection(db, `arrestLogs/${logDocRef.id}/events`), {
               timestamp: event.timestamp,
               message: event.message,
@@ -1843,7 +1904,16 @@ ${[...events]
         }
       }
     } catch (e) {
-      console.error("Error saving log to Firestore: ", e);
+      console.error("Error saving log to Firestore, queuing offline: ", e);
+      // Queue for later sync on any Firestore failure
+      addToOfflineLogQueue({
+        logData,
+        events: eventsCopy,
+        userId,
+        researchModeEnabled,
+        queuedAt: Date.now(),
+      });
+      HapticManager.notification("warning");
     }
   };
 
@@ -1894,8 +1964,87 @@ ${[...events]
     localStorage.removeItem(ARREST_SESSION_KEY);
   };
 
-  // Offline Log Sweeper
+  // Flush localStorage offline queue
+  const flushOfflineLogQueue = useCallback(async () => {
+    if (!navigator.onLine) return;
+    const queue = getOfflineLogQueue();
+    if (queue.length === 0) return;
+
+    console.log(`Flushing ${queue.length} offline queued logs`);
+    const failedIndices: number[] = [];
+
+    for (let i = 0; i < queue.length; i++) {
+      const entry = queue[i];
+      try {
+        const logsCollectionPath = `/artifacts/${appId}/users/${entry.userId}/logs`;
+        const firestoreLogDoc = {
+          ...entry.logData,
+          startTime: Timestamp.fromDate(new Date(entry.logData.startTime)),
+        };
+        const logDocRef = await addDoc(collection(db, logsCollectionPath), firestoreLogDoc);
+
+        for (const event of entry.events) {
+          await addDoc(collection(db, `${logsCollectionPath}/${logDocRef.id}/events`), event);
+        }
+
+        if (entry.researchModeEnabled) {
+          try {
+            const researchData: any = {
+              startTime: Timestamp.fromDate(new Date(entry.logData.startTime)),
+              totalDuration: entry.logData.totalDuration,
+              finalOutcome: entry.logData.finalOutcome,
+              shockCount: entry.logData.shockCount ?? 0,
+              adrenalineCount: entry.logData.adrenalineCount ?? 0,
+              amiodaroneCount: entry.logData.amiodaroneCount ?? 0,
+              lidocaineCount: entry.logData.lidocaineCount ?? 0,
+              patientAge: entry.logData.patientAge || "Unknown",
+              patientGender: entry.logData.patientGender || "Unknown",
+              initialRhythm: entry.logData.initialRhythm || "Unknown",
+              organization: entry.logData.organization || "Unknown",
+              uid: entry.userId,
+              timestamp: serverTimestamp(),
+            };
+            if (entry.logData.roscTime !== null) researchData.roscTime = entry.logData.roscTime;
+            if (entry.logData.torTime !== null) researchData.torTime = entry.logData.torTime;
+            if (entry.logData.vodTime !== null) researchData.vodTime = entry.logData.vodTime;
+
+            await setDoc(doc(db, "arrestLogs", logDocRef.id), researchData);
+            for (const event of entry.events) {
+              await addDoc(collection(db, `arrestLogs/${logDocRef.id}/events`), {
+                timestamp: event.timestamp,
+                message: event.message,
+                type: event.type,
+              });
+            }
+            await updateDoc(doc(db, logsCollectionPath, logDocRef.id), { isSynced: true });
+          } catch (e) {
+            console.error("Error syncing queued research data:", e);
+          }
+        }
+      } catch (e) {
+        console.error("Error flushing queued log:", e);
+        failedIndices.push(i);
+      }
+    }
+
+    // Keep only failed entries
+    if (failedIndices.length === 0) {
+      clearOfflineLogQueue();
+    } else {
+      const remaining = failedIndices.map(i => queue[i]);
+      try { localStorage.setItem(OFFLINE_LOG_QUEUE_KEY, JSON.stringify(remaining)); } catch { }
+    }
+
+    if (queue.length - failedIndices.length > 0) {
+      console.log(`Successfully synced ${queue.length - failedIndices.length} queued logs`);
+    }
+  }, [db]);
+
+  // Offline Log Sweeper (existing Firestore-based)
   const syncOfflineLogs = useCallback(async () => {
+    // Always try to flush the localStorage queue first
+    await flushOfflineLogQueue();
+
     if (!researchModeEnabled || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
@@ -1939,17 +2088,23 @@ ${[...events]
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, user, researchModeEnabled]);
+  }, [db, userId, user, researchModeEnabled, flushOfflineLogQueue]);
 
   useEffect(() => {
     syncOfflineLogs();
     const handleFocus = () => syncOfflineLogs();
+    const handleOnline = () => {
+      console.log("Device back online, syncing queued logs...");
+      syncOfflineLogs();
+    };
     window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") syncOfflineLogs();
     });
     return () => {
       window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleOnline);
     };
   }, [syncOfflineLogs]);
 
@@ -3255,6 +3410,7 @@ const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpe
 
 const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { performReset } = useArrest();
+  const isOffline = !navigator.onLine;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Reset Arrest Log?">
@@ -3263,6 +3419,12 @@ const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
         <p className="text-lg text-gray-700 dark:text-gray-300">
           This will save the current log. This action cannot be undone.
         </p>
+        {isOffline && (
+          <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-4 py-2 rounded-xl text-sm">
+            <AlertTriangle size={16} />
+            <span>You're offline. Log will be saved locally and synced when reconnected.</span>
+          </div>
+        )}
 
         <ActionButton
           title="Copy, Save & Reset"
