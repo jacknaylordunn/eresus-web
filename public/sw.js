@@ -57,12 +57,17 @@ self.addEventListener('install', event => {
       // Cache Vite-built assets discovered from index.html
       await discoverAndCacheAssets(cache);
 
-      // Cache PDFs (best-effort, don't block install)
+      // Cache PDFs (best-effort, opaque responses for cross-origin)
       await Promise.all(
         PDF_URLS.map(url =>
-          cache.add(new Request(url, { mode: 'cors' })).catch(err =>
-            console.warn('Failed to cache PDF:', url, err)
-          )
+          fetch(new Request(url, { mode: 'no-cors' }))
+            .then(response => {
+              if (response.status === 0 || response.ok) {
+                return cache.put(url, response);
+              }
+              console.warn('PDF response not cacheable:', url, response.status);
+            })
+            .catch(err => console.warn('Failed to cache PDF:', url, err))
         )
       );
     })
