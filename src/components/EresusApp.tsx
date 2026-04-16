@@ -3410,6 +3410,7 @@ const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpe
 
 const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { performReset } = useArrest();
+  const isOffline = !navigator.onLine;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Reset Arrest Log?">
@@ -3418,6 +3419,12 @@ const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
         <p className="text-lg text-gray-700 dark:text-gray-300">
           This will save the current log. This action cannot be undone.
         </p>
+        {isOffline && (
+          <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-4 py-2 rounded-xl text-sm">
+            <AlertTriangle size={16} />
+            <span>You're offline. Log will be saved locally and synced when reconnected.</span>
+          </div>
+        )}
 
         <ActionButton
           title="Copy, Save & Reset"
