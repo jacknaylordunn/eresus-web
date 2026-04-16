@@ -57,12 +57,17 @@ self.addEventListener('install', event => {
       // Cache Vite-built assets discovered from index.html
       await discoverAndCacheAssets(cache);
 
-      // Cache PDFs (best-effort, don't block install)
+      // Cache PDFs (best-effort, opaque responses for cross-origin)
       await Promise.all(
         PDF_URLS.map(url =>
-          cache.add(new Request(url, { mode: 'cors' })).catch(err =>
-            console.warn('Failed to cache PDF:', url, err)
-          )
+          fetch(new Request(url, { mode: 'no-cors' }))
+            .then(response => {
+              if (response.status === 0 || response.ok) {
+                return cache.put(url, response);
+              }
+              console.warn('PDF response not cacheable:', url, response.status);
+            })
+            .catch(err => console.warn('Failed to cache PDF:', url, err))
         )
       );
     })
@@ -88,7 +93,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // PDFs: network first, fallback to cache
+  // PDFs: network first, fallback to cache (check both request and URL key)
   if (url.href.includes('.pdf')) {
     event.respondWith(
       fetch(event.request)
@@ -99,7 +104,13 @@ self.addEventListener('fetch', event => {
           }
           return response;
         })
-        .catch(() => caches.match(event.request))
+        .catch(() =>
+          caches.match(event.request).then(cached => {
+            if (cached) return cached;
+            // Opaque responses are stored by URL string key
+            return caches.open(CACHE_NAME).then(c => c.match(url.href));
+          })
+        )
     );
     return;
   }
