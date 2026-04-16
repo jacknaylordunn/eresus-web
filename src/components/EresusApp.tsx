@@ -249,6 +249,8 @@ export interface UndoState {
 export interface PDFIdentifiable {
   id: string;
   pdfUrl: string;
+  /** Original cross-origin URL (for fallback viewers like Google Docs) */
+  upstreamUrl?: string;
   title: string;
 }
 
@@ -593,23 +595,32 @@ const AppConstants = {
   pdfAlgorithms: [
     {
       id: "adult",
-      pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf",
+      // Same-origin proxy path served by service worker (offline-cacheable).
+      // SW maps this to the upstream Resus Council PDF URL.
+      pdfUrl: "/cached-pdf/adult.pdf",
+      upstreamUrl:
+        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf",
       title: "Adult ALS",
     },
     {
       id: "paeds",
-      pdfUrl:
+      pdfUrl: "/cached-pdf/paeds.pdf",
+      upstreamUrl:
         "https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf",
       title: "Paediatric ALS",
     },
     {
       id: "newborn",
-      pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf",
+      pdfUrl: "/cached-pdf/newborn.pdf",
+      upstreamUrl:
+        "https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf",
       title: "Newborn LS",
     },
     {
       id: "post",
-      pdfUrl: "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf",
+      pdfUrl: "/cached-pdf/post.pdf",
+      upstreamUrl:
+        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf",
       title: "Post Arrest Care",
     },
   ],
@@ -6006,7 +6017,7 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf,
           style={{ minHeight: "calc(100vh - 80px)" }}
         >
           <iframe
-            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.pdfUrl)}&embedded=true`}
+            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.upstreamUrl ?? pdf.pdfUrl)}&embedded=true`}
             title={pdf.title}
             className="w-full h-full border-0"
             style={{ minHeight: "calc(100vh - 80px)" }}
