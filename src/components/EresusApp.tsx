@@ -2178,7 +2178,7 @@ ${[...events]
     }
 
     // Convert events array to base64-encoded eventsData
-    const eventsData = btoa(JSON.stringify(state.events ?? []));
+    const eventsData = utf8ToBase64(JSON.stringify(state.events ?? []));
 
     // Convert uiState string to iOS object form e.g. {"default":{}}
     const iosUiState = typeof state.uiState === "string"
@@ -2221,7 +2221,7 @@ ${[...events]
       nlsPretermTasks: [],
     };
 
-    return btoa(JSON.stringify(iosState));
+    return utf8ToBase64(JSON.stringify(iosState));
   };
 
   const hostSessionTransfer = async (): Promise<string | null> => {
