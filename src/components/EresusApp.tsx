@@ -2168,6 +2168,16 @@ ${[...events]
     return btoa(binary);
   };
 
+  // UTF-8 safe base64 decoder
+  const base64ToUtf8 = (str: string): string => {
+    const binary = atob(str);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  };
+
   const convertToiOSTransferFormat = (state: any): string => {
     // Convert startTime from ISO string to Apple epoch (seconds since Jan 1 2001)
     const APPLE_EPOCH = Date.UTC(2001, 0, 1);
@@ -2273,7 +2283,7 @@ ${[...events]
       let rawStateData = data.stateData;
       if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
         try {
-          rawStateData = atob(rawStateData);
+          rawStateData = base64ToUtf8(rawStateData);
         } catch {
           // Not valid base64, try parsing as-is
         }
@@ -2299,7 +2309,7 @@ ${[...events]
       let normalizedEvents: any[] = state.events ?? [];
       if (!state.events && state.eventsData) {
         try {
-          const decoded = atob(state.eventsData);
+          const decoded = base64ToUtf8(state.eventsData);
           normalizedEvents = JSON.parse(decoded);
         } catch {
           console.warn("Failed to decode iOS eventsData");
