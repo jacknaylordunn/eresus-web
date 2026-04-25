@@ -2315,10 +2315,14 @@ ${[...events]
         return { success: false, error: "This transfer code has expired. Generate a new code and try again." };
       }
 
-      // iOS writes stateData as a base64-encoded JSON blob; PWA writes plain JSON string.
-      // Detect and decode base64 if needed.
+      // stateData can be:
+      // - Firestore Bytes/Blob (current iOS-compatible format)
+      // - base64 string (legacy compatibility)
+      // - plain JSON string (older PWA transfers)
       let rawStateData = data.stateData;
-      if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
+      if (rawStateData instanceof Bytes) {
+        rawStateData = bytesToUtf8(rawStateData.toUint8Array());
+      } else if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
         try {
           rawStateData = base64ToUtf8(rawStateData);
         } catch {
