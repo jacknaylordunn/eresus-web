@@ -2158,12 +2158,70 @@ ${[...events]
     };
   };
 
+  const convertToiOSTransferFormat = (state: any): string => {
+    // Convert startTime from ISO string to Apple epoch (seconds since Jan 1 2001)
+    const APPLE_EPOCH = Date.UTC(2001, 0, 1);
+    let iosStartTime: number | null = null;
+    if (state.startTime) {
+      const d = new Date(state.startTime);
+      iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
+    }
+
+    // Convert events array to base64-encoded eventsData
+    const eventsData = btoa(JSON.stringify(state.events ?? []));
+
+    // Convert uiState string to iOS object form e.g. {"default":{}}
+    const iosUiState = typeof state.uiState === "string"
+      ? { [state.uiState]: {} }
+      : state.uiState ?? { default: {} };
+
+    // Build iOS-compatible state object
+    const iosState: any = {
+      arrestState: state.arrestState ?? "ACTIVE",
+      arrestType: "GENERAL",
+      masterTime: state.masterTime ?? 0,
+      cprTime: state.cprTime ?? 0,
+      timeOffset: state.timeOffset ?? 0,
+      startTime: iosStartTime,
+      eventsData,
+      shockCount: state.shockCount ?? 0,
+      adrenalineCount: state.adrenalineCount ?? 0,
+      amiodaroneCount: state.amiodaroneCount ?? 0,
+      lidocaineCount: state.lidocaineCount ?? 0,
+      airwayPlaced: state.airwayPlaced ?? false,
+      antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
+      reversibleCauses: state.reversibleCauses ?? [],
+      postROSCTasks: state.postROSCTasks ?? [],
+      postMortemTasks: state.postMortemTasks ?? [],
+      patientAgeCategory: state.patientAgeCategory ?? "",
+      patientAgeStr: state.patientAgeStr ?? "",
+      patientGenderStr: state.patientGenderStr ?? "",
+      uiState: iosUiState,
+      hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
+      hideAmiodaronePrompt: state.hideAmiodaronePrompt ?? false,
+      lastRhythmNonShockable: state.lastRhythmNonShockable ?? false,
+      airwayAdjunct: state.airwayAdjunct ?? "none",
+      isTimerPaused: state.isTimerPaused ?? false,
+      isRhythmCheckDue: false,
+      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
+      initialRhythm: state.initialRhythm ?? null,
+      nlsState: "initialAssessment",
+      nlsCycleDuration: 60,
+      isPreterm: false,
+      nlsPretermTasks: [],
+    };
+
+    return btoa(JSON.stringify(iosState));
+  };
+
   const hostSessionTransfer = async (): Promise<string | null> => {
     try {
       const state = generateTransferState();
       const transferId = String(Math.floor(100000 + Math.random() * 900000));
+      // Write stateData as base64-encoded JSON blob (iOS-compatible format)
+      const encodedStateData = convertToiOSTransferFormat(state);
       await setDoc(doc(db, "transfers", transferId), {
-        stateData: JSON.stringify(state),
+        stateData: encodedStateData,
         createdAt: serverTimestamp(),
         expiresAt: Timestamp.fromDate(new Date(Date.now() + 10 * 60 * 1000)),
       });
