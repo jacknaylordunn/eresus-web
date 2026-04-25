@@ -2200,7 +2200,17 @@ ${[...events]
         return { success: false, error: "This transfer code has expired. Generate a new code and try again." };
       }
 
-      const state = JSON.parse(data.stateData);
+      // iOS writes stateData as a base64-encoded JSON blob; PWA writes plain JSON string.
+      // Detect and decode base64 if needed.
+      let rawStateData = data.stateData;
+      if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
+        try {
+          rawStateData = atob(rawStateData);
+        } catch {
+          // Not valid base64, try parsing as-is
+        }
+      }
+      const state = JSON.parse(rawStateData);
 
       // --- Normalize iOS format to PWA format ---
 
