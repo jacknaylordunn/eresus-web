@@ -2158,6 +2158,16 @@ ${[...events]
     };
   };
 
+  // UTF-8 safe base64 encoder (btoa only handles Latin1)
+  const utf8ToBase64 = (str: string): string => {
+    const bytes = new TextEncoder().encode(str);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  };
+
   const convertToiOSTransferFormat = (state: any): string => {
     // Convert startTime from ISO string to Apple epoch (seconds since Jan 1 2001)
     const APPLE_EPOCH = Date.UTC(2001, 0, 1);
