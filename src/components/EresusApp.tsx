@@ -26,6 +26,7 @@ import {
   getDoc,
   updateDoc,
   FieldValue,
+  Bytes,
   serverTimestamp,
   orderBy,
 } from "firebase/firestore";
