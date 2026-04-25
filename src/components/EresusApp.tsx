@@ -2161,6 +2161,15 @@ ${[...events]
 
   const bytesToUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
+  const utf8ToBase64 = (str: string): string => {
+    const bytes = new TextEncoder().encode(str);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  };
+
   // UTF-8 safe base64 decoder for legacy string transfers
   const base64ToUtf8 = (str: string): string => {
     const binary = atob(str);
@@ -2171,9 +2180,42 @@ ${[...events]
     return bytesToUtf8(bytes);
   };
 
+  const isUUID = (value: unknown): value is string =>
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+  const deterministicUUID = (seed: string): string => {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = Math.imul(31, hash) + seed.charCodeAt(i) | 0;
+    }
+    const hex = Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8);
+    return `${hex}-0000-4000-8000-000000000000`;
+  };
+
+  const normalizeChecklistForiOS = (items: any[] = []): any[] =>
+    items.map((item, index) => ({
+      id: isUUID(item.id) ? item.id : deterministicUUID(`${item.name ?? "item"}-${item.id ?? index}`),
+      name: item.name ?? "",
+      isCompleted: item.isCompleted ?? false,
+      hypothermiaStatus: item.hypothermiaStatus ?? "none",
+    }));
+
+  const normalizeEventTypeForiOS = (type: string): string => {
+    const supported = new Set(["status", "cpr", "shock", "analysis", "rhythm", "drug", "airway", "etco2", "cause"]);
+    return supported.has(type) ? type : "status";
+  };
+
+  const normalizeEventsForiOS = (items: any[] = []): any[] =>
+    items.map((event, index) => ({
+      id: isUUID(event.id) ? event.id : (crypto.randomUUID?.() ?? deterministicUUID(`event-${index}-${event.timestamp ?? 0}`)),
+      timestamp: event.timestamp ?? 0,
+      message: event.message ?? "",
+      type: normalizeEventTypeForiOS(event.type ?? "status"),
+    }));
+
   const convertToiOSTransferFormat = (state: any): Bytes => {
-    // iOS decodes stateData as Firestore Bytes into Swift Codable UndoState.
-    // Firestore's web SDK writes Bytes as Uint8Array.
+    // iOS reads Firestore stateData as Swift Data, then JSONDecoder decodes UndoState.
+    // JSONEncoder encodes Date as Apple reference-date seconds and Data as base64.
     const APPLE_EPOCH = Date.UTC(2001, 0, 1);
     let iosStartTime: number | null = null;
     if (state.startTime) {
@@ -2181,8 +2223,8 @@ ${[...events]
       iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
     }
 
-    const eventsJson = JSON.stringify(state.events ?? []);
-    const eventsData = Array.from(new TextEncoder().encode(eventsJson));
+    const eventsJson = JSON.stringify(normalizeEventsForiOS(state.events ?? []));
+    const eventsData = utf8ToBase64(eventsJson);
 
     const iosUiState = typeof state.uiState === "string"
       ? { [state.uiState]: {} }
@@ -2207,9 +2249,9 @@ ${[...events]
       antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
       shockCountForAmiodarone1: state.shockCountForAmiodarone1 ?? null,
       airwayPlaced: state.airwayPlaced ?? false,
-      reversibleCauses: state.reversibleCauses ?? [],
-      postROSCTasks: state.postROSCTasks ?? [],
-      postMortemTasks: state.postMortemTasks ?? [],
+      reversibleCauses: normalizeChecklistForiOS(state.reversibleCauses ?? []),
+      postROSCTasks: normalizeChecklistForiOS(state.postROSCTasks ?? []),
+      postMortemTasks: normalizeChecklistForiOS(state.postMortemTasks ?? []),
       nlsPretermTasks: [],
       startTime: iosStartTime,
       uiState: iosUiState,
