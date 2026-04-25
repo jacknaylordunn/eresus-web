@@ -2159,28 +2159,21 @@ ${[...events]
     };
   };
 
-  // UTF-8 safe base64 encoder (btoa only handles Latin1)
-  const utf8ToBase64 = (str: string): string => {
-    const bytes = new TextEncoder().encode(str);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  };
+  const bytesToUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
-  // UTF-8 safe base64 decoder
+  // UTF-8 safe base64 decoder for legacy string transfers
   const base64ToUtf8 = (str: string): string => {
     const binary = atob(str);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new TextDecoder().decode(bytes);
+    return bytesToUtf8(bytes);
   };
 
-  const convertToiOSTransferFormat = (state: any): string => {
-    // Convert startTime from ISO string to Apple epoch (seconds since Jan 1 2001)
+  const convertToiOSTransferFormat = (state: any): Bytes => {
+    // iOS decodes stateData as Firestore Bytes into Swift Codable UndoState.
+    // Firestore's web SDK writes Bytes as Uint8Array.
     const APPLE_EPOCH = Date.UTC(2001, 0, 1);
     let iosStartTime: number | null = null;
     if (state.startTime) {
@@ -2188,51 +2181,52 @@ ${[...events]
       iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
     }
 
-    // Convert events array to base64-encoded eventsData
-    const eventsData = utf8ToBase64(JSON.stringify(state.events ?? []));
+    const eventsJson = JSON.stringify(state.events ?? []);
+    const eventsData = Array.from(new TextEncoder().encode(eventsJson));
 
-    // Convert uiState string to iOS object form e.g. {"default":{}}
     const iosUiState = typeof state.uiState === "string"
       ? { [state.uiState]: {} }
       : state.uiState ?? { default: {} };
 
-    // Build iOS-compatible state object
     const iosState: any = {
       arrestState: state.arrestState ?? "ACTIVE",
       arrestType: "GENERAL",
+      isPreterm: false,
+      nlsState: "initialAssessment",
       masterTime: state.masterTime ?? 0,
       cprTime: state.cprTime ?? 0,
       timeOffset: state.timeOffset ?? 0,
-      startTime: iosStartTime,
+      nlsCycleDuration: 60,
+      isRhythmCheckDue: false,
       eventsData,
       shockCount: state.shockCount ?? 0,
       adrenalineCount: state.adrenalineCount ?? 0,
       amiodaroneCount: state.amiodaroneCount ?? 0,
       lidocaineCount: state.lidocaineCount ?? 0,
-      airwayPlaced: state.airwayPlaced ?? false,
+      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
       antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
+      shockCountForAmiodarone1: state.shockCountForAmiodarone1 ?? null,
+      airwayPlaced: state.airwayPlaced ?? false,
       reversibleCauses: state.reversibleCauses ?? [],
       postROSCTasks: state.postROSCTasks ?? [],
       postMortemTasks: state.postMortemTasks ?? [],
-      patientAgeCategory: state.patientAgeCategory ?? "",
-      patientAgeStr: state.patientAgeStr ?? "",
-      patientGenderStr: state.patientGenderStr ?? "",
+      nlsPretermTasks: [],
+      startTime: iosStartTime,
       uiState: iosUiState,
+      patientAgeCategory: state.patientAgeCategory ?? null,
       hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
       hideAmiodaronePrompt: state.hideAmiodaronePrompt ?? false,
       lastRhythmNonShockable: state.lastRhythmNonShockable ?? false,
-      airwayAdjunct: state.airwayAdjunct ?? "none",
+      airwayAdjunct: state.airwayAdjunct ?? "unspecified",
+      roscTime: state.roscTime ?? null,
       isTimerPaused: state.isTimerPaused ?? false,
-      isRhythmCheckDue: false,
-      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
+      pauseStartTime: null,
       initialRhythm: state.initialRhythm ?? null,
-      nlsState: "initialAssessment",
-      nlsCycleDuration: 60,
-      isPreterm: false,
-      nlsPretermTasks: [],
+      patientAgeStr: state.patientAgeStr ?? "",
+      patientGenderStr: state.patientGenderStr ?? "",
     };
 
-    return utf8ToBase64(JSON.stringify(iosState));
+    return Bytes.fromUint8Array(new TextEncoder().encode(JSON.stringify(iosState)));
   };
 
   const hostSessionTransfer = async (): Promise<string | null> => {
