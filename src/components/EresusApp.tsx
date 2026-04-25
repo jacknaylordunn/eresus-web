@@ -26,6 +26,7 @@ import {
   getDoc,
   updateDoc,
   FieldValue,
+  Bytes,
   serverTimestamp,
   orderBy,
 } from "firebase/firestore";
@@ -2158,7 +2159,8 @@ ${[...events]
     };
   };
 
-  // UTF-8 safe base64 encoder (btoa only handles Latin1)
+  const bytesToUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
+
   const utf8ToBase64 = (str: string): string => {
     const bytes = new TextEncoder().encode(str);
     let binary = "";
@@ -2168,18 +2170,52 @@ ${[...events]
     return btoa(binary);
   };
 
-  // UTF-8 safe base64 decoder
+  // UTF-8 safe base64 decoder for legacy string transfers
   const base64ToUtf8 = (str: string): string => {
     const binary = atob(str);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new TextDecoder().decode(bytes);
+    return bytesToUtf8(bytes);
   };
 
-  const convertToiOSTransferFormat = (state: any): string => {
-    // Convert startTime from ISO string to Apple epoch (seconds since Jan 1 2001)
+  const isUUID = (value: unknown): value is string =>
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+  const deterministicUUID = (seed: string): string => {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = Math.imul(31, hash) + seed.charCodeAt(i) | 0;
+    }
+    const hex = Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8);
+    return `${hex}-0000-4000-8000-000000000000`;
+  };
+
+  const normalizeChecklistForiOS = (items: any[] = []): any[] =>
+    items.map((item, index) => ({
+      id: isUUID(item.id) ? item.id : deterministicUUID(`${item.name ?? "item"}-${item.id ?? index}`),
+      name: item.name ?? "",
+      isCompleted: item.isCompleted ?? false,
+      hypothermiaStatus: item.hypothermiaStatus ?? "none",
+    }));
+
+  const normalizeEventTypeForiOS = (type: string): string => {
+    const supported = new Set(["status", "cpr", "shock", "analysis", "rhythm", "drug", "airway", "etco2", "cause"]);
+    return supported.has(type) ? type : "status";
+  };
+
+  const normalizeEventsForiOS = (items: any[] = []): any[] =>
+    items.map((event, index) => ({
+      id: isUUID(event.id) ? event.id : (crypto.randomUUID?.() ?? deterministicUUID(`event-${index}-${event.timestamp ?? 0}`)),
+      timestamp: event.timestamp ?? 0,
+      message: event.message ?? "",
+      type: normalizeEventTypeForiOS(event.type ?? "status"),
+    }));
+
+  const convertToiOSTransferFormat = (state: any): Bytes => {
+    // iOS reads Firestore stateData as Swift Data, then JSONDecoder decodes UndoState.
+    // JSONEncoder encodes Date as Apple reference-date seconds and Data as base64.
     const APPLE_EPOCH = Date.UTC(2001, 0, 1);
     let iosStartTime: number | null = null;
     if (state.startTime) {
@@ -2187,58 +2223,59 @@ ${[...events]
       iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
     }
 
-    // Convert events array to base64-encoded eventsData
-    const eventsData = utf8ToBase64(JSON.stringify(state.events ?? []));
+    const eventsJson = JSON.stringify(normalizeEventsForiOS(state.events ?? []));
+    const eventsData = utf8ToBase64(eventsJson);
 
-    // Convert uiState string to iOS object form e.g. {"default":{}}
     const iosUiState = typeof state.uiState === "string"
       ? { [state.uiState]: {} }
       : state.uiState ?? { default: {} };
 
-    // Build iOS-compatible state object
     const iosState: any = {
       arrestState: state.arrestState ?? "ACTIVE",
       arrestType: "GENERAL",
+      isPreterm: false,
+      nlsState: "initialAssessment",
       masterTime: state.masterTime ?? 0,
       cprTime: state.cprTime ?? 0,
       timeOffset: state.timeOffset ?? 0,
-      startTime: iosStartTime,
+      nlsCycleDuration: 60,
+      isRhythmCheckDue: false,
       eventsData,
       shockCount: state.shockCount ?? 0,
       adrenalineCount: state.adrenalineCount ?? 0,
       amiodaroneCount: state.amiodaroneCount ?? 0,
       lidocaineCount: state.lidocaineCount ?? 0,
-      airwayPlaced: state.airwayPlaced ?? false,
+      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
       antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
-      reversibleCauses: state.reversibleCauses ?? [],
-      postROSCTasks: state.postROSCTasks ?? [],
-      postMortemTasks: state.postMortemTasks ?? [],
-      patientAgeCategory: state.patientAgeCategory ?? "",
-      patientAgeStr: state.patientAgeStr ?? "",
-      patientGenderStr: state.patientGenderStr ?? "",
+      shockCountForAmiodarone1: state.shockCountForAmiodarone1 ?? null,
+      airwayPlaced: state.airwayPlaced ?? false,
+      reversibleCauses: normalizeChecklistForiOS(state.reversibleCauses ?? []),
+      postROSCTasks: normalizeChecklistForiOS(state.postROSCTasks ?? []),
+      postMortemTasks: normalizeChecklistForiOS(state.postMortemTasks ?? []),
+      nlsPretermTasks: [],
+      startTime: iosStartTime,
       uiState: iosUiState,
+      patientAgeCategory: state.patientAgeCategory ?? null,
       hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
       hideAmiodaronePrompt: state.hideAmiodaronePrompt ?? false,
       lastRhythmNonShockable: state.lastRhythmNonShockable ?? false,
-      airwayAdjunct: state.airwayAdjunct ?? "none",
+      airwayAdjunct: state.airwayAdjunct ?? "unspecified",
+      roscTime: state.roscTime ?? null,
       isTimerPaused: state.isTimerPaused ?? false,
-      isRhythmCheckDue: false,
-      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
+      pauseStartTime: null,
       initialRhythm: state.initialRhythm ?? null,
-      nlsState: "initialAssessment",
-      nlsCycleDuration: 60,
-      isPreterm: false,
-      nlsPretermTasks: [],
+      patientAgeStr: state.patientAgeStr ?? "",
+      patientGenderStr: state.patientGenderStr ?? "",
     };
 
-    return utf8ToBase64(JSON.stringify(iosState));
+    return Bytes.fromUint8Array(new TextEncoder().encode(JSON.stringify(iosState)));
   };
 
   const hostSessionTransfer = async (): Promise<string | null> => {
     try {
       const state = generateTransferState();
       const transferId = String(Math.floor(100000 + Math.random() * 900000));
-      // Write stateData as base64-encoded JSON blob (iOS-compatible format)
+      // Write stateData as Firestore Bytes/Blob so iOS can read it as Swift Data
       const encodedStateData = convertToiOSTransferFormat(state);
       await setDoc(doc(db, "transfers", transferId), {
         stateData: encodedStateData,
@@ -2278,10 +2315,14 @@ ${[...events]
         return { success: false, error: "This transfer code has expired. Generate a new code and try again." };
       }
 
-      // iOS writes stateData as a base64-encoded JSON blob; PWA writes plain JSON string.
-      // Detect and decode base64 if needed.
+      // stateData can be:
+      // - Firestore Bytes/Blob (current iOS-compatible format)
+      // - base64 string (legacy compatibility)
+      // - plain JSON string (older PWA transfers)
       let rawStateData = data.stateData;
-      if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
+      if (rawStateData instanceof Bytes) {
+        rawStateData = bytesToUtf8(rawStateData.toUint8Array());
+      } else if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
         try {
           rawStateData = base64ToUtf8(rawStateData);
         } catch {
