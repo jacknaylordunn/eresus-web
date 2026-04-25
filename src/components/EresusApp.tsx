@@ -2233,7 +2233,7 @@ ${[...events]
     try {
       const state = generateTransferState();
       const transferId = String(Math.floor(100000 + Math.random() * 900000));
-      // Write stateData as base64-encoded JSON blob (iOS-compatible format)
+      // Write stateData as Firestore Bytes/Blob so iOS can read it as Swift Data
       const encodedStateData = convertToiOSTransferFormat(state);
       await setDoc(doc(db, "transfers", transferId), {
         stateData: encodedStateData,
