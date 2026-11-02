@@ -245,6 +245,7 @@ export interface UndoState {
   torTime?: number | null;
   vodTime?: number | null;
   vodChecklist?: ChecklistItem[];
+  cprCycleStartTime?: number;
 }
 
 export interface PDFIdentifiable {
@@ -1197,6 +1198,8 @@ const useArrestViewModel = () => {
 
   // Computed
   const totalArrestTime = useMemo(() => masterTime + timeOffset, [masterTime, timeOffset]);
+  // JRCALC ToR timing runs from when the crew confirms arrest (the Start tap), so downtime is excluded.
+  const resuscitationTime = masterTime;
   const canUndo = undoHistory.length > 0;
 
   const isAdrenalineAvailable = useMemo(() => {
@@ -1414,6 +1417,7 @@ const useArrestViewModel = () => {
       torTime,
       vodTime,
       vodChecklist,
+      cprCycleStartTime: cprCycleStartTimeRef.current,
     };
     setUndoHistory((prev) => [...prev, currentState]);
   };
@@ -1433,6 +1437,9 @@ const useArrestViewModel = () => {
     setAmiodaroneCount(lastState.amiodaroneCount);
     setLidocaineCount(lastState.lidocaineCount);
     lastAdrenalineTimeRef.current = lastState.lastAdrenalineTime;
+    if (lastState.cprCycleStartTime !== undefined) {
+      cprCycleStartTimeRef.current = lastState.cprCycleStartTime;
+    }
     setAntiarrhythmicGiven(lastState.antiarrhythmicGiven);
     shockCountForAmiodarone1Ref.current = lastState.shockCountForAmiodarone1;
     setAirwayPlaced(lastState.airwayPlaced);
@@ -1483,6 +1490,38 @@ const useArrestViewModel = () => {
     logEvent("Arrest Timer Resumed", EventType.Status);
   };
 
+  // Keep the screen on for the whole case; an auto-lock mid-arrest hides the cycle timer and prompts.
+  // The browser drops the lock whenever the page is hidden, so it is re-requested on return.
+  useEffect(() => {
+    if (arrestState !== ArrestState.Active && arrestState !== ArrestState.Rosc) return;
+    if (!("wakeLock" in navigator)) return;
+
+    let sentinel: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    const requestLock = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          lock.release();
+        } else {
+          sentinel = lock;
+        }
+      } catch {
+        // Refused (e.g. low battery mode); the app still works, the screen may just dim.
+      }
+    };
+
+    requestLock();
+    document.addEventListener("visibilitychange", requestLock);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", requestLock);
+      sentinel?.release();
+    };
+  }, [arrestState]);
+
   // Timer Lifecycle
   useEffect(() => {
     if ((arrestState === ArrestState.Active || arrestState === ArrestState.Rosc) && !isTimerPaused) {
@@ -1522,7 +1561,8 @@ const useArrestViewModel = () => {
       cprCycleStartTimeRef.current = elapsed + (priorTimeOffset ?? 0);
     } else {
       startTimeRef.current = new Date();
-      cprCycleStartTimeRef.current = 0;
+      // Downtime can be entered before Start, so the first cycle begins at the current total time.
+      cprCycleStartTimeRef.current = timeOffset;
     }
 
     setArrestState(ArrestState.Active);
@@ -1702,6 +1742,10 @@ const useArrestViewModel = () => {
   const addTimeOffset = (seconds: number) => {
     saveUndoState();
     setTimeOffset((t) => t + seconds);
+    // Interval timers are stored on the total-time scale, so move them with the offset
+    // or adding downtime mid-cycle triggers a false rhythm check and an early adrenaline prompt.
+    cprCycleStartTimeRef.current += seconds;
+    if (lastAdrenalineTimeRef.current !== null) lastAdrenalineTimeRef.current += seconds;
     logEvent(`Time offset added: +${seconds / 60} min`, EventType.Status);
   };
 
@@ -2254,6 +2298,7 @@ ${[...events]
       postMortemTasks: normalizeChecklistForiOS(state.postMortemTasks ?? []),
       nlsPretermTasks: [],
       startTime: iosStartTime,
+      cprCycleStartTime: state.cprCycleStartTime ?? null,
       uiState: iosUiState,
       patientAgeCategory: state.patientAgeCategory ?? null,
       hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
@@ -2379,7 +2424,13 @@ ${[...events]
       if (normalizedStartTime) {
         startTimeRef.current = normalizedStartTime;
       }
-      cprCycleStartTimeRef.current = state.cprCycleStartTime ?? 0;
+      if (typeof state.cprCycleStartTime === "number") {
+        cprCycleStartTimeRef.current = state.cprCycleStartTime;
+      } else {
+        // Older iOS builds don't send the cycle start, so work it back from the remaining cycle time.
+        cprCycleStartTimeRef.current =
+          (state.masterTime ?? 0) + (state.timeOffset ?? 0) - (cprCycleDuration - (state.cprTime ?? cprCycleDuration));
+      }
       lastAdrenalineTimeRef.current = state.lastAdrenalineTime ?? null;
       shockCountForAmiodarone1Ref.current = state.shockCountForAmiodarone1 ?? null;
 
@@ -2498,6 +2549,7 @@ ${[...events]
 
     // Computed
     totalArrestTime,
+    resuscitationTime,
     canUndo,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
@@ -3176,9 +3228,10 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   onClose,
   onConfirmTOR,
 }) => {
-  const { totalArrestTime, patientAgeStr, patientAgeCategory, initialRhythm } = useArrest();
+  const { resuscitationTime, timeOffset, patientAgeStr, patientAgeCategory, initialRhythm } = useArrest();
 
   const isPaediatric = isPatientPaediatric(patientAgeStr, patientAgeCategory);
+  const thresholdTime = isPaediatric ? 3600 : 2700; // 60 mins vs 45 mins
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Clinical Guidance">
@@ -3186,7 +3239,17 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         <div className="text-center space-y-2">
           <AlertTriangle size={48} className="text-orange-500 mx-auto" />
           <h3 className="text-xl font-bold text-gray-900 dark:text-white">Termination of Resuscitation</h3>
-          <p className="text-gray-600 dark:text-gray-400">Current Duration: {TimeFormatter.format(totalArrestTime)}</p>
+          <p
+            className={`font-semibold ${resuscitationTime >= thresholdTime ? "text-red-600 dark:text-red-400" : "text-gray-700 dark:text-gray-300"}`}
+          >
+            Resuscitation Time: {TimeFormatter.format(resuscitationTime)}
+          </p>
+          {timeOffset > 0 && (
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Plus estimated downtime before arrival: {Math.floor(timeOffset / 60)} min
+            </p>
+          )}
+          <p className="text-xs text-gray-500 dark:text-gray-400">Timed from when the crew confirmed cardiac arrest.</p>
         </div>
 
         <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
@@ -4019,7 +4082,7 @@ const HeaderView: React.FC = () => {
                 isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-blue-600 dark:text-blue-400"
               }`}
             >
-              {TimeFormatter.format(masterTime + timeOffset)}
+              {TimeFormatter.format(masterTime)}
             </span>
           </div>
           {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
