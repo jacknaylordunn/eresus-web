@@ -107,10 +107,27 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        // Push-to-talk on the CPR ring: the red ring draws round, ripples while listening,
+        // and the halo bumps as each word is recognised.
+        "ptt-draw": {
+          from: { strokeDashoffset: "326.7" },
+          to: { strokeDashoffset: "0" },
+        },
+        "ptt-ripple": {
+          from: { transform: "scale(1)", opacity: "0.35" },
+          to: { transform: "scale(1.18)", opacity: "0" },
+        },
+        "ptt-bump": {
+          from: { transform: "scale(1.08)", opacity: "0.45" },
+          to: { transform: "scale(1)", opacity: "0.2" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "ptt-draw": "ptt-draw 0.35s ease-out both",
+        "ptt-ripple": "ptt-ripple 1.4s ease-out infinite",
+        "ptt-bump": "ptt-bump 0.3s ease-out both",
       },
     },
   },

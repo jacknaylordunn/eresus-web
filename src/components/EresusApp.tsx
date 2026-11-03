@@ -4352,6 +4352,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
   const { cprCycleDuration } = useSettings();
   const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
   const listener = useVoiceListener();
+  const [isPressed, setIsPressed] = useState(false);
 
   const percentage = cprTime / cprCycleDuration;
   const strokeDasharray = 2 * Math.PI * 52;
@@ -4360,9 +4361,11 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
 
   const startTalking = (e: React.PointerEvent) => {
     e.preventDefault();
+    setIsPressed(true);
     if (voiceCommandListener.startPushToTalk()) navigator.vibrate?.(15);
   };
   const stopTalking = () => {
+    setIsPressed(false);
     voiceCommandListener.stopPushToTalk((transcript) => onVoiceTranscript?.(transcript));
   };
   const pushToTalk = voiceAvailable
@@ -4378,7 +4381,12 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
     : {};
 
   return (
-    <div className={`relative w-56 h-56 ${voiceAvailable ? "select-none touch-none rounded-full" : ""}`} {...pushToTalk}>
+    <div
+      className={`relative w-56 h-56 ${
+        voiceAvailable ? "select-none touch-none rounded-full motion-safe:transition-transform motion-safe:duration-200" : ""
+      } ${isPressed ? "motion-safe:scale-95" : ""}`}
+      {...pushToTalk}
+    >
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
@@ -4409,15 +4417,41 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
         </span>
         <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
       </div>
-      {voiceAvailable && listener.isPushToTalkActive && (
-        <div className="absolute inset-0 rounded-full border-[18px] border-tone-danger bg-card/95 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
-          <AudioWaveform size={28} className="text-tone-danger" />
-          <span className="font-semibold text-sm text-foreground line-clamp-4">{listener.transcript || "Listening…"}</span>
-        </div>
-      )}
+      {voiceAvailable && listener.isPushToTalkActive && <PushToTalkRing transcript={listener.transcript} />}
     </div>
   );
 };
+
+// The listening state of the ring (matches iOS). Browsers don't expose the recogniser's audio level,
+// so the halo bumps as each word arrives instead of following loudness.
+const PushToTalkRing: React.FC<{ transcript: string }> = ({ transcript }) => (
+  <div className="absolute inset-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-90 motion-safe:duration-300">
+    <div className="absolute inset-0 rounded-full border-[10px] border-tone-danger motion-safe:animate-ptt-ripple motion-reduce:hidden" />
+    <div
+      key={transcript.split(" ").length}
+      className="absolute inset-0 rounded-full border-[18px] border-tone-danger opacity-20 motion-safe:animate-ptt-bump"
+    />
+    <svg className="absolute inset-0 w-full h-full" viewBox="0 0 120 120">
+      <circle className="fill-card" r="50" cx="60" cy="60" />
+      <circle
+        className="text-tone-danger motion-safe:animate-ptt-draw"
+        strokeWidth="10"
+        strokeLinecap="round"
+        stroke="currentColor"
+        fill="transparent"
+        strokeDasharray="326.7"
+        r="52"
+        cx="60"
+        cy="60"
+        transform="rotate(-90 60 60)"
+      />
+    </svg>
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
+      <AudioWaveform size={28} className={`text-tone-danger ${transcript ? "" : "motion-safe:animate-pulse"}`} />
+      <span className="font-semibold text-sm text-foreground line-clamp-4">{transcript || "Listening…"}</span>
+    </div>
+  </div>
+);
 
 const VoiceListeningStatus: React.FC = () => {
   const listener = useVoiceListener();
