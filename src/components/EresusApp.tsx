@@ -290,7 +290,7 @@ const useAppSettings = () => {
   const [metronomeBPM, setMetronomeBPM] = useAppStorage("metronomeBPM", 110);
   const [appearanceMode, setAppearanceMode] = useAppStorage<AppearanceMode>("appearanceMode", AppearanceMode.System);
   const [showDosagePrompts, setShowDosagePrompts] = useAppStorage("showDosagePrompts", false);
-  const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", true);
+  const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
     false,
@@ -1111,9 +1111,12 @@ const useArrestViewModel = () => {
     adrenalineInterval,
     showDosagePrompts,
     researchModeEnabled,
+    hasRespondedToResearchTerms,
     askForPatientInfo,
     userOrganization,
   } = useSettings();
+  // Nothing is uploaded until the user has actively opted in, even if a stored or cloud-synced flag says otherwise.
+  const researchActive = researchModeEnabled && hasRespondedToResearchTerms;
 
   const savedSession = useRef<any>(null);
   const didRestore = useRef(false);
@@ -1573,7 +1576,7 @@ const useArrestViewModel = () => {
     );
 
     if (!priorStartTime) {
-      if (researchModeEnabled || askForPatientInfo) {
+      if (researchActive || askForPatientInfo) {
         setShowPatientInfoPrompt(true);
       }
     }
@@ -1900,7 +1903,7 @@ ${[...events]
         logData,
         events: eventsCopy,
         userId,
-        researchModeEnabled,
+        researchModeEnabled: researchActive,
         queuedAt: Date.now(),
       });
       console.log("Offline: arrest log queued for sync");
@@ -1923,7 +1926,7 @@ ${[...events]
         await addDoc(eventsCollectionRef, event);
       }
 
-      if (researchModeEnabled) {
+      if (researchActive) {
         try {
           const researchData: any = {
             startTime: Timestamp.fromDate(startTimeRef.current),
@@ -1966,7 +1969,7 @@ ${[...events]
         logData,
         events: eventsCopy,
         userId,
-        researchModeEnabled,
+        researchModeEnabled: researchActive,
         queuedAt: Date.now(),
       });
       HapticManager.notification("warning");
@@ -2101,7 +2104,7 @@ ${[...events]
     // Always try to flush the localStorage queue first
     await flushOfflineLogQueue();
 
-    if (!researchModeEnabled || !user) return;
+    if (!researchActive || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
       const q = query(collection(db, logsCollectionPath), where("isSynced", "==", false));
@@ -2144,7 +2147,7 @@ ${[...events]
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, user, researchModeEnabled, flushOfflineLogQueue]);
+  }, [db, userId, user, researchActive, flushOfflineLogQueue]);
 
   useEffect(() => {
     syncOfflineLogs();
@@ -4273,7 +4276,9 @@ const IosAppStoreBanner: React.FC = () => {
 const PendingView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
-}> = ({ onShowPdf, onShowNewborn }) => {
+  needsSetup?: boolean;
+  onStartSetup?: () => void;
+}> = ({ onShowPdf, onShowNewborn, needsSetup = false, onStartSetup }) => {
   const { startArrest, showRecoveryPrompt, resumeRecoveredSession, discardRecoveredSession, receiveSessionTransfer } =
     useArrest();
   const [showReceiveTransfer, setShowReceiveTransfer] = useState(false);
@@ -4343,6 +4348,20 @@ const PendingView: React.FC<{
         onClick={onShowNewborn}
       />
       <AlgorithmGridView onShowPdf={onShowPdf} />
+
+      {needsSetup && onStartSetup && (
+        <button
+          onClick={onStartSetup}
+          className="w-full flex items-center gap-3 p-4 text-left rounded-xl bg-card border border-border active:scale-[0.99] transition-transform"
+        >
+          <Settings size={20} className="text-muted-foreground shrink-0" />
+          <span className="flex-grow">
+            <span className="block text-sm font-semibold text-foreground">Finish setting up eResus</span>
+            <span className="block text-xs text-muted-foreground">Install, account and research options. About a minute.</span>
+          </span>
+          <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+        </button>
+      )}
 
       {/* Receive Transfer - subtle pill button */}
       {!showReceiveTransfer ? (
@@ -5134,7 +5153,9 @@ const getEventTypeColor = (type: EventType): string => {
 const ArrestView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
-}> = ({ onShowPdf, onShowNewborn }) => {
+  needsSetup?: boolean;
+  onStartSetup?: () => void;
+}> = ({ onShowPdf, onShowNewborn, needsSetup = false, onStartSetup }) => {
   const viewModel = useArrest();
   const { showDosagePrompts } = useSettings();
 
@@ -5210,7 +5231,7 @@ const ArrestView: React.FC<{
 
       <div className="flex-grow overflow-y-auto bg-gray-100 dark:bg-gray-900">
         {viewModel.arrestState === ArrestState.Pending && (
-          <PendingView onShowPdf={onShowPdf} onShowNewborn={onShowNewborn} />
+          <PendingView onShowPdf={onShowPdf} onShowNewborn={onShowNewborn} needsSetup={needsSetup} onStartSetup={onStartSetup} />
         )}
         {viewModel.arrestState === ArrestState.Active && (
           <ActiveArrestContentView
@@ -5908,6 +5929,7 @@ const SettingsView: React.FC = () => {
     setShowDosagePrompts,
     researchModeEnabled,
     setResearchModeEnabled,
+    setHasRespondedToResearchTerms,
     askForPatientInfo,
     setAskForPatientInfo,
     userOrganization,
@@ -6040,7 +6062,11 @@ const SettingsView: React.FC = () => {
           <SettingToggle
             label="Research Mode"
             enabled={researchModeEnabled}
-            onChange={setResearchModeEnabled}
+            onChange={(enabled) => {
+              // Switching it on here is an active choice, so it counts as consent.
+              if (enabled) setHasRespondedToResearchTerms(true);
+              setResearchModeEnabled(enabled);
+            }}
             description="When enabled, anonymised arrest data is uploaded to help improve cardiac arrest outcomes research."
           />
           {researchModeEnabled ? (
@@ -6229,14 +6255,13 @@ type TabID = "arrest" | "logbook" | "settings";
 const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabID>("arrest");
   const [pdfToShow, setPdfToShow] = useState<PDFIdentifiable | null>(null);
-  const [showInstallModal, setShowInstallModal] = useState(() => {
-    const hasSeenInstructions = localStorage.getItem("eResusSeenInstallInstructions");
-    const isStandalone =
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [isStandalone] = useState(
+    () =>
       window.matchMedia("(display-mode: standalone)").matches ||
       (window.navigator as any).standalone ||
-      document.referrer.includes("android-app://");
-    return !hasSeenInstructions && !isStandalone;
-  });
+      document.referrer.includes("android-app://"),
+  );
   const [showNewborn, setShowNewborn] = useState(() => {
     return localStorage.getItem("eresus_active_view") === "nls";
   });
@@ -6279,32 +6304,68 @@ const AppContent: React.FC = () => {
     }
   }, [isAnonymous, userId, user]);
 
-  const hasSeenAccountPrompt = localStorage.getItem("eResusSeenAccountPrompt");
+  // Setup never opens on launch, so a first-time user at a job can press Start straight away.
+  // It runs once the first case has been reset, or from the card on the start screen.
+  const hasSeenInstall = !!localStorage.getItem("eResusSeenInstallInstructions");
+  const hasSeenAccountPrompt = !!localStorage.getItem("eResusSeenAccountPrompt");
+  const needsSetup =
+    (!hasSeenInstall && !isStandalone) || (!hasSeenAccountPrompt && isAnonymous) || !hasRespondedToResearchTerms;
+  const [setupInProgress, setSetupInProgress] = useState(false);
 
+  const startSetup = () => {
+    if (arrestViewModel.arrestState === ArrestState.Pending) setSetupInProgress(true);
+  };
+
+  // Steps through install, account and research consent one at a time while a setup run is in progress.
   useEffect(() => {
-    if (!showInstallModal && !hasSeenAccountPrompt && isAnonymous) {
+    if (!setupInProgress || showInstallModal || showAccountPrompt || showResearchConsent) return;
+    if (!hasSeenInstall && !isStandalone) {
+      setShowInstallModal(true);
+    } else if (!hasSeenAccountPrompt && isAnonymous) {
       setShowAccountPrompt(true);
-    } else if (!showInstallModal && settingsLoaded && !hasRespondedToResearchTerms) {
-      setShowResearchConsent(true);
+    } else if (!hasRespondedToResearchTerms) {
+      // After signing in, wait for their saved settings in case they've already answered on another device.
+      if (settingsLoaded) setShowResearchConsent(true);
+    } else {
+      setSetupInProgress(false);
     }
-  }, [showInstallModal, hasRespondedToResearchTerms, isAnonymous, settingsLoaded]);
+  }, [
+    setupInProgress,
+    showInstallModal,
+    showAccountPrompt,
+    showResearchConsent,
+    hasSeenInstall,
+    hasSeenAccountPrompt,
+    isStandalone,
+    isAnonymous,
+    hasRespondedToResearchTerms,
+    settingsLoaded,
+  ]);
+
+  const previousArrestStateRef = useRef(arrestViewModel.arrestState);
+  useEffect(() => {
+    const previous = previousArrestStateRef.current;
+    previousArrestStateRef.current = arrestViewModel.arrestState;
+    if (arrestViewModel.arrestState === ArrestState.Pending && previous !== ArrestState.Pending && needsSetup) {
+      const timer = setTimeout(startSetup, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [arrestViewModel.arrestState]);
 
   const handleCloseAccountPrompt = () => {
     localStorage.setItem("eResusSeenAccountPrompt", "true");
     setShowAccountPrompt(false);
-    // If user just signed in, don't immediately show research consent —
-    // wait for settings to load from Firestore (the effect above will handle it)
-    if (!isAnonymous && user && !settingsLoaded) {
-      return;
-    }
-    if (!hasRespondedToResearchTerms) {
-      setShowResearchConsent(true);
-    }
   };
 
   const handleCloseInstallModal = () => {
     localStorage.setItem("eResusSeenInstallInstructions", "true");
     setShowInstallModal(false);
+  };
+
+  const handleCloseResearchConsent = () => {
+    // Closing without choosing ends this run; the card stays until they answer.
+    setSetupInProgress(false);
+    setShowResearchConsent(false);
   };
 
   const handleNLSTransition = (data: {
@@ -6327,7 +6388,14 @@ const AppContent: React.FC = () => {
         if (showNewborn) {
           return <NewbornLifeSupport onBack={() => setShowNewborn(false)} onTransitionToALS={handleNLSTransition} />;
         }
-        return <ArrestView onShowPdf={setPdfToShow} onShowNewborn={() => setShowNewborn(true)} />;
+        return (
+          <ArrestView
+            onShowPdf={setPdfToShow}
+            onShowNewborn={() => setShowNewborn(true)}
+            needsSetup={needsSetup}
+            onStartSetup={startSetup}
+          />
+        );
       case "logbook":
         return <LogbookView />;
       case "settings":
@@ -6364,7 +6432,7 @@ const AppContent: React.FC = () => {
         {pdfToShow && <PDFView pdf={pdfToShow} onClose={() => setPdfToShow(null)} />}
         <InstallInstructionsModal isOpen={showInstallModal} onClose={handleCloseInstallModal} />
         <AccountPromptView isOpen={showAccountPrompt} onClose={handleCloseAccountPrompt} />
-        <ResearchConsentView isOpen={showResearchConsent} onClose={() => setShowResearchConsent(false)} />
+        <ResearchConsentView isOpen={showResearchConsent} onClose={handleCloseResearchConsent} />
         <PatientInfoPromptView
           isOpen={arrestViewModel.showPatientInfoPrompt}
           onClose={() => arrestViewModel.setShowPatientInfoPrompt(false)}
