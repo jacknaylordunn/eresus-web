@@ -91,6 +91,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
+import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -290,6 +291,12 @@ const useAppSettings = () => {
   const [metronomeBPM, setMetronomeBPM] = useAppStorage("metronomeBPM", 110);
   const [appearanceMode, setAppearanceMode] = useAppStorage<AppearanceMode>("appearanceMode", AppearanceMode.System);
   const [showDosagePrompts, setShowDosagePrompts] = useAppStorage("showDosagePrompts", false);
+  const [voicePromptsEnabled, setVoicePromptsEnabled] = useAppStorage("voicePromptsEnabled", true);
+  const [voicePromptsToneOnly, setVoicePromptsToneOnly] = useAppStorage("voicePromptsToneOnly", false);
+  const [rhythmCheckWarning, setRhythmCheckWarning] = useAppStorage("rhythmCheckWarning", 15); // 0 = off
+  const [promptRhythmCheck, setPromptRhythmCheck] = useAppStorage("promptRhythmCheck", true);
+  const [promptAdrenaline, setPromptAdrenaline] = useAppStorage("promptAdrenaline", true);
+  const [promptAntiarrhythmic, setPromptAntiarrhythmic] = useAppStorage("promptAntiarrhythmic", true);
   const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
@@ -387,6 +394,18 @@ const useAppSettings = () => {
     setAppearanceMode,
     showDosagePrompts,
     setShowDosagePrompts,
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voicePromptsToneOnly,
+    setVoicePromptsToneOnly,
+    rhythmCheckWarning,
+    setRhythmCheckWarning,
+    promptRhythmCheck,
+    setPromptRhythmCheck,
+    promptAdrenaline,
+    setPromptAdrenaline,
+    promptAntiarrhythmic,
+    setPromptAntiarrhythmic,
     researchModeEnabled,
     setResearchModeEnabled,
     hasRespondedToResearchTerms,
@@ -1114,6 +1133,12 @@ const useArrestViewModel = () => {
     hasRespondedToResearchTerms,
     askForPatientInfo,
     userOrganization,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    rhythmCheckWarning,
+    promptRhythmCheck,
+    promptAdrenaline,
+    promptAntiarrhythmic,
   } = useSettings();
   // Nothing is uploaded until the user has actively opted in, even if a stored or cloud-synced flag says otherwise.
   const researchActive = researchModeEnabled && hasRespondedToResearchTerms;
@@ -1229,8 +1254,15 @@ const useArrestViewModel = () => {
   }, [amiodaroneCount, shockCount, hideAmiodaronePrompt]);
 
   const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
-    return shockCount >= 3 && amiodaroneCount === 0 && !hideAmiodaronePrompt;
-  }, [shockCount, amiodaroneCount, hideAmiodaronePrompt]);
+    // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
+    return (
+      shockCount >= 3 &&
+      amiodaroneCount === 0 &&
+      !hideAmiodaronePrompt &&
+      antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine &&
+      isAdrenalineAvailable
+    );
+  }, [shockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable]);
 
   const shouldShowAdrenalinePrompt = useMemo(() => {
     if (!isAdrenalineAvailable || hideAdrenalinePrompt) return false;
@@ -1247,6 +1279,62 @@ const useArrestViewModel = () => {
     hideAdrenalinePrompt,
     timeUntilAdrenaline,
     lastRhythmNonShockable,
+  ]);
+
+  // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
+  const activePromptsRef = useRef<Set<VoicePrompt>>(new Set());
+  useEffect(() => {
+    if (arrestState !== ArrestState.Active || isTimerPaused) {
+      activePromptsRef.current = new Set();
+      return;
+    }
+
+    const current = new Set<VoicePrompt>();
+    if (uiState === UIState.Default) {
+      if (cprTime <= 0) {
+        current.add("rhythm_check_due");
+      } else if (rhythmCheckWarning > 0 && cprTime <= rhythmCheckWarning) {
+        current.add("prepare_rhythm_check");
+      }
+    }
+    if (shouldShowAdrenalinePrompt) current.add("consider_adrenaline");
+    if (isAdrenalineAvailable && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) current.add("adrenaline_due");
+    if (shouldShowAmiodaroneFirstDosePrompt) current.add("consider_amiodarone");
+    if (shouldShowAmiodaroneReminder) current.add("consider_amiodarone_second");
+
+    const enabled: Record<VoicePrompt, boolean> = {
+      rhythm_check_due: promptRhythmCheck,
+      prepare_rhythm_check: rhythmCheckWarning > 0,
+      adrenaline_due: promptAdrenaline,
+      consider_adrenaline: promptAdrenaline,
+      consider_amiodarone: promptAntiarrhythmic,
+      consider_amiodarone_second: promptAntiarrhythmic,
+    };
+    // Only announce prompts that have just appeared, in priority order.
+    if (voicePromptsEnabled) {
+      for (const prompt of VOICE_PROMPTS) {
+        if (current.has(prompt) && !activePromptsRef.current.has(prompt) && enabled[prompt]) {
+          voicePromptPlayer.play(prompt, voicePromptsToneOnly);
+        }
+      }
+    }
+    activePromptsRef.current = current;
+  }, [
+    arrestState,
+    isTimerPaused,
+    uiState,
+    cprTime,
+    shouldShowAdrenalinePrompt,
+    isAdrenalineAvailable,
+    timeUntilAdrenaline,
+    shouldShowAmiodaroneFirstDosePrompt,
+    shouldShowAmiodaroneReminder,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    rhythmCheckWarning,
+    promptRhythmCheck,
+    promptAdrenaline,
+    promptAntiarrhythmic,
   ]);
 
   // Session Persistence
@@ -1478,6 +1566,7 @@ const useArrestViewModel = () => {
     setIsTimerPaused(true);
     pauseStartTimeRef.current = new Date();
     stopTimer();
+    voicePromptPlayer.stopAll();
     logEvent("Arrest Timer Paused", EventType.Status);
   };
 
@@ -1554,6 +1643,9 @@ const useArrestViewModel = () => {
   // Core Actions
   const startArrest = (priorEvents?: Event[], priorTimeOffset?: number, priorStartTime?: Date) => {
     saveUndoState();
+    voicePromptPlayer.unlock();
+    // A mute from the last case shouldn't silently carry into the next one.
+    voicePromptPlayer.setMutedForCase(false);
 
     if (priorStartTime) {
       startTimeRef.current = priorStartTime;
@@ -1696,6 +1788,7 @@ const useArrestViewModel = () => {
     setArrestState(ArrestState.Rosc);
     setUiState(UIState.Default);
     setRoscTime(totalArrestTime);
+    voicePromptPlayer.stopAll();
     logEvent("Return of Spontaneous Circulation (ROSC)", EventType.Status);
   };
 
@@ -1705,6 +1798,7 @@ const useArrestViewModel = () => {
     setArrestState(ArrestState.Ended);
     setTorTime(totalArrestTime);
     stopTimer();
+    voicePromptPlayer.stopAll();
     logEvent(`Termination of Resuscitation (TOR) at ${new Date().toLocaleTimeString()}`, EventType.Status);
   };
 
@@ -4412,6 +4506,40 @@ const PendingView: React.FC<{
   );
 };
 
+// Lucide has no metronome; drawn to match the iOS glyph so the speaker icon can mean spoken prompts.
+const MetronomeIcon: React.FC<{ size?: number }> = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M9 3h6l4 18H5L9 3z" />
+    <path d="M12 16l6-9" />
+    <path d="M7 16h10" />
+  </svg>
+);
+
+// Mirrors the metronome button: filled when prompts are audible, plain when muted for this case.
+const VoicePromptButton: React.FC = () => {
+  const { voicePromptsEnabled } = useSettings();
+  const [muted, setMuted] = useState(voicePromptPlayer.mutedForCase);
+
+  useEffect(() => voicePromptPlayer.subscribe(setMuted), []);
+
+  if (!voicePromptsEnabled) return null;
+  const isOn = !muted;
+  return (
+    <button
+      onClick={() => {
+        voicePromptPlayer.unlock();
+        voicePromptPlayer.setMutedForCase(isOn);
+      }}
+      aria-label={isOn ? "Mute spoken prompts" : "Unmute spoken prompts"}
+      className={`absolute bottom-4 left-4 w-12 h-12 rounded-full flex items-center justify-center
+      shadow-lg transition-colors
+      ${isOn ? "bg-blue-600 text-white" : "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400"}`}
+    >
+      {isOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
+    </button>
+  );
+};
+
 const ActiveArrestContentView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowOtherDrugs: () => void;
@@ -4458,12 +4586,14 @@ const ActiveArrestContentView: React.FC<{
         <CPRTimerView />
         <button
           onClick={toggleMetronome}
+          aria-label={isMetronomeOn ? "Turn metronome off" : "Turn metronome on"}
           className={`absolute bottom-4 right-4 w-12 h-12 rounded-full flex items-center justify-center
           shadow-lg transition-colors
           ${isMetronomeOn ? "bg-blue-600 text-white" : "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400"}`}
         >
-          {isMetronomeOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
+          <MetronomeIcon size={24} />
         </button>
+        <VoicePromptButton />
       </div>
 
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
@@ -5934,6 +6064,18 @@ const SettingsView: React.FC = () => {
     setAskForPatientInfo,
     userOrganization,
     setUserOrganization,
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voicePromptsToneOnly,
+    setVoicePromptsToneOnly,
+    rhythmCheckWarning,
+    setRhythmCheckWarning,
+    promptRhythmCheck,
+    setPromptRhythmCheck,
+    promptAdrenaline,
+    setPromptAdrenaline,
+    promptAntiarrhythmic,
+    setPromptAntiarrhythmic,
   } = useSettings();
   const { user, isAnonymous, db } = useFirebase();
 
@@ -6040,6 +6182,59 @@ const SettingsView: React.FC = () => {
             step={5}
             unit="BPM"
           />
+        </div>
+
+        {/* Spoken Prompts */}
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Spoken Prompts</h3>
+          <SettingToggle
+            label="Spoken Prompts"
+            enabled={voicePromptsEnabled}
+            onChange={setVoicePromptsEnabled}
+            description="Announces key events such as rhythm checks and drug reminders. The speaker button on the arrest screen mutes them for the current case."
+          />
+          {voicePromptsEnabled && (
+            <>
+              <SegmentedSetting
+                label="Style"
+                value={voicePromptsToneOnly ? "tone" : "voice"}
+                options={[
+                  { value: "voice", label: "Voice" },
+                  { value: "tone", label: "Tone Only" },
+                ]}
+                onChange={(value) => setVoicePromptsToneOnly(value === "tone")}
+              />
+              <SegmentedSetting
+                label="Rhythm Check Warning"
+                value={String(rhythmCheckWarning)}
+                options={[
+                  { value: "0", label: "Off" },
+                  { value: "10", label: "10 s" },
+                  { value: "15", label: "15 s" },
+                  { value: "30", label: "30 s" },
+                ]}
+                onChange={(value) => setRhythmCheckWarning(Number(value))}
+              />
+              <SettingToggle
+                label="Rhythm Check Due"
+                enabled={promptRhythmCheck}
+                onChange={setPromptRhythmCheck}
+                description="Announced when the CPR cycle ends."
+              />
+              <SettingToggle
+                label="Adrenaline Reminders"
+                enabled={promptAdrenaline}
+                onChange={setPromptAdrenaline}
+                description="Consider adrenaline, and when a repeat dose is due."
+              />
+              <SettingToggle
+                label="Amiodarone Reminders"
+                enabled={promptAntiarrhythmic}
+                onChange={setPromptAntiarrhythmic}
+                description="After the third and fifth shocks."
+              />
+            </>
+          )}
         </div>
 
         {/* Medications */}
@@ -6182,6 +6377,32 @@ const SettingStepper: React.FC<{
       >
         <Plus size={16} className="mx-auto" />
       </button>
+    </div>
+  </div>
+);
+
+const SegmentedSetting: React.FC<{
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}> = ({ label, value, options, onChange }) => (
+  <div className="space-y-2">
+    <span className="text-gray-800 dark:text-gray-200">{label}</span>
+    <div className="flex rounded-lg bg-gray-100 dark:bg-gray-700 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            value === option.value
+              ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow"
+              : "text-gray-600 dark:text-gray-400"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   </div>
 );

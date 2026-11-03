@@ -1,10 +1,17 @@
-const CACHE_NAME = 'eresus-react-v6';
+const CACHE_NAME = 'eresus-react-v7';
 const PDF_CACHE_NAME = 'eresus-pdfs-v2';
 
 const STATIC_URLS = [
   '/',
   '/index.html',
   '/manifest.json',
+  // Spoken prompts must work with no signal
+  '/audio/prompts/rhythm_check_due.mp3',
+  '/audio/prompts/prepare_rhythm_check.mp3',
+  '/audio/prompts/adrenaline_due.mp3',
+  '/audio/prompts/consider_adrenaline.mp3',
+  '/audio/prompts/consider_amiodarone.mp3',
+  '/audio/prompts/consider_amiodarone_second.mp3',
 ];
 
 // Map of same-origin proxy paths -> upstream PDF URLs
