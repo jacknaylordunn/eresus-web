@@ -4190,7 +4190,7 @@ const HeaderView: React.FC = () => {
 
   return (
     <div
-      className={`p-4 shadow-md transition-colors duration-300 ${headerBg} ${isRhythmCheckDue && !isTimerPaused ? "cursor-pointer" : ""}`}
+      className={`relative z-10 p-4 shadow-md transition-colors duration-300 ${headerBg} ${isRhythmCheckDue && !isTimerPaused ? "cursor-pointer" : ""}`}
       onClick={handleHeaderTap}
     >
       <div className="flex justify-between items-center mb-3">
