@@ -297,6 +297,7 @@ const useAppSettings = () => {
   const [promptRhythmCheck, setPromptRhythmCheck] = useAppStorage("promptRhythmCheck", true);
   const [promptAdrenaline, setPromptAdrenaline] = useAppStorage("promptAdrenaline", true);
   const [promptAntiarrhythmic, setPromptAntiarrhythmic] = useAppStorage("promptAntiarrhythmic", true);
+  const [etco2Unit, setEtco2Unit] = useAppStorage<"kPa" | "mmHg">("etco2Unit", "kPa");
   const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
@@ -406,6 +407,8 @@ const useAppSettings = () => {
     setPromptAdrenaline,
     promptAntiarrhythmic,
     setPromptAntiarrhythmic,
+    etco2Unit,
+    setEtco2Unit,
     researchModeEnabled,
     setResearchModeEnabled,
     hasRespondedToResearchTerms,
@@ -1139,6 +1142,7 @@ const useArrestViewModel = () => {
     promptRhythmCheck,
     promptAdrenaline,
     promptAntiarrhythmic,
+    etco2Unit,
   } = useSettings();
   // Nothing is uploaded until the user has actively opted in, even if a stored or cloud-synced flag says otherwise.
   const researchActive = researchModeEnabled && hasRespondedToResearchTerms;
@@ -1234,9 +1238,10 @@ const useArrestViewModel = () => {
     return reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus !== HypothermiaStatus.Severe;
   }, [reversibleCauses]);
 
-  // Amiodarone and Lidocaine are now always available (can be pressed anytime during arrest)
-  const isAmiodaroneAvailable = true;
-  const isLidocaineAvailable = true;
+  // Once one antiarrhythmic is chosen the other is blocked, and amiodarone is withheld in severe
+  // hypothermia along with adrenaline (matches iOS).
+  const isAmiodaroneAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && isAdrenalineAvailable;
+  const isLidocaineAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone;
 
   const timeUntilAdrenaline = useMemo(() => {
     const lastAdrenalineTime = lastAdrenalineTimeRef.current;
@@ -1252,6 +1257,10 @@ const useArrestViewModel = () => {
     if (shockCountDose1 === null) return false;
     return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt;
   }, [amiodaroneCount, shockCount, hideAmiodaronePrompt]);
+
+  // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
+  const shouldShowLidocaineReminder =
+    antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine && lidocaineCount === 1 && shockCount >= 5 && !hideAmiodaronePrompt;
 
   const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
     // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
@@ -1307,6 +1316,7 @@ const useArrestViewModel = () => {
     if (isAdrenalineAvailable && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) current.add("adrenaline_due");
     if (shouldShowAmiodaroneFirstDosePrompt) current.add("consider_amiodarone");
     if (shouldShowAmiodaroneReminder) current.add("consider_amiodarone_second");
+    if (shouldShowLidocaineReminder) current.add("consider_lidocaine_second");
 
     const enabled: Record<VoicePrompt, boolean> = {
       rhythm_check_due: promptRhythmCheck,
@@ -1315,6 +1325,7 @@ const useArrestViewModel = () => {
       consider_adrenaline: promptAdrenaline,
       consider_amiodarone: promptAntiarrhythmic,
       consider_amiodarone_second: promptAntiarrhythmic,
+      consider_lidocaine_second: promptAntiarrhythmic,
     };
     // Only announce prompts that have just appeared, in priority order.
     if (voicePromptsEnabled) {
@@ -1335,6 +1346,7 @@ const useArrestViewModel = () => {
     timeUntilAdrenaline,
     shouldShowAmiodaroneFirstDosePrompt,
     shouldShowAmiodaroneReminder,
+    shouldShowLidocaineReminder,
     voicePromptsEnabled,
     voicePromptsToneOnly,
     rhythmCheckWarning,
@@ -1783,10 +1795,12 @@ const useArrestViewModel = () => {
   };
 
   const logEtco2 = (value: string) => {
+    // Some keyboards produce a comma as the decimal separator.
+    const reading = Number(value.replace(",", "."));
+    if (!value || isNaN(reading) || reading <= 0) return;
     saveUndoState();
-    if (value && !isNaN(Number(value)) && Number(value) > 0) {
-      logEvent(`ETCO2: ${value} mmHg`, EventType.Etco2);
-    }
+    const formatted = etco2Unit === "kPa" ? reading.toFixed(1) : String(Math.round(reading));
+    logEvent(`ETCO2: ${formatted} ${etco2Unit}`, EventType.Etco2);
   };
 
   const achieveROSC = () => {
@@ -1876,6 +1890,18 @@ const useArrestViewModel = () => {
     );
     logEvent(`Hypothermia status set to: ${status}`, EventType.Cause);
   };
+
+  // RCUK 2025: consider IO if IV access isn't achieved within two attempts.
+  // Counts the iOS wording too, since transferred sessions can contain either.
+  const failedIVAttempts = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          (e.message.startsWith("Vascular Access (IV)") && e.message.endsWith("Failed")) ||
+          (e.message.startsWith("IV Access") && e.message.endsWith("- Unsuccessful")),
+      ).length,
+    [events],
+  );
 
   // Dynamically count lidocaine from events (fixes iOS parity issue)
   const dynamicLidocaineCount = useMemo(() => {
@@ -2672,6 +2698,8 @@ ${[...events]
     isRhythmCheckDue,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
+    failedIVAttempts,
     canUndo,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
@@ -3264,8 +3292,13 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
 // NEW: Vascular Access Modal (Log IV/IO)
 // ============================================================================
 const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const { logVascularAccess } = useArrest();
+  const { logVascularAccess, failedIVAttempts } = useArrest();
   const [accessType, setAccessType] = useState<"IV" | "IO">("IV");
+
+  // RCUK 2025: after two failed IV attempts, default to IO.
+  useEffect(() => {
+    if (isOpen) setAccessType(failedIVAttempts >= 2 ? "IO" : "IV");
+  }, [isOpen, failedIVAttempts]);
   const [location, setLocation] = useState("");
   const [gauge, setGauge] = useState("");
   const [successful, setSuccessful] = useState(true);
@@ -3281,7 +3314,13 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Log Vascular Access">
       <div className="space-y-4">
-        <h3 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Access Details</h3>
+        {failedIVAttempts >= 2 && (
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-tone-tint text-tone-on-tint text-sm">
+            <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+            <span>{failedIVAttempts} IV attempts unsuccessful. Consider IO access (RCUK 2025).</span>
+          </div>
+        )}
+        <h3 className="text-tone-accent font-semibold text-sm">Access Details</h3>
         <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
           {/* IV/IO Toggle */}
           <div className="flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
@@ -3836,7 +3875,19 @@ const OtherDrugsModal: React.FC<{
 
 const Etco2ModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { logEtco2 } = useArrest();
+  const { etco2Unit, setEtco2Unit } = useSettings();
   const [value, setValue] = useState("");
+
+  const reading = Number(value.replace(",", "."));
+  const [min, max] = etco2Unit === "kPa" ? [0.1, 20] : [1, 150];
+  const isValid = value !== "" && !isNaN(reading) && reading >= min && reading <= max;
+  // A typical mmHg reading entered while set to kPa is the most likely slip, so name it.
+  const validationMessage =
+    value === "" || isValid
+      ? null
+      : etco2Unit === "kPa" && reading > 20
+        ? "That looks like mmHg. Switch the unit above."
+        : `Enter a value between ${min} and ${max} ${etco2Unit}.`;
 
   const onConfirm = () => {
     logEtco2(value);
@@ -3847,22 +3898,31 @@ const Etco2ModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Log ETCO2 Value">
       <div className="flex flex-col space-y-4">
-        <p className="text-center text-gray-600 dark:text-gray-400">Enter the current end-tidal CO2 reading in mmHg.</p>
+        <SegmentedSetting
+          label="Unit"
+          value={etco2Unit}
+          options={[
+            { value: "kPa", label: "kPa" },
+            { value: "mmHg", label: "mmHg" },
+          ]}
+          onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
+        />
         <input
-          type="number"
+          type="text"
+          inputMode="decimal"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="e.g., 35"
+          placeholder={etco2Unit === "kPa" ? "e.g., 4.5" : "e.g., 35"}
           autoFocus
-          className="text-center text-2xl font-bold p-3 border-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="text-center text-2xl font-bold p-3 border-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-tone-accent"
         />
+        {validationMessage && <p className="text-sm text-center text-tone-danger">{validationMessage}</p>}
         <ActionButton
           title="Log Value"
           icon={<Gauge size={18} />}
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={onConfirm}
-          disabled={!value || isNaN(Number(value))}
+          disabled={!isValid}
         />
       </div>
     </Modal>
@@ -4618,6 +4678,7 @@ const ActiveArrestContentView: React.FC<{
     shouldShowAdrenalinePrompt,
     shouldShowAmiodaroneFirstDosePrompt,
     shouldShowAmiodaroneReminder,
+    shouldShowLidocaineReminder,
     events,
     reversibleCauses,
     isTimerPaused,
@@ -4669,6 +4730,9 @@ const ActiveArrestContentView: React.FC<{
       )}
       {shouldShowAmiodaroneReminder && (
         <AmiodaroneReminderView onClick={props.onLogAmiodarone} onDismiss={() => setHideAmiodaronePrompt(true)} />
+      )}
+      {shouldShowLidocaineReminder && (
+        <LidocaineReminderView onClick={props.onLogLidocaine} onDismiss={() => setHideAmiodaronePrompt(true)} />
       )}
 
       <ActionGridView {...props} />
@@ -4888,6 +4952,7 @@ const ActionGridView: React.FC<{
     isRhythmCheckDue,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
   } = useArrest();
 
   // Green success flash states
@@ -4989,6 +5054,7 @@ const ActionGridView: React.FC<{
           <ActionButton
             title="Lidocaine"
             tone="standard"
+            highlight={shouldShowLidocaineReminder ? "drugDue" : undefined}
             icon={<Syringe size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -5089,6 +5155,29 @@ const AmiodaroneReminderView: React.FC<{ onClick?: () => void; onDismiss?: () =>
     >
       <Syringe size={20} />
       <span>Consider 2nd Amiodarone - Tap to Log</span>
+    </button>
+    {onDismiss && (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDismiss();
+        }}
+        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
+      >
+        ✕
+      </button>
+    )}
+  </div>
+);
+
+const LidocaineReminderView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
+  <div className="relative">
+    <button
+      onClick={onClick}
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
+    >
+      <Syringe size={20} />
+      <span>Consider 2nd Lidocaine - Tap to Log</span>
     </button>
     {onDismiss && (
       <button
@@ -6118,6 +6207,8 @@ const SettingsView: React.FC = () => {
     setPromptAdrenaline,
     promptAntiarrhythmic,
     setPromptAntiarrhythmic,
+    etco2Unit,
+    setEtco2Unit,
   } = useSettings();
   const { user, isAnonymous, db } = useFirebase();
 
@@ -6270,13 +6361,27 @@ const SettingsView: React.FC = () => {
                 description="Consider adrenaline, and when a repeat dose is due."
               />
               <SettingToggle
-                label="Amiodarone Reminders"
+                label="Amiodarone / Lidocaine Reminders"
                 enabled={promptAntiarrhythmic}
                 onChange={setPromptAntiarrhythmic}
                 description="After the third and fifth shocks."
               />
             </>
           )}
+        </div>
+
+        {/* Capnography */}
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Capnography</h3>
+          <SegmentedSetting
+            label="ETCO2 Unit"
+            value={etco2Unit}
+            options={[
+              { value: "kPa", label: "kPa" },
+              { value: "mmHg", label: "mmHg" },
+            ]}
+            onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
+          />
         </div>
 
         {/* Medications */}

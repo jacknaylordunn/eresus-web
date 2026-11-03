@@ -7,6 +7,7 @@ export const VOICE_PROMPTS = [
   "consider_adrenaline",
   "consider_amiodarone",
   "consider_amiodarone_second",
+  "consider_lidocaine_second",
 ] as const;
 
 export type VoicePrompt = (typeof VOICE_PROMPTS)[number];
@@ -18,6 +19,7 @@ export const VOICE_PROMPT_TEXT: Record<VoicePrompt, string> = {
   consider_adrenaline: "Consider adrenaline.",
   consider_amiodarone: "Consider amiodarone.",
   consider_amiodarone_second: "Consider second dose of amiodarone.",
+  consider_lidocaine_second: "Consider second dose of lidocaine.",
 };
 
 type Listener = (mutedForCase: boolean) => void;
