@@ -92,6 +92,9 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
+import VoiceCommandButton from "./VoiceCommandButton";
+import { matchVoiceCommand, type VoiceCommand } from "@/lib/voiceCommands";
+import { checkVoiceCommandAvailability, installVoiceCommandLanguage } from "@/utils/voiceCommandListener";
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
@@ -302,6 +305,7 @@ const useAppSettings = () => {
   const [promptAdrenaline, setPromptAdrenaline] = useAppStorage("promptAdrenaline", true);
   const [promptAntiarrhythmic, setPromptAntiarrhythmic] = useAppStorage("promptAntiarrhythmic", true);
   const [etco2Unit, setEtco2Unit] = useAppStorage<"kPa" | "mmHg">("etco2Unit", "kPa");
+  const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useAppStorage("voiceCommandsEnabled", false);
   const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
@@ -413,6 +417,8 @@ const useAppSettings = () => {
     setPromptAntiarrhythmic,
     etco2Unit,
     setEtco2Unit,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
     researchModeEnabled,
     setResearchModeEnabled,
     hasRespondedToResearchTerms,
@@ -1502,8 +1508,18 @@ const useArrestViewModel = () => {
     }
   };
 
+  // The first event an action logs is marked "(voice)" so the record shows how it was entered.
+  const nextEventFromVoiceRef = useRef(false);
+  const performFromVoice = (action: () => void) => {
+    nextEventFromVoiceRef.current = true;
+    action();
+    nextEventFromVoiceRef.current = false;
+  };
+
   const logEvent = (message: string, type: EventType) => {
-    const newEvent: Event = { timestamp: totalArrestTime, message, type };
+    const fromVoice = nextEventFromVoiceRef.current;
+    nextEventFromVoiceRef.current = false;
+    const newEvent: Event = { timestamp: totalArrestTime, message: fromVoice ? `${message} (voice)` : message, type };
     setEvents((prevEvents) => [newEvent, ...prevEvents]);
     HapticManager.impact();
   };
@@ -2599,6 +2615,7 @@ ${[...events]
     setHideAmiodaronePrompt,
     deliverStackedShocks,
     stackedShockExtra,
+    performFromVoice,
     // v1.2 transfer
     hostSessionTransfer,
     receiveSessionTransfer,
@@ -4479,6 +4496,7 @@ const ActiveArrestContentView: React.FC<{
   onLogAmiodarone: () => void;
   onLogLidocaine: () => void;
   onShowTOR: () => void;
+  onVoiceTranscript?: (transcript: string) => void;
 }> = (props) => {
   const {
     cprTime,
@@ -4494,7 +4512,7 @@ const ActiveArrestContentView: React.FC<{
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
   } = useArrest();
-  const { voicePromptsEnabled } = useSettings();
+  const { voicePromptsEnabled, voiceCommandsEnabled } = useSettings();
   const { metronomeBPM } = useSettings();
   const [isMetronomeOn, setIsMetronomeOn] = useState(metronomeService.isPlaying);
 
@@ -4524,6 +4542,11 @@ const ActiveArrestContentView: React.FC<{
           <MetronomeIcon size={24} />
         </button>
         <VoicePromptButton enabled={voicePromptsEnabled} className="bottom-4 left-4" />
+        <VoiceCommandButton
+          enabled={voiceCommandsEnabled}
+          onTranscript={(transcript) => props.onVoiceTranscript?.(transcript)}
+          className="top-0 right-2"
+        />
       </div>
 
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
@@ -5311,6 +5334,79 @@ const ArrestView: React.FC<{
     handleLogDrug(drug);
   };
 
+  // Voice commands
+  const [voiceFeedback, setVoiceFeedback] = useState<{ id: number; message: string; succeeded: boolean; canUndo: boolean } | null>(null);
+
+  const showVoiceFeedback = (message: string, succeeded: boolean, canUndo: boolean) => {
+    const id = Date.now();
+    setVoiceFeedback({ id, message, succeeded, canUndo });
+    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), 5000);
+  };
+
+  // Each command only acts when it makes sense at this point in the algorithm, as a tap would (matches iOS).
+  const performVoiceCommand = (command: VoiceCommand): [string, boolean] => {
+    const vm = viewModel;
+    if (command === "undo") {
+      if (!vm.canUndo) return ["Nothing to undo.", false];
+      vm.undo();
+      return ["Last action undone.", true];
+    }
+    if (vm.arrestState !== ArrestState.Active || vm.isTimerPaused) {
+      return ["Voice commands work during an active adult arrest.", false];
+    }
+    switch (command) {
+      case "adrenaline":
+        if (!vm.isAdrenalineAvailable) return ["Adrenaline is withheld (severe hypothermia).", false];
+        vm.performFromVoice(() => handleLogDrug({ type: "adrenaline" } as DrugToLog));
+        return ["Adrenaline logged.", true];
+      case "amiodarone":
+        if (!vm.isAmiodaroneAvailable) return ["Amiodarone isn't available now.", false];
+        vm.performFromVoice(() => handleLogDrug({ type: "amiodarone" } as DrugToLog));
+        return ["Amiodarone logged.", true];
+      case "lidocaine":
+        if (!vm.isLidocaineAvailable) return ["Lidocaine isn't available now.", false];
+        vm.performFromVoice(() => handleLogDrug({ type: "lidocaine" } as DrugToLog));
+        return ["Lidocaine logged.", true];
+      case "analyse":
+        if (vm.uiState !== UIState.Default) return ["A rhythm check is already in progress.", false];
+        vm.performFromVoice(vm.analyseRhythm);
+        return ["Rhythm check started.", true];
+      case "vf":
+      case "vt":
+      case "pea":
+      case "asystole": {
+        const [name, shockable] =
+          command === "vf" ? ["VF", true] : command === "vt" ? ["VT", true] : command === "pea" ? ["PEA", false] : ["Asystole", false];
+        if (vm.uiState === UIState.ShockAdvised) return ["A shock is already advised.", false];
+        vm.performFromVoice(() => {
+          if (vm.uiState === UIState.Default) vm.analyseRhythm();
+          vm.logRhythm(name as string, shockable as boolean);
+        });
+        return [`${name} logged.`, true];
+      }
+      case "shock":
+        if (vm.uiState !== UIState.ShockAdvised) return ["Log a shockable rhythm first.", false];
+        vm.performFromVoice(vm.deliverShock);
+        return [`Shock ${vm.shockCount + 1} logged.`, true];
+      case "rosc":
+        vm.performFromVoice(vm.achieveROSC);
+        return ["ROSC logged.", true];
+    }
+  };
+
+  const handleVoiceTranscript = (transcript: string) => {
+    const command = matchVoiceCommand(transcript);
+    const heard = transcript ? `Heard “${transcript}”.` : "Nothing heard.";
+    if (!command) {
+      navigator.vibrate?.([30, 50, 30]);
+      showVoiceFeedback(`${heard} No command recognised; nothing logged.`, false, false);
+      return;
+    }
+    const [message, succeeded] = performVoiceCommand(command);
+    navigator.vibrate?.(succeeded ? 20 : [30, 50, 30]);
+    showVoiceFeedback(`${heard} ${message}`, succeeded, succeeded && command !== "undo");
+  };
+
   return (
     <div className="flex flex-col h-full">
       <HeaderView />
@@ -5331,6 +5427,7 @@ const ArrestView: React.FC<{
             onLogAmiodarone={() => handleLogDrug({ type: "amiodarone" })}
             onLogLidocaine={() => handleLogDrug({ type: "lidocaine" })}
             onShowTOR={() => setShowTORModal(true)}
+            onVoiceTranscript={handleVoiceTranscript}
           />
         )}
         {viewModel.arrestState === ArrestState.Rosc && (
@@ -5339,6 +5436,27 @@ const ArrestView: React.FC<{
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
       </div>
 
+      {voiceFeedback && viewModel.arrestState !== ArrestState.Pending && (
+        // Shows what was heard and what it did, with Undo one tap away.
+        <div
+          className={`mx-3 mb-2 flex items-center gap-3 p-3 rounded-xl shadow text-sm ${
+            voiceFeedback.succeeded ? "bg-tone-tint text-tone-on-tint" : "bg-tone-alert text-tone-on-alert"
+          }`}
+        >
+          <span className="flex-grow">{voiceFeedback.message}</span>
+          {voiceFeedback.canUndo && (
+            <button
+              onClick={() => {
+                viewModel.undo();
+                setVoiceFeedback(null);
+              }}
+              className="px-3 py-1.5 rounded-lg font-semibold bg-tone-accent text-tone-on-accent"
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      )}
       {viewModel.arrestState !== ArrestState.Pending && (
         <BottomControlsView
           onShowSummary={() => setShowSummaryModal(true)}
@@ -6033,7 +6151,32 @@ const SettingsView: React.FC = () => {
     setPromptAntiarrhythmic,
     etco2Unit,
     setEtco2Unit,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
   } = useSettings();
+  const [voiceCommandsMessage, setVoiceCommandsMessage] = useState<string | null>(null);
+
+  // Enabling checks for on-device recognition and downloads the language pack if needed (needs a tap).
+  const toggleVoiceCommands = async (enable: boolean) => {
+    if (!enable) {
+      setVoiceCommandsEnabled(false);
+      setVoiceCommandsMessage(null);
+      return;
+    }
+    let status = await checkVoiceCommandAvailability();
+    if (status === "downloadable" || status === "downloading") {
+      setVoiceCommandsMessage("Downloading English (UK) speech recognition to this device…");
+      status = (await installVoiceCommandLanguage()) ? "available" : await checkVoiceCommandAvailability();
+    }
+    if (status === "available") {
+      setVoiceCommandsEnabled(true);
+      setVoiceCommandsMessage(null);
+    } else {
+      setVoiceCommandsMessage(
+        "This browser can't recognise speech on the device, so voice commands aren't available. They need a recent version of Google Chrome, or the eResus iPhone app.",
+      );
+    }
+  };
   const { user, isAnonymous, db } = useFirebase();
 
   const [availableOrgs, setAvailableOrgs] = useState<string[]>(["Independent / None"]);
@@ -6192,6 +6335,18 @@ const SettingsView: React.FC = () => {
               />
             </>
           )}
+        </div>
+
+        {/* Voice Commands */}
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Voice Commands (Experimental)</h3>
+          <SettingToggle
+            label="Voice Commands"
+            enabled={voiceCommandsEnabled}
+            onChange={toggleVoiceCommands}
+            description="Hold the microphone button on the arrest screen and say a command: adrenaline, amiodarone, lidocaine, analyse rhythm, VF, VT, PEA, asystole, shock, ROSC or undo. Speech is recognised on this device only and nothing is sent anywhere. Check each entry; anything logged by voice is marked (voice) and can be undone."
+          />
+          {voiceCommandsMessage && <p className="text-sm text-tone-danger">{voiceCommandsMessage}</p>}
         </div>
 
         {/* Capnography */}
