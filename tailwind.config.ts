@@ -87,6 +87,10 @@ export default {
           "on-danger": "rgb(var(--tone-on-danger) / <alpha-value>)",
           "danger-tint": "rgb(var(--tone-danger-tint) / <alpha-value>)",
           "on-danger-tint": "rgb(var(--tone-on-danger-tint) / <alpha-value>)",
+          positive: "rgb(var(--tone-positive) / <alpha-value>)",
+          "on-positive": "rgb(var(--tone-on-positive) / <alpha-value>)",
+          slate: "rgb(var(--tone-slate) / <alpha-value>)",
+          "on-slate": "rgb(var(--tone-on-slate) / <alpha-value>)",
         },
       },
       borderRadius: {

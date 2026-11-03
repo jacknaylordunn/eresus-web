@@ -4070,15 +4070,26 @@ const DosageEntryModal: React.FC<{
 // REUSABLE UI COMPONENTS
 //============================================================================
 
-// What a button is for, not what colour it is. Reminders override any tone with the alert colour.
-// Matches ButtonTone in the iOS app (Theme.swift).
-type ButtonTone = "standard" | "primary" | "danger" | "dangerTint";
+// What a button is for, not what colour it is. A highlight, when present, overrides the tone.
+// Matches ButtonTone and ButtonHighlight in the iOS app (Theme.swift).
+type ButtonTone = "standard" | "primary" | "danger" | "dangerTint" | "positive" | "slate";
 
 const TONE_CLASSES: Record<ButtonTone, string> = {
   standard: "bg-tone-tint text-tone-on-tint",
   primary: "bg-tone-accent text-tone-on-accent",
   danger: "bg-tone-danger text-tone-on-danger",
   dangerTint: "bg-tone-danger-tint text-tone-on-danger-tint",
+  positive: "bg-tone-positive text-tone-on-positive",
+  slate: "bg-tone-slate text-tone-on-slate",
+};
+
+// Why a button is pulsing. Kept to two so the colour alone tells you what kind of moment it is:
+// handsOff = pause compressions (rhythm check due, shock advised), drugDue = a drug reminder is showing.
+type ButtonHighlight = "handsOff" | "drugDue";
+
+const HIGHLIGHT_CLASSES: Record<ButtonHighlight, string> = {
+  handsOff: "bg-tone-danger text-tone-on-danger halo-danger",
+  drugDue: "bg-tone-alert text-tone-on-alert halo-alert",
 };
 
 // Older call sites still pass colour classes; read their intent so they pick up the calm palette.
@@ -4092,7 +4103,7 @@ interface ActionButtonProps {
   title: string;
   icon?: React.ReactNode;
   tone?: ButtonTone;
-  highlighted?: boolean;
+  highlight?: ButtonHighlight;
   backgroundColor?: string;
   foregroundColor?: string;
   height?: string;
@@ -4106,7 +4117,7 @@ const ActionButton: React.FC<ActionButtonProps> = ({
   title,
   icon,
   tone,
-  highlighted = false,
+  highlight,
   backgroundColor,
   height = "h-14",
   fontSize = "text-base",
@@ -4115,9 +4126,7 @@ const ActionButton: React.FC<ActionButtonProps> = ({
   className = "",
 }) => {
   const [flash, setFlash] = useState(false);
-  const colours = highlighted
-    ? "bg-tone-alert text-tone-on-alert ring-4 ring-tone-alert/40 animate-pulse"
-    : TONE_CLASSES[tone ?? toneFromLegacyColour(backgroundColor)];
+  const colours = highlight ? HIGHLIGHT_CLASSES[highlight] : TONE_CLASSES[tone ?? toneFromLegacyColour(backgroundColor)];
 
   return (
     <button
@@ -4885,7 +4894,7 @@ const ActionGridView: React.FC<{
         <ActionButton
           title="Analyse Rhythm"
           tone="primary"
-          highlighted={isRhythmCheckDue}
+          highlight={isRhythmCheckDue ? "handsOff" : undefined}
           icon={<Activity size={20} />}
           height="h-16"
           fontSize="text-lg"
@@ -4898,28 +4907,28 @@ const ActionGridView: React.FC<{
           <div className="grid grid-cols-2 gap-3">
             <ActionButton
               title="VF"
-              tone="dangerTint"
+              tone="danger"
               onClick={() => logRhythm("VF", true)}
             />
             <ActionButton
               title="VT"
-              tone="dangerTint"
+              tone="danger"
               onClick={() => logRhythm("VT", true)}
             />
             <ActionButton
               title="PEA"
-              tone="standard"
+              tone="slate"
               onClick={() => logRhythm("PEA", false)}
             />
             <ActionButton
               title="Asystole"
-              tone="standard"
+              tone="slate"
               onClick={() => logRhythm("Asystole", false)}
             />
           </div>
           <ActionButton
             title="ROSC"
-            tone="standard"
+            tone="positive"
             icon={<Heart size={18} />}
             onClick={achieveROSC}
           />
@@ -4929,6 +4938,7 @@ const ActionGridView: React.FC<{
         <ActionButton
           title="Deliver Shock"
           tone="danger"
+          highlight="handsOff"
           icon={<Bolt size={20} />}
           height="h-16"
           fontSize="text-lg"
@@ -4943,7 +4953,7 @@ const ActionGridView: React.FC<{
           <ActionButton
             title="Adrenaline"
             tone="standard"
-            highlighted={isAdrenalineHighlighted}
+            highlight={isAdrenalineHighlighted ? "drugDue" : undefined}
             icon={<Syringe size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -4953,7 +4963,7 @@ const ActionGridView: React.FC<{
           <ActionButton
             title="Amiodarone"
             tone="standard"
-            highlighted={isAmiodaroneHighlighted}
+            highlight={isAmiodaroneHighlighted ? "drugDue" : undefined}
             icon={<Syringe size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -5018,7 +5028,7 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="ROSC"
-            tone="standard"
+            tone="positive"
             icon={<HeartPulse size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -5026,7 +5036,7 @@ const ActionGridView: React.FC<{
           />
           <ActionButton
             title="TOR"
-            tone="dangerTint"
+            tone="danger"
             icon={<XSquare size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -5048,7 +5058,7 @@ const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemainin
 const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
   <button
     onClick={onClick}
-    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
   >
     <AlertTriangle size={20} />
     <span>Adrenaline Due - Tap to Log</span>
@@ -5059,7 +5069,7 @@ const AmiodaroneReminderView: React.FC<{ onClick?: () => void; onDismiss?: () =>
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider 2nd Amiodarone - Tap to Log</span>
@@ -5082,7 +5092,7 @@ const AdrenalinePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => v
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider Adrenaline - Tap to Log</span>
@@ -5105,7 +5115,7 @@ const AmiodaronePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => v
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider Amiodarone - Tap to Log</span>

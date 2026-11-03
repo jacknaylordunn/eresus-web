@@ -4,7 +4,8 @@
 
 @layer base {
   :root {
-    /* eResus palette: one calm sage tone; amber means act now, red means shock or stop.
+    /* eResus palette: one calm sage tone. Red = hands off (rhythm check, shock, stop),
+       amber = a drug is due, green = good outcome, slate = a firm choice.
        Values must match the iOS app (Theme.swift). */
     --tone-tint: 230 239 233;
     --tone-on-tint: 29 58 43;
@@ -16,6 +17,10 @@
     --tone-on-danger: 255 255 255;
     --tone-danger-tint: 249 227 224;
     --tone-on-danger-tint: 156 39 31;
+    --tone-positive: 27 127 69;
+    --tone-on-positive: 255 255 255;
+    --tone-slate: 75 91 82;
+    --tone-on-slate: 255 255 255;
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
@@ -77,6 +82,10 @@
     --tone-on-danger: 255 255 255;
     --tone-danger-tint: 59 31 28;
     --tone-on-danger-tint: 243 167 158;
+    --tone-positive: 36 137 79;
+    --tone-on-positive: 255 255 255;
+    --tone-slate: 90 107 97;
+    --tone-on-slate: 255 255 255;
     --background: 222 47% 11%;
     --foreground: 210 40% 98%;
     --card: 217 33% 17%;
@@ -129,5 +138,38 @@
   body, html, #root {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+  }
+}
+
+/* Highlighted buttons keep full colour and pulse a glow around them instead of fading,
+   so a critical button never drops in contrast mid-pulse. */
+@keyframes eresus-halo-danger {
+  0% { box-shadow: 0 0 0 0 rgb(var(--tone-danger) / 0.6); }
+  70% { box-shadow: 0 0 0 12px rgb(var(--tone-danger) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--tone-danger) / 0); }
+}
+
+@keyframes eresus-halo-alert {
+  0% { box-shadow: 0 0 0 0 rgb(var(--tone-alert) / 0.7); }
+  70% { box-shadow: 0 0 0 12px rgb(var(--tone-alert) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--tone-alert) / 0); }
+}
+
+.halo-danger {
+  animation: eresus-halo-danger 1.4s ease-out infinite;
+}
+
+.halo-alert {
+  animation: eresus-halo-alert 1.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .halo-danger {
+    animation: none;
+    box-shadow: 0 0 0 4px rgb(var(--tone-danger) / 0.45);
+  }
+  .halo-alert {
+    animation: none;
+    box-shadow: 0 0 0 4px rgb(var(--tone-alert) / 0.55);
   }
 }
