@@ -92,6 +92,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
+import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -247,6 +248,7 @@ export interface UndoState {
   vodTime?: number | null;
   vodChecklist?: ChecklistItem[];
   cprCycleStartTime?: number;
+  stackedShockExtra?: number;
 }
 
 export interface PDFIdentifiable {
@@ -1174,6 +1176,9 @@ const useArrestViewModel = () => {
   const [events, setEvents] = useState<Event[]>(s?.events ?? []);
 
   const [shockCount, setShockCount] = useState(s?.shockCount ?? 0);
+  // 2 when the first shocks were three stacked shocks: RCUK counts them as one shock for drug timing.
+  const [stackedShockExtra, setStackedShockExtra] = useState<number>(s?.stackedShockExtra ?? 0);
+  const drugTimingShockCount = shockCount - stackedShockExtra;
   const [adrenalineCount, setAdrenalineCount] = useState(s?.adrenalineCount ?? 0);
   const [amiodaroneCount, setAmiodaroneCount] = useState(s?.amiodaroneCount ?? 0);
   const [lidocaineCount, setLidocaineCount] = useState(s?.lidocaineCount ?? 0);
@@ -1260,29 +1265,32 @@ const useArrestViewModel = () => {
 
   // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
   const shouldShowLidocaineReminder =
-    antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine && lidocaineCount === 1 && shockCount >= 5 && !hideAmiodaronePrompt;
+    antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine &&
+    lidocaineCount === 1 &&
+    drugTimingShockCount >= 5 &&
+    !hideAmiodaronePrompt;
 
   const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
     // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
     return (
-      shockCount >= 3 &&
+      drugTimingShockCount >= 3 &&
       amiodaroneCount === 0 &&
       !hideAmiodaronePrompt &&
       antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine &&
       isAdrenalineAvailable
     );
-  }, [shockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable]);
+  }, [drugTimingShockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable]);
 
   const shouldShowAdrenalinePrompt = useMemo(() => {
     if (!isAdrenalineAvailable || hideAdrenalinePrompt) return false;
     if (timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) return false;
     if (adrenalineCount === 0) {
-      if (shockCount >= 3) return true;
+      if (drugTimingShockCount >= 3) return true;
       if (lastRhythmNonShockable) return true;
     }
     return false;
   }, [
-    shockCount,
+    drugTimingShockCount,
     adrenalineCount,
     isAdrenalineAvailable,
     hideAdrenalinePrompt,
@@ -1367,6 +1375,7 @@ const useArrestViewModel = () => {
       uiState,
       events,
       shockCount,
+      stackedShockExtra,
       adrenalineCount,
       amiodaroneCount,
       lidocaineCount,
@@ -1399,6 +1408,7 @@ const useArrestViewModel = () => {
     uiState,
     events,
     shockCount,
+    stackedShockExtra,
     adrenalineCount,
     amiodaroneCount,
     lidocaineCount,
@@ -1427,6 +1437,7 @@ const useArrestViewModel = () => {
     setUiState(s.uiState ?? UIState.Default);
     setEvents(s.events ?? []);
     setShockCount(s.shockCount ?? 0);
+    setStackedShockExtra(s.stackedShockExtra ?? 0);
     setAdrenalineCount(s.adrenalineCount ?? 0);
     setAmiodaroneCount(s.amiodaroneCount ?? 0);
     setLidocaineCount(s.lidocaineCount ?? 0);
@@ -1527,6 +1538,7 @@ const useArrestViewModel = () => {
       vodTime,
       vodChecklist,
       cprCycleStartTime: cprCycleStartTimeRef.current,
+      stackedShockExtra,
     };
     setUndoHistory((prev) => [...prev, currentState]);
   };
@@ -1542,6 +1554,7 @@ const useArrestViewModel = () => {
     setTimeOffset(lastState.timeOffset);
     setEvents(lastState.events);
     setShockCount(lastState.shockCount);
+    setStackedShockExtra(lastState.stackedShockExtra ?? 0);
     setAdrenalineCount(lastState.adrenalineCount);
     setAmiodaroneCount(lastState.amiodaroneCount);
     setLidocaineCount(lastState.lidocaineCount);
@@ -1721,6 +1734,19 @@ const useArrestViewModel = () => {
     setHideAdrenalinePrompt(false);
     setHideAmiodaronePrompt(false);
     logEvent(`Shock ${shockCount + 1} Delivered`, EventType.Shock);
+    resumeCPR();
+  };
+
+  // RCUK 2025: for a witnessed, monitored VF/pVT arrest with a defibrillator immediately available,
+  // up to three stacked shocks may be given. They count as the first shock for drug timing.
+  const deliverStackedShocks = () => {
+    if (shockCount !== 0) return;
+    saveUndoState();
+    setShockCount(3);
+    setStackedShockExtra(2);
+    setHideAdrenalinePrompt(false);
+    setHideAmiodaronePrompt(false);
+    logEvent("3 Stacked Shocks Delivered (count as one for drug timing)", EventType.Shock);
     resumeCPR();
   };
 
@@ -2118,6 +2144,7 @@ ${[...events]
     setUiState(UIState.Default);
     setEvents([]);
     setShockCount(0);
+    setStackedShockExtra(0);
     setAdrenalineCount(0);
     setAmiodaroneCount(0);
     setLidocaineCount(0);
@@ -2294,156 +2321,42 @@ ${[...events]
   }, [syncOfflineLogs]);
 
   // QR Session Transfer
-  const generateTransferState = () => {
-    return {
-      arrestState,
-      masterTime,
-      cprTime,
-      timeOffset,
-      events,
-      shockCount,
-      adrenalineCount,
-      amiodaroneCount,
-      lidocaineCount,
-      airwayPlaced,
-      antiarrhythmicGiven,
-      reversibleCauses,
-      postROSCTasks,
-      postMortemTasks,
-      patientAgeCategory,
-      uiState,
-      hideAdrenalinePrompt,
-      hideAmiodaronePrompt,
-      lastRhythmNonShockable,
-      airwayAdjunct,
-      roscTime,
-      isTimerPaused,
-      startTime: startTimeRef.current?.toISOString() ?? null,
-      cprCycleStartTime: cprCycleStartTimeRef.current,
-      lastAdrenalineTime: lastAdrenalineTimeRef.current,
-      shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
-      initialRhythm,
-      patientAgeStr,
-      patientGenderStr,
-      torTime,
-      vodTime,
-      vodChecklist,
-      vodConfirmed,
-    };
-  };
-
-  const bytesToUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
-
-  const utf8ToBase64 = (str: string): string => {
-    const bytes = new TextEncoder().encode(str);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  };
-
-  // UTF-8 safe base64 decoder for legacy string transfers
-  const base64ToUtf8 = (str: string): string => {
-    const binary = atob(str);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytesToUtf8(bytes);
-  };
-
-  const isUUID = (value: unknown): value is string =>
-    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-
-  const deterministicUUID = (seed: string): string => {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = Math.imul(31, hash) + seed.charCodeAt(i) | 0;
-    }
-    const hex = Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8);
-    return `${hex}-0000-4000-8000-000000000000`;
-  };
-
-  const normalizeChecklistForiOS = (items: any[] = []): any[] =>
-    items.map((item, index) => ({
-      id: isUUID(item.id) ? item.id : deterministicUUID(`${item.name ?? "item"}-${item.id ?? index}`),
-      name: item.name ?? "",
-      isCompleted: item.isCompleted ?? false,
-      hypothermiaStatus: item.hypothermiaStatus ?? "none",
-    }));
-
-  const normalizeEventTypeForiOS = (type: string): string => {
-    const supported = new Set(["status", "cpr", "shock", "analysis", "rhythm", "drug", "airway", "etco2", "cause"]);
-    return supported.has(type) ? type : "status";
-  };
-
-  const normalizeEventsForiOS = (items: any[] = []): any[] =>
-    items.map((event, index) => ({
-      id: isUUID(event.id) ? event.id : (crypto.randomUUID?.() ?? deterministicUUID(`event-${index}-${event.timestamp ?? 0}`)),
-      timestamp: event.timestamp ?? 0,
-      message: event.message ?? "",
-      type: normalizeEventTypeForiOS(event.type ?? "status"),
-    }));
-
-  const convertToiOSTransferFormat = (state: any): Bytes => {
-    // iOS reads Firestore stateData as Swift Data, then JSONDecoder decodes UndoState.
-    // JSONEncoder encodes Date as Apple reference-date seconds and Data as base64.
-    const APPLE_EPOCH = Date.UTC(2001, 0, 1);
-    let iosStartTime: number | null = null;
-    if (state.startTime) {
-      const d = new Date(state.startTime);
-      iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
-    }
-
-    const eventsJson = JSON.stringify(normalizeEventsForiOS(state.events ?? []));
-    const eventsData = utf8ToBase64(eventsJson);
-
-    const iosUiState = typeof state.uiState === "string"
-      ? { [state.uiState]: {} }
-      : state.uiState ?? { default: {} };
-
-    const iosState: any = {
-      arrestState: state.arrestState ?? "ACTIVE",
-      arrestType: "GENERAL",
-      isPreterm: false,
-      nlsState: "initialAssessment",
-      masterTime: state.masterTime ?? 0,
-      cprTime: state.cprTime ?? 0,
-      timeOffset: state.timeOffset ?? 0,
-      nlsCycleDuration: 60,
-      isRhythmCheckDue: false,
-      eventsData,
-      shockCount: state.shockCount ?? 0,
-      adrenalineCount: state.adrenalineCount ?? 0,
-      amiodaroneCount: state.amiodaroneCount ?? 0,
-      lidocaineCount: state.lidocaineCount ?? 0,
-      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
-      antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
-      shockCountForAmiodarone1: state.shockCountForAmiodarone1 ?? null,
-      airwayPlaced: state.airwayPlaced ?? false,
-      reversibleCauses: normalizeChecklistForiOS(state.reversibleCauses ?? []),
-      postROSCTasks: normalizeChecklistForiOS(state.postROSCTasks ?? []),
-      postMortemTasks: normalizeChecklistForiOS(state.postMortemTasks ?? []),
-      nlsPretermTasks: [],
-      startTime: iosStartTime,
-      cprCycleStartTime: state.cprCycleStartTime ?? null,
-      uiState: iosUiState,
-      patientAgeCategory: state.patientAgeCategory ?? null,
-      hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
-      hideAmiodaronePrompt: state.hideAmiodaronePrompt ?? false,
-      lastRhythmNonShockable: state.lastRhythmNonShockable ?? false,
-      airwayAdjunct: state.airwayAdjunct ?? "unspecified",
-      roscTime: state.roscTime ?? null,
-      isTimerPaused: state.isTimerPaused ?? false,
-      pauseStartTime: null,
-      initialRhythm: state.initialRhythm ?? null,
-      patientAgeStr: state.patientAgeStr ?? "",
-      patientGenderStr: state.patientGenderStr ?? "",
-    };
-
-    return Bytes.fromUint8Array(new TextEncoder().encode(JSON.stringify(iosState)));
-  };
+  const generateTransferState = (): SessionSnapshot => ({
+    arrestState,
+    masterTime,
+    cprTime,
+    timeOffset,
+    events,
+    shockCount,
+    stackedShockExtra,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount,
+    airwayPlaced,
+    antiarrhythmicGiven,
+    reversibleCauses,
+    postROSCTasks,
+    postMortemTasks,
+    patientAgeCategory,
+    uiState,
+    hideAdrenalinePrompt,
+    hideAmiodaronePrompt,
+    lastRhythmNonShockable,
+    airwayAdjunct,
+    roscTime,
+    isTimerPaused,
+    startTime: startTimeRef.current,
+    cprCycleStartTime: cprCycleStartTimeRef.current,
+    lastAdrenalineTime: lastAdrenalineTimeRef.current,
+    shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
+    initialRhythm,
+    patientAgeStr,
+    patientGenderStr,
+    torTime,
+    vodTime,
+    vodChecklist,
+    vodConfirmed,
+  });
 
   const hostSessionTransfer = async (): Promise<string | null> => {
     try {
@@ -2455,8 +2368,8 @@ ${[...events]
         if (!(await getDoc(doc(db, "transfers", candidate))).exists()) transferId = candidate;
       }
       if (!transferId) return null;
-      // Write stateData as Firestore Bytes/Blob so iOS can read it as Swift Data
-      const encodedStateData = convertToiOSTransferFormat(state);
+      // Firestore Bytes, which iOS reads as Data. See docs/session-format.md.
+      const encodedStateData = Bytes.fromUint8Array(new TextEncoder().encode(encodeSession(state)));
       await setDoc(doc(db, "transfers", transferId), {
         stateData: encodedStateData,
         createdAt: serverTimestamp(),
@@ -2495,25 +2408,15 @@ ${[...events]
         return { success: false, error: "This transfer code has expired. Generate a new code and try again." };
       }
 
-      // stateData can be:
-      // - Firestore Bytes/Blob (current iOS-compatible format)
-      // - base64 string (legacy compatibility)
-      // - plain JSON string (older PWA transfers)
-      let rawStateData = data.stateData;
-      if (rawStateData instanceof Bytes) {
-        rawStateData = bytesToUtf8(rawStateData.toUint8Array());
-      } else if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
-        try {
-          rawStateData = base64ToUtf8(rawStateData);
-        } catch {
-          // Not valid base64, try parsing as-is
-        }
-      }
-      const state = JSON.parse(rawStateData);
+      // stateData is Bytes (current), or a JSON or base64 string from older builds.
+      const rawStateData = data.stateData;
+      const stateText =
+        rawStateData instanceof Bytes ? new TextDecoder().decode(rawStateData.toUint8Array()) : String(rawStateData);
+      const wire = parseStateData(stateText);
 
       // The web app has no newborn transfer support yet. Refuse rather than silently treating it as ALS,
       // and leave the code valid so it can still be received on an iPhone or iPad.
-      if (state.arrestType === "NEWBORN") {
+      if (wire.arrestType === "NEWBORN") {
         return {
           success: false,
           error:
@@ -2521,106 +2424,53 @@ ${[...events]
         };
       }
 
-      // --- Normalize iOS format to PWA format ---
+      const session = decodeSession(wire, cprCycleDuration);
 
-      // 1. startTime: iOS uses Apple reference date (seconds since Jan 1, 2001)
-      //    PWA uses ISO date string. Detect and convert.
-      const APPLE_EPOCH = Date.UTC(2001, 0, 1); // Jan 1 2001 in ms
-      let normalizedStartTime: Date | null = null;
-      if (state.startTime != null) {
-        if (typeof state.startTime === "number") {
-          // Apple reference date: convert to JS Date
-          normalizedStartTime = new Date(APPLE_EPOCH + state.startTime * 1000);
-        } else if (typeof state.startTime === "string") {
-          normalizedStartTime = new Date(state.startTime);
-        }
-      }
-
-      // 2. events: iOS base64-encodes as eventsData, PWA uses events array
-      let normalizedEvents: any[] = state.events ?? [];
-      if (!state.events && state.eventsData) {
-        try {
-          const decoded = base64ToUtf8(state.eventsData);
-          normalizedEvents = JSON.parse(decoded);
-        } catch {
-          console.warn("Failed to decode iOS eventsData");
-          normalizedEvents = [];
-        }
-      }
-
-      // 3. uiState: iOS uses object {"default":{}}, PWA uses string "default"
-      let normalizedUiState = state.uiState;
-      if (typeof state.uiState === "object" && state.uiState !== null) {
-        // Extract the key name from the iOS enum-style object
-        const keys = Object.keys(state.uiState);
-        if (keys.length > 0) {
-          normalizedUiState = keys[0]; // "default" | "analyzing" | "shockAdvised"
-        }
-      }
-
-      // 4. arrestState: iOS may use lowercase, normalize
-      const normalizedArrestState =
-        typeof state.arrestState === "string" ? state.arrestState.toUpperCase() : state.arrestState;
-
-      // Stop any existing timer first
       stopTimer();
+      startTimeRef.current = session.startTime;
+      cprCycleStartTimeRef.current = session.cprCycleStartTime;
+      lastAdrenalineTimeRef.current = session.lastAdrenalineTime;
+      shockCountForAmiodarone1Ref.current = session.shockCountForAmiodarone1;
 
-      // Set the start time ref FIRST so the timer can use it
-      if (normalizedStartTime) {
-        startTimeRef.current = normalizedStartTime;
-      }
-      if (typeof state.cprCycleStartTime === "number") {
-        cprCycleStartTimeRef.current = state.cprCycleStartTime;
-      } else {
-        // Older iOS builds don't send the cycle start, so work it back from the remaining cycle time.
-        cprCycleStartTimeRef.current =
-          (state.masterTime ?? 0) + (state.timeOffset ?? 0) - (cprCycleDuration - (state.cprTime ?? cprCycleDuration));
-      }
-      lastAdrenalineTimeRef.current = state.lastAdrenalineTime ?? null;
-      shockCountForAmiodarone1Ref.current = state.shockCountForAmiodarone1 ?? null;
+      // The sender's masterTime is stale by the time it arrives, so recompute from the start time.
+      const realElapsed = session.startTime ? (Date.now() - session.startTime.getTime()) / 1000 : session.masterTime;
 
-      // Calculate the current real elapsed time from original start
-      const realElapsed = startTimeRef.current
-        ? (Date.now() - startTimeRef.current.getTime()) / 1000
-        : state.masterTime;
-
-      // Add a transfer event with the correct timestamp
       const transferEvent: Event = {
-        timestamp: realElapsed,
+        timestamp: realElapsed + session.timeOffset,
         message: "Session Transferred from another device",
         type: EventType.Status,
       };
 
-      // Set ALL state at once
-      setArrestState(normalizedArrestState);
+      setArrestState(session.arrestState as ArrestState);
       setMasterTime(realElapsed);
-      setCprTime(state.cprTime);
-      setTimeOffset(state.timeOffset);
-      setEvents([...normalizedEvents, transferEvent]);
-      setShockCount(state.shockCount);
-      setAdrenalineCount(state.adrenalineCount);
-      setAmiodaroneCount(state.amiodaroneCount);
-      setLidocaineCount(state.lidocaineCount);
-      setAirwayPlaced(state.airwayPlaced);
-      setAntiarrhythmicGiven(state.antiarrhythmicGiven);
-      setReversibleCauses(state.reversibleCauses);
-      setPostROSCTasks(state.postROSCTasks);
-      setPostMortemTasks(state.postMortemTasks);
-      setPatientAgeCategory(state.patientAgeCategory);
-      setUiState(normalizedUiState);
-      setHideAdrenalinePrompt(state.hideAdrenalinePrompt ?? false);
-      setHideAmiodaronePrompt(state.hideAmiodaronePrompt ?? false);
-      setLastRhythmNonShockable(state.lastRhythmNonShockable ?? false);
-      setAirwayAdjunct(state.airwayAdjunct ?? null);
-      setRoscTime(state.roscTime ?? null);
-      setIsTimerPaused(state.isTimerPaused ?? false);
-      setInitialRhythm(state.initialRhythm ?? null);
-      setPatientAgeStr(state.patientAgeStr ?? "");
-      setPatientGenderStr(state.patientGenderStr ?? "");
-      setTorTime(state.torTime ?? null);
-      setVodTime(state.vodTime ?? null);
-      setVodChecklist(state.vodChecklist ?? AppConstants.vodChecklistTemplate());
-      setVodConfirmed(state.vodConfirmed ?? false);
+      setCprTime(session.cprTime);
+      setTimeOffset(session.timeOffset);
+      setEvents([transferEvent, ...(session.events as Event[])]);
+      setShockCount(session.shockCount);
+      setStackedShockExtra(session.stackedShockExtra);
+      setAdrenalineCount(session.adrenalineCount);
+      setAmiodaroneCount(session.amiodaroneCount);
+      setLidocaineCount(session.lidocaineCount);
+      setAirwayPlaced(session.airwayPlaced);
+      setAntiarrhythmicGiven(session.antiarrhythmicGiven as AntiarrhythmicDrug);
+      setReversibleCauses(session.reversibleCauses as ChecklistItem[]);
+      setPostROSCTasks(session.postROSCTasks as ChecklistItem[]);
+      setPostMortemTasks(session.postMortemTasks as ChecklistItem[]);
+      setPatientAgeCategory(session.patientAgeCategory as PatientAgeCategory | null);
+      setUiState(session.uiState as UIState);
+      setHideAdrenalinePrompt(session.hideAdrenalinePrompt);
+      setHideAmiodaronePrompt(session.hideAmiodaronePrompt);
+      setLastRhythmNonShockable(session.lastRhythmNonShockable);
+      setAirwayAdjunct(session.airwayAdjunct as AirwayAdjunctType | null);
+      setRoscTime(session.roscTime);
+      setIsTimerPaused(session.isTimerPaused);
+      setInitialRhythm(session.initialRhythm);
+      setPatientAgeStr(session.patientAgeStr);
+      setPatientGenderStr(session.patientGenderStr);
+      setTorTime(session.torTime);
+      setVodTime(session.vodTime);
+      setVodChecklist((session.vodChecklist as ChecklistItem[] | null) ?? AppConstants.vodChecklistTemplate());
+      setVodConfirmed(session.vodConfirmed);
       setUndoHistory([]);
 
       // Delete the transfer document
@@ -2632,8 +2482,8 @@ ${[...events]
 
       // Start timer if arrest is active and not paused
       if (
-        (state.arrestState === ArrestState.Active || state.arrestState === ArrestState.Rosc) &&
-        !state.isTimerPaused
+        (session.arrestState === ArrestState.Active || session.arrestState === ArrestState.Rosc) &&
+        !session.isTimerPaused
       ) {
         // Use setTimeout to ensure state has settled before starting timer
         setTimeout(() => startTimer(), 50);
@@ -2744,6 +2594,8 @@ ${[...events]
     resumeArrest,
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
+    deliverStackedShocks,
+    stackedShockExtra,
     // v1.2 transfer
     hostSessionTransfer,
     receiveSessionTransfer,
@@ -4946,6 +4798,8 @@ const ActionGridView: React.FC<{
     logRhythm,
     achieveROSC,
     deliverShock,
+    deliverStackedShocks,
+    shockCount,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
     isLidocaineAvailable,
@@ -5025,6 +4879,18 @@ const ActionGridView: React.FC<{
           fontSize="text-lg"
           onClick={deliverShock}
         />
+      )}
+      {uiState === UIState.ShockAdvised && shockCount === 0 && (
+        // Only offered for the first shocks; RCUK limits stacked shocks to witnessed, monitored arrests.
+        <div className="space-y-1">
+          <ActionButton
+            title="3 Stacked Shocks"
+            tone="dangerTint"
+            icon={<Zap size={18} />}
+            onClick={deliverStackedShocks}
+          />
+          <p className="text-center text-xs text-gray-500 dark:text-gray-400">Witnessed, monitored VF/pVT only</p>
+        </div>
       )}
 
       {/* Medications */}

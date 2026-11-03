@@ -1,0 +1,133 @@
+{
+  "arrestState": "ACTIVE",
+  "arrestType": "GENERAL",
+  "isPreterm": false,
+  "nlsState": "initialAssessment",
+  "masterTime": 400.0,
+  "cprTime": 60.0,
+  "timeOffset": 300.0,
+  "nlsCycleDuration": 60.0,
+  "isRhythmCheckDue": false,
+  "adrenalineCount": 0,
+  "amiodaroneCount": 0,
+  "lidocaineCount": 0,
+  "antiarrhythmicGiven": "none",
+  "airwayPlaced": false,
+  "reversibleCauses": [
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3300",
+      "name": "Hypoxia",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
+      "name": "Hypovolemia",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3302",
+      "name": "Hypo/Hyperkalaemia",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3303",
+      "name": "Hypothermia",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3304",
+      "name": "Toxins",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3305",
+      "name": "Tamponade",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3306",
+      "name": "Tension Pneumothorax",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3307",
+      "name": "Thrombosis",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    }
+  ],
+  "postROSCTasks": [
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3300",
+      "name": "Optimise Ventilation & Oxygenation",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
+      "name": "12-Lead ECG",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3302",
+      "name": "Treat Hypotension (SBP < 90)",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3303",
+      "name": "Check Blood Glucose",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3304",
+      "name": "Consider Temperature Control",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3305",
+      "name": "Identify & Treat Causes",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    }
+  ],
+  "postMortemTasks": [
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3300",
+      "name": "Reposition body & remove lines/tubes",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    },
+    {
+      "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
+      "name": "Complete documentation",
+      "isCompleted": false,
+      "hypothermiaStatus": "none"
+    }
+  ],
+  "nlsPretermTasks": [],
+  "startTime": 815220000.0,
+  "uiState": {
+    "default": {}
+  },
+  "hideAdrenalinePrompt": false,
+  "hideAmiodaronePrompt": false,
+  "hideAdrenalineDueWarning": false,
+  "lastRhythmNonShockable": false,
+  "isTimerPaused": false,
+  "initialRhythm": "VF",
+  "patientAgeStr": "64",
+  "patientGenderStr": "Male",
+  "eventsData": "W3siaWQiOiJBMUIyQzNENC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJ0aW1lc3RhbXAiOjY0MC4wLCJtZXNzYWdlIjoiU2hvY2sgMiBEZWxpdmVyZWQiLCJ0eXBlIjoic2hvY2sifSx7ImlkIjoiQTFCMkMzRDQtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwidGltZXN0YW1wIjo0MjAuMCwibWVzc2FnZSI6IlNob2NrIDEgRGVsaXZlcmVkIiwidHlwZSI6InNob2NrIn0seyJpZCI6IkExQjJDM0Q0LTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInRpbWVzdGFtcCI6MzAwLjAsIm1lc3NhZ2UiOiJBcnJlc3QgU3RhcnRlZCBhdCAxMDowMDowMCIsInR5cGUiOiJzdGF0dXMifV0=",
+  "shockCount": 2
+}
