@@ -1,4 +1,4 @@
-const CACHE_NAME = 'eresus-react-v7';
+const CACHE_NAME = 'eresus-react-v8';
 const PDF_CACHE_NAME = 'eresus-pdfs-v2';
 
 const STATIC_URLS = [
