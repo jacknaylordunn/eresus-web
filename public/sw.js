@@ -1,4 +1,4 @@
-const CACHE_NAME = 'eresus-react-v8';
+const CACHE_NAME = 'eresus-react-v9';
 const PDF_CACHE_NAME = 'eresus-pdfs-v2';
 
 const STATIC_URLS = [
@@ -12,6 +12,8 @@ const STATIC_URLS = [
   '/audio/prompts/consider_adrenaline.mp3',
   '/audio/prompts/consider_amiodarone.mp3',
   '/audio/prompts/consider_amiodarone_second.mp3',
+  '/audio/prompts/consider_lidocaine_second.mp3',
+  '/audio/prompts/reassess_newborn.mp3',
 ];
 
 // Map of same-origin proxy paths -> upstream PDF URLs
