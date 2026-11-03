@@ -1,7 +1,11 @@
-// Push-to-talk speech recognition for voice commands. Recognition must run on the device: Chrome 139+
-// supports this with processLocally once the language pack is installed. Where that isn't possible we
-// report voice commands as unavailable rather than letting the browser send audio to a server.
-import { VOICE_VOCABULARY } from "@/lib/voiceCommands";
+// Speech capture for voice commands. What was said is turned into actions by parseVoiceCommand.
+// Two ways in:
+// - push-to-talk: hold the CPR ring, speak, let go;
+// - hands-free: say the wake word ("Scribe" or "eResus") then the command, and it acts after a short pause.
+// Recognition must run on the device: Chrome 139+ supports this with processLocally once the language
+// pack is installed. Where that isn't possible we report voice commands as unavailable rather than
+// letting the browser send audio to a server. Hands-free only listens while an adult arrest is active.
+import { afterWakeWord, VOICE_VOCABULARY, type WakeWord } from "@/lib/voiceCommands";
 
 const LANG = "en-GB";
 
@@ -58,21 +62,174 @@ export const installVoiceCommandLanguage = async (): Promise<boolean> => {
   }
 };
 
-export class VoiceCommandListener {
+export interface VoiceListenerState {
+  isPushToTalkActive: boolean;
+  isHandsFreeActive: boolean;
+  transcript: string;
+  // Hands-free: the wake word has been heard and the command is being collected.
+  heardWakeWord: boolean;
+}
+
+class VoiceCommandListener {
+  private state: VoiceListenerState = { isPushToTalkActive: false, isHandsFreeActive: false, transcript: "", heardWakeWord: false };
+  private listeners = new Set<() => void>();
+
   private recognition: LocalSpeechRecognition | null = null;
-  private transcript = "";
-  private onFinish: ((transcript: string) => void) | null = null;
+  private onPushToTalkFinish: ((transcript: string) => void) | null = null;
   private finishTimer: ReturnType<typeof setTimeout> | null = null;
+  private wakeWord: WakeWord = "scribe";
+  private onHandsFreeCommand: ((command: string) => void) | null = null;
+  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingCommand = "";
 
-  constructor(private onTranscriptChange: (transcript: string) => void) {}
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
 
-  get isListening() {
-    return this.recognition !== null;
+  getState = () => this.state;
+
+  private update(changes: Partial<VoiceListenerState>) {
+    this.state = { ...this.state, ...changes };
+    this.listeners.forEach((listener) => listener());
   }
 
-  start(): boolean {
+  // Push-to-talk
+
+  startPushToTalk(): boolean {
+    if (this.state.isPushToTalkActive) return false;
+    this.pauseHandsFree();
+    this.update({ transcript: "" });
+    const started = this.startRecognition(
+      (text) => this.update({ transcript: text }),
+      () => this.finishPushToTalk(),
+    );
+    if (!started) {
+      this.resumeHandsFree();
+      return false;
+    }
+    this.update({ isPushToTalkActive: true });
+    return true;
+  }
+
+  // Called when the ring is released; the final words arrive shortly after.
+  stopPushToTalk(onFinish: (transcript: string) => void) {
+    if (!this.state.isPushToTalkActive) return;
+    this.onPushToTalkFinish = onFinish;
+    this.recognition?.stop();
+    // Don't wait indefinitely if the recogniser never ends cleanly.
+    this.finishTimer = setTimeout(() => this.finishPushToTalk(), 1500);
+  }
+
+  private finishPushToTalk() {
+    if (!this.state.isPushToTalkActive) return;
+    if (this.finishTimer) clearTimeout(this.finishTimer);
+    this.finishTimer = null;
+    const heard = this.state.transcript;
+    this.update({ isPushToTalkActive: false });
+    this.stopRecognition();
+    const callback = this.onPushToTalkFinish;
+    this.onPushToTalkFinish = null;
+    callback?.(heard);
+    this.resumeHandsFree();
+  }
+
+  // Hands-free
+
+  startHandsFree(wakeWord: WakeWord, onCommand: (command: string) => void) {
+    this.onHandsFreeCommand = onCommand;
+    if (this.state.isHandsFreeActive && wakeWord === this.wakeWord) return;
+    this.wakeWord = wakeWord;
+    if (this.state.isHandsFreeActive) {
+      this.pauseHandsFree();
+    } else {
+      this.update({ isHandsFreeActive: true });
+    }
+    if (!this.state.isPushToTalkActive) this.beginHandsFreeSession();
+  }
+
+  stopHandsFree() {
+    if (!this.state.isHandsFreeActive) return;
+    this.update({ isHandsFreeActive: false });
+    this.onHandsFreeCommand = null;
+    this.resetHandsFreeState();
+    if (!this.state.isPushToTalkActive) this.stopRecognition();
+  }
+
+  private pauseHandsFree() {
+    if (!this.state.isHandsFreeActive) return;
+    this.resetHandsFreeState();
+    this.stopRecognition();
+  }
+
+  private resumeHandsFree() {
+    if (!this.state.isHandsFreeActive || this.state.isPushToTalkActive) return;
+    this.beginHandsFreeSession();
+  }
+
+  private beginHandsFreeSession() {
+    this.resetHandsFreeState();
+    const started = this.startRecognition(
+      (text) => this.handleHandsFree(text),
+      () => {
+        // Chrome ends continuous recognition after silence; start listening again.
+        if (this.state.heardWakeWord) {
+          this.deliverHandsFreeCommand();
+        } else {
+          this.stopRecognition();
+          this.resumeHandsFree();
+        }
+      },
+    );
+    // Try again shortly if it couldn't start (e.g. the microphone was busy); otherwise keep each
+    // session short so the transcript never grows long.
+    this.restartTimer = setTimeout(
+      () => {
+        if (this.state.heardWakeWord) return;
+        this.stopRecognition();
+        this.resumeHandsFree();
+      },
+      started ? 45_000 : 2_000,
+    );
+  }
+
+  private handleHandsFree(text: string) {
+    this.update({ transcript: text });
+    const command = afterWakeWord(text, this.wakeWord);
+    if (command === null) return;
+    this.pendingCommand = command;
+    if (!this.state.heardWakeWord) this.update({ heardWakeWord: true });
+    // Act once the speaker pauses; a longer wait if nothing has followed the wake word yet.
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => this.deliverHandsFreeCommand(), command ? 1200 : 4000);
+  }
+
+  private deliverHandsFreeCommand() {
+    const command = this.pendingCommand;
+    this.stopRecognition();
+    this.resetHandsFreeState();
+    if (command) this.onHandsFreeCommand?.(command);
+    this.resumeHandsFree();
+  }
+
+  private resetHandsFreeState() {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.silenceTimer = null;
+    this.restartTimer = null;
+    this.pendingCommand = "";
+    if (this.state.heardWakeWord) this.update({ heardWakeWord: false });
+  }
+
+  // Recognition
+
+  private startRecognition(onText: (text: string) => void, onEnd: () => void): boolean {
     const Recognition = recognitionClass();
-    if (!Recognition || this.recognition) return false;
+    if (!Recognition) return false;
+    this.stopRecognition();
 
     const recognition = new Recognition();
     recognition.lang = LANG;
@@ -88,16 +245,15 @@ export class VoiceCommandListener {
       // Not supported; recognition still works.
     }
 
-    this.transcript = "";
     recognition.onresult = (event: any) => {
-      this.transcript = Array.from(event.results as ArrayLike<any>)
+      const text = Array.from(event.results as ArrayLike<any>)
         .map((result) => result[0]?.transcript ?? "")
         .join(" ")
         .trim();
-      this.onTranscriptChange(this.transcript);
+      onText(text);
     };
-    recognition.onerror = () => this.finish();
-    recognition.onend = () => this.finish();
+    recognition.onerror = () => onEnd();
+    recognition.onend = () => onEnd();
 
     try {
       recognition.start();
@@ -108,26 +264,16 @@ export class VoiceCommandListener {
     return true;
   }
 
-  // Called when the button is released; the final words arrive shortly after.
-  stop(onFinish: (transcript: string) => void) {
-    if (!this.recognition) return;
-    this.onFinish = onFinish;
-    this.recognition.stop();
-    // Don't wait indefinitely if the recogniser never ends cleanly.
-    this.finishTimer = setTimeout(() => this.finish(), 1500);
-  }
-
-  private finish() {
-    if (!this.recognition) return;
-    if (this.finishTimer) clearTimeout(this.finishTimer);
-    this.finishTimer = null;
-    this.recognition.onresult = null;
-    this.recognition.onerror = null;
-    this.recognition.onend = null;
-    this.recognition.abort();
+  private stopRecognition() {
+    const recognition = this.recognition;
+    if (!recognition) return;
     this.recognition = null;
-    const callback = this.onFinish;
-    this.onFinish = null;
-    callback?.(this.transcript);
+    // Detach first so a late result or end from this session is ignored.
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    recognition.abort();
   }
 }
+
+export const voiceCommandListener = new VoiceCommandListener();

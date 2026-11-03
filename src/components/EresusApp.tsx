@@ -8,6 +8,7 @@ import React, {
   lazy,
   Suspense,
   useCallback,
+  useSyncExternalStore,
 } from "react";
 import { initializeApp, FirebaseApp } from "firebase/app";
 import {
@@ -88,13 +89,18 @@ import {
   Droplet,
   Users,
   Shield,
+  AudioWaveform,
+  Ear,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
-import VoiceCommandButton from "./VoiceCommandButton";
-import { matchVoiceCommand, type VoiceCommand } from "@/lib/voiceCommands";
-import { checkVoiceCommandAvailability, installVoiceCommandLanguage } from "@/utils/voiceCommandListener";
+import { formatNumber, parseVoiceCommand, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
+import {
+  checkVoiceCommandAvailability,
+  installVoiceCommandLanguage,
+  voiceCommandListener,
+} from "@/utils/voiceCommandListener";
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
@@ -306,6 +312,8 @@ const useAppSettings = () => {
   const [promptAntiarrhythmic, setPromptAntiarrhythmic] = useAppStorage("promptAntiarrhythmic", true);
   const [etco2Unit, setEtco2Unit] = useAppStorage<"kPa" | "mmHg">("etco2Unit", "kPa");
   const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useAppStorage("voiceCommandsEnabled", false);
+  const [voiceHandsFree, setVoiceHandsFree] = useAppStorage("voiceHandsFree", false);
+  const [voiceWakeWord, setVoiceWakeWord] = useAppStorage<WakeWord>("voiceWakeWord", "scribe");
   const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
@@ -419,6 +427,10 @@ const useAppSettings = () => {
     setEtco2Unit,
     voiceCommandsEnabled,
     setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    setVoiceWakeWord,
     researchModeEnabled,
     setResearchModeEnabled,
     hasRespondedToResearchTerms,
@@ -1510,17 +1522,62 @@ const useArrestViewModel = () => {
 
   // The first event an action logs is marked "(voice)" so the record shows how it was entered.
   const nextEventFromVoiceRef = useRef(false);
-  const performFromVoice = (action: () => void) => {
+  // Set while acting on a spoken time ("adrenaline at 14:52"); events and timers use it instead of now.
+  const eventTimeOverrideRef = useRef<number | null>(null);
+  const performFromVoice = (time: number | null, action: () => void) => {
     nextEventFromVoiceRef.current = true;
+    eventTimeOverrideRef.current = time;
     action();
     nextEventFromVoiceRef.current = false;
+    eventTimeOverrideRef.current = null;
+  };
+
+  // When the current action happened, on the total-time scale. Usually now; earlier for a spoken time.
+  // Read from the clock rather than state so it is exact to the second.
+  const actionTime = () => {
+    if (eventTimeOverrideRef.current !== null) return eventTimeOverrideRef.current;
+    if (!startTimeRef.current) return totalArrestTime;
+    return (Date.now() - startTimeRef.current.getTime()) / 1000 + timeOffset;
+  };
+
+  // Converts a spoken time to the total-time scale. Null if it's in the future or before the arrest began.
+  const arrestTime = (time: VoiceTime, now: Date = new Date()): number | null => {
+    let date: Date;
+    if ("secondsAgo" in time) {
+      date = new Date(now.getTime() - time.secondsAgo * 1000);
+    } else {
+      const [h, m] = time.clock.split(":").map(Number);
+      if (isNaN(h) || isNaN(m)) return null;
+      // "2:52" said in the afternoon means 14:52: take the most recent matching time.
+      const hours = time.twelveHour ? [h % 12, (h % 12) + 12] : [h];
+      const latest = now.getTime() + 60_000;
+      const candidates = hours
+        .flatMap((hour) => {
+          const today = new Date(now);
+          today.setHours(hour, m, 0, 0);
+          return [today.getTime(), today.getTime() - 86_400_000];
+        })
+        .filter((t) => t <= latest);
+      if (candidates.length === 0) return null;
+      date = new Date(Math.max(...candidates));
+    }
+    const current = actionTime();
+    const total = current - (now.getTime() - date.getTime()) / 1000;
+    if (total < 0 || date.getTime() > now.getTime() + 60_000) return null;
+    return Math.min(total, current);
   };
 
   const logEvent = (message: string, type: EventType) => {
     const fromVoice = nextEventFromVoiceRef.current;
     nextEventFromVoiceRef.current = false;
-    const newEvent: Event = { timestamp: totalArrestTime, message: fromVoice ? `${message} (voice)` : message, type };
-    setEvents((prevEvents) => [newEvent, ...prevEvents]);
+    const timestamp = eventTimeOverrideRef.current ?? totalArrestTime;
+    const newEvent: Event = { timestamp, message: fromVoice ? `${message} (voice)` : message, type };
+    // Newest first; a back-dated entry goes into its place in the timeline.
+    setEvents((prevEvents) => {
+      const index = prevEvents.findIndex((event) => event.timestamp <= timestamp);
+      if (index === -1) return [...prevEvents, newEvent];
+      return [...prevEvents.slice(0, index), newEvent, ...prevEvents.slice(index)];
+    });
     HapticManager.impact();
   };
 
@@ -1564,9 +1621,18 @@ const useArrestViewModel = () => {
 
   const undo = () => {
     if (undoHistory.length === 0) return;
-    const lastState = undoHistory[undoHistory.length - 1];
     setUndoHistory((prev) => prev.slice(0, -1));
+    applyUndoState(undoHistory[undoHistory.length - 1]);
+  };
 
+  // Reverts everything done since undoDepth was `depth`, e.g. all the actions from one spoken phrase.
+  const undoToDepth = (depth: number) => {
+    if (depth < 0 || depth >= undoHistory.length) return;
+    setUndoHistory((prev) => prev.slice(0, depth));
+    applyUndoState(undoHistory[depth]);
+  };
+
+  const applyUndoState = (lastState: UndoState) => {
     setArrestState(lastState.arrestState);
     setMasterTime(lastState.masterTime);
     setCprTime(lastState.cprTime);
@@ -1747,12 +1813,13 @@ const useArrestViewModel = () => {
     }
   };
 
-  const deliverShock = () => {
+  const deliverShock = (energy: string | null = null) => {
     saveUndoState();
     setShockCount((c) => c + 1);
     setHideAdrenalinePrompt(false);
     setHideAmiodaronePrompt(false);
-    logEvent(`Shock ${shockCount + 1} Delivered`, EventType.Shock);
+    const energyText = energy ? ` (${energy})` : "";
+    logEvent(`Shock ${shockCount + 1} Delivered${energyText}`, EventType.Shock);
     resumeCPR();
   };
 
@@ -1771,25 +1838,24 @@ const useArrestViewModel = () => {
 
   const resumeCPR = () => {
     if (!startTimeRef.current) return;
-    const currentMasterTime = (Date.now() - startTimeRef.current.getTime()) / 1000;
-    const currentTotalArrestTime = currentMasterTime + timeOffset;
     setUiState(UIState.Default);
-    cprCycleStartTimeRef.current = currentTotalArrestTime;
+    cprCycleStartTimeRef.current = actionTime();
     setCprTime(cprCycleDuration);
     logEvent("Resuming CPR.", EventType.Cpr);
   };
 
-  const logAdrenaline = (dosage: string | null = null) => {
+  // alwaysRecordDose: a dose that was spoken is recorded even when dosage prompts are switched off.
+  const logAdrenaline = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setAdrenalineCount((c) => c + 1);
-    lastAdrenalineTimeRef.current = totalArrestTime;
+    lastAdrenalineTimeRef.current = actionTime();
     setLastRhythmNonShockable(false);
     setHideAdrenalinePrompt(false);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
+    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
     logEvent(`Adrenaline${dosageText} Given – Dose ${adrenalineCount + 1}`, EventType.Drug);
   };
 
-  const logAmiodarone = (dosage: string | null = null) => {
+  const logAmiodarone = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setAmiodaroneCount((c) => c + 1);
     setAntiarrhythmicGiven(AntiarrhythmicDrug.Amiodarone);
@@ -1797,15 +1863,15 @@ const useArrestViewModel = () => {
       shockCountForAmiodarone1Ref.current = shockCount;
     }
     setHideAmiodaronePrompt(false);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
+    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
     logEvent(`Amiodarone${dosageText} Given – Dose ${amiodaroneCount + 1}`, EventType.Drug);
   };
 
-  const logLidocaine = (dosage: string | null = null) => {
+  const logLidocaine = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setLidocaineCount((c) => c + 1);
     setAntiarrhythmicGiven(AntiarrhythmicDrug.Lidocaine);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
+    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
     logEvent(`Lidocaine${dosageText} Given – Dose ${lidocaineCount + 1}`, EventType.Drug);
   };
 
@@ -1839,20 +1905,21 @@ const useArrestViewModel = () => {
     logEvent(parts[0], EventType.VascularAccess);
   };
 
-  const logEtco2 = (value: string) => {
+  const logEtco2 = (value: string, spokenUnit: "kPa" | "mmHg" | null = null) => {
     // Some keyboards produce a comma as the decimal separator.
     const reading = Number(value.replace(",", "."));
     if (!value || isNaN(reading) || reading <= 0) return;
     saveUndoState();
-    const formatted = etco2Unit === "kPa" ? reading.toFixed(1) : String(Math.round(reading));
-    logEvent(`ETCO2: ${formatted} ${etco2Unit}`, EventType.Etco2);
+    const unit = spokenUnit ?? etco2Unit;
+    const formatted = unit === "kPa" ? reading.toFixed(1) : String(Math.round(reading));
+    logEvent(`ETCO2: ${formatted} ${unit}`, EventType.Etco2);
   };
 
   const achieveROSC = () => {
     saveUndoState();
     setArrestState(ArrestState.Rosc);
     setUiState(UIState.Default);
-    setRoscTime(totalArrestTime);
+    setRoscTime(actionTime());
     voicePromptPlayer.stopAll();
     logEvent("Return of Spontaneous Circulation (ROSC)", EventType.Status);
   };
@@ -2608,6 +2675,8 @@ ${[...events]
     setPatientAgeCategory,
     performReset,
     undo,
+    undoToDepth,
+    undoDepth: undoHistory.length,
     copySummaryToClipboard,
     pauseArrest,
     resumeArrest,
@@ -2616,6 +2685,7 @@ ${[...events]
     deliverStackedShocks,
     stackedShockExtra,
     performFromVoice,
+    arrestTime,
     // v1.2 transfer
     hostSessionTransfer,
     receiveSessionTransfer,
@@ -4256,17 +4326,59 @@ const StatItem: React.FC<{ label: string; value: number; color: string; isDue?: 
   </div>
 );
 
-const CPRTimerView: React.FC = () => {
+const useVoiceListener = () =>
+  useSyncExternalStore(voiceCommandListener.subscribe, voiceCommandListener.getState);
+
+// Only true once the browser has confirmed it can recognise speech on the device.
+const useVoiceCommandsAvailable = () => {
+  const { voiceCommandsEnabled } = useSettings();
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    if (!voiceCommandsEnabled) return;
+    let cancelled = false;
+    checkVoiceCommandAvailability().then((status) => {
+      if (!cancelled) setAvailable(status === "available");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [voiceCommandsEnabled]);
+  return voiceCommandsEnabled && available;
+};
+
+// Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
+const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
   const { cprTime } = useArrest();
   const { cprCycleDuration } = useSettings();
+  const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
+  const listener = useVoiceListener();
 
   const percentage = cprTime / cprCycleDuration;
   const strokeDasharray = 2 * Math.PI * 52;
   const strokeDashoffset = strokeDasharray * (1 - percentage);
   const isEnding = cprTime <= 10;
 
+  const startTalking = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (voiceCommandListener.startPushToTalk()) navigator.vibrate?.(15);
+  };
+  const stopTalking = () => {
+    voiceCommandListener.stopPushToTalk((transcript) => onVoiceTranscript?.(transcript));
+  };
+  const pushToTalk = voiceAvailable
+    ? {
+        onPointerDown: startTalking,
+        onPointerUp: stopTalking,
+        onPointerLeave: stopTalking,
+        onPointerCancel: stopTalking,
+        onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+        role: "button",
+        "aria-label": "Press and hold to speak a command",
+      }
+    : {};
+
   return (
-    <div className="relative w-56 h-56">
+    <div className={`relative w-56 h-56 ${voiceAvailable ? "select-none touch-none rounded-full" : ""}`} {...pushToTalk}>
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
@@ -4297,7 +4409,37 @@ const CPRTimerView: React.FC = () => {
         </span>
         <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
       </div>
+      {voiceAvailable && listener.isPushToTalkActive && (
+        <div className="absolute inset-0 rounded-full border-[18px] border-tone-danger bg-card/95 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
+          <AudioWaveform size={28} className="text-tone-danger" />
+          <span className="font-semibold text-sm text-foreground line-clamp-4">{listener.transcript || "Listening…"}</span>
+        </div>
+      )}
     </div>
+  );
+};
+
+const VoiceListeningStatus: React.FC = () => {
+  const listener = useVoiceListener();
+  const { voiceWakeWord } = useSettings();
+  if (!listener.isHandsFreeActive || listener.isPushToTalkActive) return null;
+  const wakeWord = voiceWakeWord === "eresus" ? "eResus" : "Scribe";
+  // Long transcripts are cut from the start so the latest words stay visible.
+  return (
+    <p
+      className={`-mt-4 flex items-center justify-center gap-1.5 text-xs ${
+        listener.heardWakeWord ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"
+      }`}
+    >
+      {listener.heardWakeWord ? <AudioWaveform size={14} className="shrink-0" /> : <Ear size={14} className="shrink-0" />}
+      <span className="truncate [direction:rtl]">
+        <bdi>
+          {listener.heardWakeWord
+            ? `“${wakeWord}” heard: ${listener.transcript}`
+            : `Listening for “${wakeWord}”. Hold the ring to talk.`}
+        </bdi>
+      </span>
+    </p>
   );
 };
 
@@ -4512,7 +4654,7 @@ const ActiveArrestContentView: React.FC<{
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
   } = useArrest();
-  const { voicePromptsEnabled, voiceCommandsEnabled } = useSettings();
+  const { voicePromptsEnabled } = useSettings();
   const { metronomeBPM } = useSettings();
   const [isMetronomeOn, setIsMetronomeOn] = useState(metronomeService.isPlaying);
 
@@ -4531,7 +4673,7 @@ const ActiveArrestContentView: React.FC<{
   return (
     <div className={`p-4 space-y-6 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
       <div className="relative flex justify-center">
-        <CPRTimerView />
+        <CPRTimerView onVoiceTranscript={props.onVoiceTranscript} />
         <button
           onClick={toggleMetronome}
           aria-label={isMetronomeOn ? "Turn metronome off" : "Turn metronome on"}
@@ -4542,12 +4684,8 @@ const ActiveArrestContentView: React.FC<{
           <MetronomeIcon size={24} />
         </button>
         <VoicePromptButton enabled={voicePromptsEnabled} className="bottom-4 left-4" />
-        <VoiceCommandButton
-          enabled={voiceCommandsEnabled}
-          onTranscript={(transcript) => props.onVoiceTranscript?.(transcript)}
-          className="top-0 right-2"
-        />
       </div>
+      <VoiceListeningStatus />
 
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
         <AdrenalineTimerView timeRemaining={timeUntilAdrenaline} />
@@ -4858,7 +4996,7 @@ const ActionGridView: React.FC<{
           icon={<Bolt size={20} />}
           height="h-16"
           fontSize="text-lg"
-          onClick={deliverShock}
+          onClick={() => deliverShock()}
         />
       )}
       {uiState === UIState.ShockAdvised && shockCount === 0 && (
@@ -5335,77 +5473,224 @@ const ArrestView: React.FC<{
   };
 
   // Voice commands
-  const [voiceFeedback, setVoiceFeedback] = useState<{ id: number; message: string; succeeded: boolean; canUndo: boolean } | null>(null);
+  // undoDepth: Undo goes back to here, reversing everything from that one phrase.
+  const [voiceFeedback, setVoiceFeedback] = useState<{ id: number; message: string; succeeded: boolean; undoDepth: number | null } | null>(
+    null,
+  );
+  // A phrase can hold several actions ("rhythm check VF shock delivered"). They run one per render so
+  // each sees the state the previous one left, exactly as separate taps would.
+  const [voiceRun, setVoiceRun] = useState<{
+    heard: string;
+    actions: VoiceAction[];
+    index: number;
+    time: number | null;
+    depthBefore: number;
+    done: string[];
+    notes: string[];
+    stoppedBecause: string | null;
+  } | null>(null);
+  const { etco2Unit, voiceHandsFree, voiceWakeWord } = useSettings();
+  const voiceAvailable = useVoiceCommandsAvailable();
 
-  const showVoiceFeedback = (message: string, succeeded: boolean, canUndo: boolean) => {
+  const showVoiceFeedback = (message: string, succeeded: boolean, undoDepth: number | null = null) => {
     const id = Date.now();
-    setVoiceFeedback({ id, message, succeeded, canUndo });
+    setVoiceFeedback({ id, message, succeeded, undoDepth });
     setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), 5000);
   };
 
-  // Each command only acts when it makes sense at this point in the algorithm, as a tap would (matches iOS).
-  const performVoiceCommand = (command: VoiceCommand): [string, boolean] => {
+  const handleVoiceTranscript = (transcript: string) => {
+    const heard = transcript ? `Heard “${transcript}”.` : "Nothing heard.";
+    const parse = parseVoiceCommand(transcript);
+
+    if (parse.reason) {
+      navigator.vibrate?.([30, 50, 30]);
+      const explanation = {
+        question: "That sounded like a question; nothing logged.",
+        instruction: "That sounded like an instruction. Say it once done, e.g. “adrenaline given”.",
+        notGiven: "That sounded like something not yet done; nothing logged.",
+        conflict: "That contained conflicting details; nothing logged. Please say it again.",
+        nothing: "No command recognised; nothing logged.",
+      }[parse.reason];
+      showVoiceFeedback(`${heard} ${explanation}`, false);
+      return;
+    }
+
+    let time: number | null = null;
+    if (parse.time) {
+      time = viewModel.arrestTime(parse.time);
+      if (time === null) {
+        navigator.vibrate?.([30, 50, 30]);
+        showVoiceFeedback(`${heard} That time is in the future or before the arrest started; nothing logged.`, false);
+        return;
+      }
+    }
+
+    setVoiceRun({
+      heard,
+      actions: parse.actions,
+      index: 0,
+      time,
+      depthBefore: viewModel.undoDepth,
+      done: [],
+      notes: [],
+      stoppedBecause: null,
+    });
+  };
+
+  const handleVoiceTranscriptRef = useRef(handleVoiceTranscript);
+  handleVoiceTranscriptRef.current = handleVoiceTranscript;
+
+  useEffect(() => {
+    if (!voiceRun) return;
+    const action = voiceRun.actions[voiceRun.index];
+    if (action && !voiceRun.stoppedBecause) {
+      const result = performVoiceAction(action, voiceRun.time);
+      if (result === "continue") {
+        setVoiceRun({ ...voiceRun });
+      } else if ("failure" in result) {
+        setVoiceRun({ ...voiceRun, stoppedBecause: result.failure });
+      } else {
+        setVoiceRun({
+          ...voiceRun,
+          index: voiceRun.index + 1,
+          done: [...voiceRun.done, result.summary],
+          notes: result.note ? [...voiceRun.notes, result.note] : voiceRun.notes,
+        });
+      }
+      return;
+    }
+
+    let message = voiceRun.heard;
+    if (voiceRun.done.length > 0) {
+      const when = voiceRun.time !== null ? ` at ${clockText(voiceRun.time)}` : "";
+      message += ` Logged: ${voiceRun.done.join(", ")}${when}.`;
+    }
+    if (voiceRun.stoppedBecause) message += ` ${voiceRun.stoppedBecause}`;
+    if (voiceRun.notes.length > 0) message += ` ${voiceRun.notes.join(" ")}`;
+
+    const succeeded = voiceRun.done.length > 0;
+    navigator.vibrate?.(succeeded && !voiceRun.stoppedBecause ? 20 : [30, 50, 30]);
+    const canUndo = succeeded && viewModel.undoDepth > voiceRun.depthBefore;
+    showVoiceFeedback(message, succeeded, canUndo ? voiceRun.depthBefore : null);
+    setVoiceRun(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceRun]);
+
+  // Each action only applies when a tap would make sense at this point in the algorithm (matches iOS).
+  // "continue" means it has done the first half and wants the next render to finish.
+  const performVoiceAction = (
+    action: VoiceAction,
+    time: number | null,
+  ): { summary: string; note?: string } | { failure: string } | "continue" => {
     const vm = viewModel;
-    if (command === "undo") {
-      if (!vm.canUndo) return ["Nothing to undo.", false];
+    if (action.type === "undo") {
+      if (!vm.canUndo) return { failure: "Nothing to undo." };
       vm.undo();
-      return ["Last action undone.", true];
+      return { summary: "undo" };
     }
     if (vm.arrestState !== ArrestState.Active || vm.isTimerPaused) {
-      return ["Voice commands work during an active adult arrest.", false];
+      return { failure: "Voice commands work during an active adult arrest." };
     }
-    switch (command) {
-      case "adrenaline":
-        if (!vm.isAdrenalineAvailable) return ["Adrenaline is withheld (severe hypothermia).", false];
-        vm.performFromVoice(() => handleLogDrug({ type: "adrenaline" } as DrugToLog));
-        return ["Adrenaline logged.", true];
-      case "amiodarone":
-        if (!vm.isAmiodaroneAvailable) return ["Amiodarone isn't available now.", false];
-        vm.performFromVoice(() => handleLogDrug({ type: "amiodarone" } as DrugToLog));
-        return ["Amiodarone logged.", true];
-      case "lidocaine":
-        if (!vm.isLidocaineAvailable) return ["Lidocaine isn't available now.", false];
-        vm.performFromVoice(() => handleLogDrug({ type: "lidocaine" } as DrugToLog));
-        return ["Lidocaine logged.", true];
-      case "analyse":
-        if (vm.uiState !== UIState.Default) return ["A rhythm check is already in progress.", false];
-        vm.performFromVoice(vm.analyseRhythm);
-        return ["Rhythm check started.", true];
-      case "vf":
-      case "vt":
-      case "pea":
-      case "asystole": {
-        const [name, shockable] =
-          command === "vf" ? ["VF", true] : command === "vt" ? ["VT", true] : command === "pea" ? ["PEA", false] : ["Asystole", false];
-        if (vm.uiState === UIState.ShockAdvised) return ["A shock is already advised.", false];
-        vm.performFromVoice(() => {
-          if (vm.uiState === UIState.Default) vm.analyseRhythm();
-          vm.logRhythm(name as string, shockable as boolean);
-        });
-        return [`${name} logged.`, true];
+
+    switch (action.type) {
+      case "drug": {
+        const { drug, dose } = action;
+        if (drug === "adrenaline") {
+          if (!vm.isAdrenalineAvailable) return { failure: "Adrenaline is withheld (severe hypothermia)." };
+          vm.performFromVoice(time, () => vm.logAdrenaline(dose, true));
+        } else if (drug === "amiodarone") {
+          if (!vm.isAmiodaroneAvailable) return { failure: "Amiodarone isn't available now." };
+          vm.performFromVoice(time, () => vm.logAmiodarone(dose, true));
+        } else {
+          if (!vm.isLidocaineAvailable) return { failure: "Lidocaine isn't available now." };
+          vm.performFromVoice(time, () => vm.logLidocaine(dose, true));
+        }
+        const name = drug.charAt(0).toUpperCase() + drug.slice(1);
+        return { summary: dose ? `${name} ${dose}` : name, note: doseNote(drug, dose) ?? undefined };
       }
-      case "shock":
-        if (vm.uiState !== UIState.ShockAdvised) return ["Log a shockable rhythm first.", false];
-        vm.performFromVoice(vm.deliverShock);
-        return [`Shock ${vm.shockCount + 1} logged.`, true];
+      case "analyse":
+        if (vm.uiState !== UIState.Default) return { failure: "A rhythm check is already in progress." };
+        vm.performFromVoice(time, vm.analyseRhythm);
+        return { summary: "rhythm check" };
+      case "rhythm": {
+        if (vm.uiState === UIState.ShockAdvised) return { failure: "A shock is already advised." };
+        // "VF" on its own starts the rhythm check first, as the buttons would.
+        if (vm.uiState === UIState.Default) {
+          vm.performFromVoice(time, vm.analyseRhythm);
+          return "continue";
+        }
+        const shockable = ["VF", "VT", "Shockable"].includes(action.rhythm);
+        const name =
+          action.rhythm === "Shockable" ? "Shockable rhythm" : action.rhythm === "Non-shockable" ? "Non-shockable rhythm" : action.rhythm;
+        vm.performFromVoice(time, () => vm.logRhythm(name, shockable));
+        return { summary: name };
+      }
+      case "shock": {
+        if (vm.uiState !== UIState.ShockAdvised) return { failure: "Log a shockable rhythm before a shock." };
+        const shockNumber = vm.shockCount + 1;
+        vm.performFromVoice(time, () => vm.deliverShock(action.energy));
+        return { summary: action.energy ? `shock ${shockNumber} ${action.energy}` : `shock ${shockNumber}` };
+      }
       case "rosc":
-        vm.performFromVoice(vm.achieveROSC);
-        return ["ROSC logged.", true];
+        vm.performFromVoice(time, vm.achieveROSC);
+        return { summary: "ROSC" };
+      case "airway": {
+        const type = action.device as AirwayAdjunctType;
+        vm.performFromVoice(time, () => vm.logAirwayPlaced(type));
+        return { summary: type === AirwayAdjunctType.Unspecified ? "advanced airway" : getAirwayAdjunctDisplayName(type) };
+      }
+      case "access": {
+        const { route, successful, gauge, location } = action;
+        vm.performFromVoice(time, () => vm.logVascularAccess(route, location ?? "", gauge ?? "", successful));
+        const detail = [gauge, location].filter(Boolean).join(", ");
+        return { summary: `${route} ${successful ? "access" : "failed"}${detail ? ` (${detail})` : ""}` };
+      }
+      case "etco2": {
+        const unit = action.unit ?? etco2Unit;
+        const [min, max] = unit === "kPa" ? [0.1, 20] : [1, 150];
+        if (action.value < min || action.value > max) {
+          return { failure: `ETCO2 ${formatNumber(action.value)} ${unit} is outside the expected range; not logged.` };
+        }
+        vm.performFromVoice(time, () => vm.logEtco2(String(action.value), unit));
+        return { summary: `ETCO2 ${formatNumber(action.value)} ${unit}` };
+      }
     }
   };
 
-  const handleVoiceTranscript = (transcript: string) => {
-    const command = matchVoiceCommand(transcript);
-    const heard = transcript ? `Heard “${transcript}”.` : "Nothing heard.";
-    if (!command) {
-      navigator.vibrate?.([30, 50, 30]);
-      showVoiceFeedback(`${heard} No command recognised; nothing logged.`, false, false);
-      return;
-    }
-    const [message, succeeded] = performVoiceCommand(command);
-    navigator.vibrate?.(succeeded ? 20 : [30, 50, 30]);
-    showVoiceFeedback(`${heard} ${message}`, succeeded, succeeded && command !== "undo");
+  // A gentle check, not a block: logs what was said but flags a dose that differs from the usual adult dose.
+  const doseNote = (drug: string, dose: string | null): string | null => {
+    if (!dose || !dose.endsWith(" mg")) return null;
+    if (viewModel.patientAgeCategory && viewModel.patientAgeCategory !== PatientAgeCategory.Adult) return null;
+    const expected =
+      drug === "adrenaline"
+        ? "1 mg"
+        : drug === "amiodarone"
+          ? viewModel.amiodaroneCount <= 1
+            ? "300 mg"
+            : "150 mg"
+          : viewModel.lidocaineCount <= 1
+            ? "100 mg"
+            : "50 mg";
+    return dose === expected ? null : `Check the ${drug} dose: usual adult dose is ${expected}.`;
   };
+
+  const clockText = (total: number) =>
+    new Date(Date.now() + (total - viewModel.totalArrestTime) * 1000).toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  // Hands-free listens only while an adult arrest is running on screen.
+  const shouldListenHandsFree =
+    voiceAvailable && voiceHandsFree && viewModel.arrestState === ArrestState.Active && !viewModel.isTimerPaused;
+  useEffect(() => {
+    if (shouldListenHandsFree) {
+      voiceCommandListener.startHandsFree(voiceWakeWord, (command) => handleVoiceTranscriptRef.current(command));
+    } else {
+      voiceCommandListener.stopHandsFree();
+    }
+  }, [shouldListenHandsFree, voiceWakeWord]);
+  useEffect(() => () => voiceCommandListener.stopHandsFree(), []);
 
   return (
     <div className="flex flex-col h-full">
@@ -5444,10 +5729,10 @@ const ArrestView: React.FC<{
           }`}
         >
           <span className="flex-grow">{voiceFeedback.message}</span>
-          {voiceFeedback.canUndo && (
+          {voiceFeedback.undoDepth !== null && (
             <button
               onClick={() => {
-                viewModel.undo();
+                viewModel.undoToDepth(voiceFeedback.undoDepth!);
                 setVoiceFeedback(null);
               }}
               className="px-3 py-1.5 rounded-lg font-semibold bg-tone-accent text-tone-on-accent"
@@ -6153,6 +6438,10 @@ const SettingsView: React.FC = () => {
     setEtco2Unit,
     voiceCommandsEnabled,
     setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    setVoiceWakeWord,
   } = useSettings();
   const [voiceCommandsMessage, setVoiceCommandsMessage] = useState<string | null>(null);
 
@@ -6344,9 +6633,28 @@ const SettingsView: React.FC = () => {
             label="Voice Commands"
             enabled={voiceCommandsEnabled}
             onChange={toggleVoiceCommands}
-            description="Hold the microphone button on the arrest screen and say a command: adrenaline, amiodarone, lidocaine, analyse rhythm, VF, VT, PEA, asystole, shock, ROSC or undo. Speech is recognised on this device only and nothing is sent anywhere. Check each entry; anything logged by voice is marked (voice) and can be undone."
+            description="Press and hold the CPR ring and speak, e.g. “rhythm check VF, shock delivered 200 joules” or “1 mg adrenaline at 14:52”. Understands drugs and doses, rhythms, shocks, ROSC, airway, IV/IO, ETCO2, times and “undo”. Speech is recognised on this device only and nothing is sent anywhere. Check each entry: anything logged by voice is marked (voice) and the banner's Undo reverses the whole phrase."
           />
           {voiceCommandsMessage && <p className="text-sm text-tone-danger">{voiceCommandsMessage}</p>}
+          {voiceCommandsEnabled && (
+            <SettingToggle
+              label="Hands-Free Wake Word"
+              enabled={voiceHandsFree}
+              onChange={setVoiceHandsFree}
+              description={`Say the wake word, then the command: “${voiceWakeWord === "eresus" ? "eResus" : "Scribe"}, adrenaline 1 mg”. The microphone is only on during an active arrest, and the browser shows its microphone indicator while it listens.`}
+            />
+          )}
+          {voiceCommandsEnabled && voiceHandsFree && (
+            <SegmentedSetting
+              label="Wake Word"
+              value={voiceWakeWord}
+              options={[
+                { value: "scribe", label: "Scribe" },
+                { value: "eresus", label: "eResus" },
+              ]}
+              onChange={(value) => setVoiceWakeWord(value as WakeWord)}
+            />
+          )}
         </div>
 
         {/* Capnography */}
