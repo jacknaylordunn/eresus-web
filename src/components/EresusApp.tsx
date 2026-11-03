@@ -91,8 +91,10 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
+import VoicePromptButton from "./VoicePromptButton";
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
+import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -1328,6 +1330,7 @@ const useArrestViewModel = () => {
 
     const enabled: Record<VoicePrompt, boolean> = {
       rhythm_check_due: promptRhythmCheck,
+      reassess_newborn: promptRhythmCheck,
       prepare_rhythm_check: rhythmCheckWarning > 0,
       adrenaline_due: promptAdrenaline,
       consider_adrenaline: promptAdrenaline,
@@ -3998,28 +4001,6 @@ const DosageEntryModal: React.FC<{
 // REUSABLE UI COMPONENTS
 //============================================================================
 
-// What a button is for, not what colour it is. A highlight, when present, overrides the tone.
-// Matches ButtonTone and ButtonHighlight in the iOS app (Theme.swift).
-type ButtonTone = "standard" | "primary" | "danger" | "dangerTint" | "positive" | "slate";
-
-const TONE_CLASSES: Record<ButtonTone, string> = {
-  standard: "bg-tone-tint text-tone-on-tint",
-  primary: "bg-tone-accent text-tone-on-accent",
-  danger: "bg-tone-danger text-tone-on-danger",
-  dangerTint: "bg-tone-danger-tint text-tone-on-danger-tint",
-  positive: "bg-tone-positive text-tone-on-positive",
-  slate: "bg-tone-slate text-tone-on-slate",
-};
-
-// Why a button is pulsing. Kept to two so the colour alone tells you what kind of moment it is:
-// handsOff = pause compressions (rhythm check due, shock advised), drugDue = a drug reminder is showing.
-type ButtonHighlight = "handsOff" | "drugDue";
-
-const HIGHLIGHT_CLASSES: Record<ButtonHighlight, string> = {
-  handsOff: "bg-tone-danger text-tone-on-danger halo-danger",
-  drugDue: "bg-tone-alert text-tone-on-alert halo-alert",
-};
-
 // Older call sites still pass colour classes; read their intent so they pick up the calm palette.
 const toneFromLegacyColour = (backgroundColor = ""): ButtonTone => {
   if (backgroundColor.includes("bg-red")) return "danger";
@@ -4486,30 +4467,6 @@ const MetronomeIcon: React.FC<{ size?: number }> = ({ size = 24 }) => (
   </svg>
 );
 
-// Mirrors the metronome button: filled when prompts are audible, plain when muted for this case.
-const VoicePromptButton: React.FC = () => {
-  const { voicePromptsEnabled } = useSettings();
-  const [muted, setMuted] = useState(voicePromptPlayer.mutedForCase);
-
-  useEffect(() => voicePromptPlayer.subscribe(setMuted), []);
-
-  if (!voicePromptsEnabled) return null;
-  const isOn = !muted;
-  return (
-    <button
-      onClick={() => {
-        voicePromptPlayer.unlock();
-        voicePromptPlayer.setMutedForCase(isOn);
-      }}
-      aria-label={isOn ? "Mute spoken prompts" : "Unmute spoken prompts"}
-      className={`absolute bottom-4 left-4 w-12 h-12 rounded-full flex items-center justify-center
-      shadow-lg transition-colors
-      ${isOn ? "bg-tone-accent text-tone-on-accent" : "bg-white dark:bg-gray-700 text-tone-accent"}`}
-    >
-      {isOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
-    </button>
-  );
-};
 
 const ActiveArrestContentView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
@@ -4537,6 +4494,7 @@ const ActiveArrestContentView: React.FC<{
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
   } = useArrest();
+  const { voicePromptsEnabled } = useSettings();
   const { metronomeBPM } = useSettings();
   const [isMetronomeOn, setIsMetronomeOn] = useState(metronomeService.isPlaying);
 
@@ -4565,7 +4523,7 @@ const ActiveArrestContentView: React.FC<{
         >
           <MetronomeIcon size={24} />
         </button>
-        <VoicePromptButton />
+        <VoicePromptButton enabled={voicePromptsEnabled} className="bottom-4 left-4" />
       </div>
 
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
@@ -6215,10 +6173,10 @@ const SettingsView: React.FC = () => {
                 onChange={(value) => setRhythmCheckWarning(Number(value))}
               />
               <SettingToggle
-                label="Rhythm Check Due"
+                label="Rhythm Check / Reassessment Due"
                 enabled={promptRhythmCheck}
                 onChange={setPromptRhythmCheck}
-                description="Announced when the CPR cycle ends."
+                description="Announced when the CPR cycle ends, or when a newborn reassessment is due."
               />
               <SettingToggle
                 label="Adrenaline Reminders"
@@ -6513,6 +6471,9 @@ const AppContent: React.FC = () => {
     researchModeEnabled,
     askForPatientInfo,
     userOrganization,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    promptRhythmCheck,
   } = useSettings();
   const { db, userId, isAnonymous, user } = useFirebase();
   const [showAccountPrompt, setShowAccountPrompt] = useState(false);
@@ -6620,7 +6581,17 @@ const AppContent: React.FC = () => {
     switch (currentTab) {
       case "arrest":
         if (showNewborn) {
-          return <NewbornLifeSupport onBack={() => setShowNewborn(false)} onTransitionToALS={handleNLSTransition} />;
+          return (
+            <NewbornLifeSupport
+              onBack={() => setShowNewborn(false)}
+              onTransitionToALS={handleNLSTransition}
+              voicePrompts={{
+                enabled: voicePromptsEnabled,
+                toneOnly: voicePromptsToneOnly,
+                reassess: promptRhythmCheck,
+              }}
+            />
+          );
         }
         return (
           <ArrestView

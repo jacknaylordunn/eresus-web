@@ -2,6 +2,7 @@
 // File names and wording must match the iOS app (Resources/VoicePrompts) so both apps sound the same.
 export const VOICE_PROMPTS = [
   "rhythm_check_due",
+  "reassess_newborn",
   "prepare_rhythm_check",
   "adrenaline_due",
   "consider_adrenaline",
@@ -14,6 +15,7 @@ export type VoicePrompt = (typeof VOICE_PROMPTS)[number];
 
 export const VOICE_PROMPT_TEXT: Record<VoicePrompt, string> = {
   rhythm_check_due: "Rhythm check due.",
+  reassess_newborn: "Reassess heart rate and chest rise.",
   prepare_rhythm_check: "Prepare for rhythm check.",
   adrenaline_due: "Adrenaline due.",
   consider_adrenaline: "Consider adrenaline.",

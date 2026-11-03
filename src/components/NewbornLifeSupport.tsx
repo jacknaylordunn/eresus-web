@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { TONE_CLASSES, type ButtonTone } from '@/lib/tones';
+import { voicePromptPlayer } from '@/utils/voicePrompts';
+import VoicePromptButton from './VoicePromptButton';
 import {
   Heart,
   Wind,
@@ -242,9 +245,10 @@ interface NLSTransitionData {
 interface NewbornLifeSupportProps {
   onBack: () => void;
   onTransitionToALS?: (data: NLSTransitionData) => void;
+  voicePrompts?: { enabled: boolean; toneOnly: boolean; reassess: boolean };
 }
 
-const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTransitionToALS }) => {
+const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTransitionToALS, voicePrompts }) => {
   // --- Restore saved session ---
   const savedNls = useRef<any>(null);
   const didRestore = useRef(false);
@@ -349,7 +353,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
     setUndoStack(prev => [...prev.slice(-19), {
       arrestState, nlsState, events: [...events], adrenalineCount,
       inflationBreathsGiven, compressionCycles, fio2, vascularAccess,
-      volumeGiven, isRhythmCheckDue, nlsCycleDuration, airwayPlaced,
+      volumeGiven, isRhythmCheckDue, nlsCycleDuration, airwayPlaced, timeOffset,
       cprCycleStartTime: cprCycleStartTimeRef.current,
     }]);
   };
@@ -369,6 +373,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
     setIsRhythmCheckDue(last.isRhythmCheckDue);
     setNlsCycleDuration(last.nlsCycleDuration);
     setAirwayPlaced(last.airwayPlaced ?? false);
+    if (last.timeOffset !== undefined) setTimeOffset(last.timeOffset);
     cprCycleStartTimeRef.current = last.cprCycleStartTime;
     setUndoStack(prev => prev.slice(0, -1));
     // If undoing back to compressions, restart metronome; otherwise stop it
@@ -450,6 +455,9 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
 
   // --- Core Actions ---
   const startNewborn = (preterm: boolean) => {
+    // Browsers only allow audio after a tap, and a mute from the last case shouldn't carry over.
+    voicePromptPlayer.unlock();
+    voicePromptPlayer.setMutedForCase(false);
     startTimeRef.current = new Date();
     setIsPreterm(preterm);
     setBirthType(preterm ? NLSBirthType.Preterm : NLSBirthType.Term);
@@ -523,6 +531,9 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
   const addTimeOffset = (seconds: number) => {
     saveUndo();
     setTimeOffset(prev => prev + seconds);
+    // The cycle start is on the total-time scale, so move it with the offset or the
+    // reassessment falls due early (matches the adult screen and iOS).
+    cprCycleStartTimeRef.current += seconds;
     logEvent(`Time offset added: +${Math.round(seconds / 60)} min`);
   };
 
@@ -681,6 +692,16 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
   const isActive = arrestState === NLSArrestState.Active;
   const isDue = isRhythmCheckDue && isActive && !isStopped;
 
+  // Spoken prompt when the reassessment falls due, matching the "REASSESS PATIENT" header (as on iOS).
+  const wasDueRef = useRef(false);
+  useEffect(() => {
+    if (isDue && !wasDueRef.current && voicePrompts?.enabled && voicePrompts.reassess) {
+      voicePromptPlayer.play('reassess_newborn', voicePrompts.toneOnly);
+    }
+    if (!isActive || isStopped) voicePromptPlayer.stopAll();
+    wasDueRef.current = isDue;
+  }, [isDue, isActive, isStopped, voicePrompts]);
+
   // ============================================================================
   // RENDER
   // ============================================================================
@@ -688,11 +709,11 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
     <div className="flex flex-col h-full bg-background text-foreground">
       {/* ===== HEADER — matches iOS HeaderView for NLS ===== */}
       <div 
-        className={`px-4 pt-4 pb-3 shadow-md transition-colors duration-300 ${
+        className={`relative z-10 px-4 pt-4 pb-3 shadow-md transition-colors duration-300 ${
           isStopped 
-            ? 'bg-orange-100 dark:bg-orange-900/30' 
+            ? 'bg-tone-alert/20' 
             : isDue 
-              ? 'bg-red-600 cursor-pointer' 
+              ? 'bg-tone-danger cursor-pointer' 
               : 'bg-card'
         }`}
         onClick={() => { if (isDue) reassessPatient(); }}
@@ -706,10 +727,10 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                 <h1 className="text-3xl font-bold text-foreground">eResus</h1>
               )}
               <span className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${
-                isStopped ? 'bg-orange-500 text-white' :
+                isStopped ? 'bg-tone-alert text-tone-on-alert' :
                 isDue ? 'bg-white/30 text-white' :
-                arrestState === NLSArrestState.Active ? 'bg-red-500 text-white' :
-                arrestState === NLSArrestState.Rosc ? 'bg-green-500 text-white' :
+                arrestState === NLSArrestState.Active ? 'bg-tone-danger text-tone-on-danger' :
+                arrestState === NLSArrestState.Rosc ? 'bg-tone-accent text-tone-on-accent' :
                 arrestState === NLSArrestState.Ended ? 'bg-gray-800 text-white' :
                 'bg-muted text-muted-foreground'
               }`}>
@@ -760,8 +781,9 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
         {/* NLS Square Timer (matches iOS NLSSquareTimerView) */}
         {isActive && (
           <div className={`transition-opacity ${isStopped ? 'opacity-50 pointer-events-none' : ''}`}>
-            <div className="flex justify-center">
+            <div className="relative flex justify-center">
               <NLSSquareTimer time={cprTime} totalDuration={nlsCycleDuration} />
+              <VoicePromptButton enabled={voicePrompts?.enabled ?? false} className="bottom-0 left-0" />
             </div>
           </div>
         )}
@@ -780,14 +802,14 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
 
         {/* Recovery prompt */}
         {showRecoveryPrompt && (
-          <div className="p-4 bg-orange-50 dark:bg-orange-900/30 border-2 border-orange-400 dark:border-orange-600 rounded-xl space-y-3 mt-2">
+          <div className="p-4 bg-tone-alert/15 border-2 border-tone-alert rounded-xl space-y-3 mt-2">
             <div className="flex items-center space-x-2">
-              <AlertTriangle size={24} className="text-orange-500 flex-shrink-0" />
+              <AlertTriangle size={24} className="text-tone-alert flex-shrink-0" />
               <h3 className="font-bold text-gray-900 dark:text-white">Session Recovery</h3>
             </div>
             <p className="text-sm text-gray-700 dark:text-gray-300">An active NLS session was interrupted. Resume?</p>
             <div className="flex space-x-3">
-              <NLSActionButton color="bg-green-600" label="Resume" onClick={resumeSession} />
+              <NLSActionButton tone="primary" label="Resume" onClick={resumeSession} />
               <NLSActionButton color="bg-gray-500" label="Save & Discard" onClick={discardSession} />
             </div>
           </div>
@@ -900,7 +922,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                 actions={
                   <div className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
-                      <NLSActionButton color="bg-red-600" icon={<Heart size={18} />} label="HR < 60 min⁻¹" sublabel="(Start CPR)"
+                      <NLSActionButton tone="primary" icon={<Heart size={18} />} label="HR < 60 min⁻¹" sublabel="(Start CPR)"
                         onClick={() => advanceNLS(NLSState.Compressions)} height="h-16" />
                       <NLSActionButton color="bg-blue-500" icon={<Wind size={18} />} label="HR ≥ 60 min⁻¹" sublabel="(Continue Vent.)"
                         onClick={() => advanceNLS(NLSState.ContinueVentilation)} height="h-16" />
@@ -923,7 +945,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                 actions={
                   <div className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
-                      <NLSActionButton color="bg-red-600" icon={<Heart size={18} />} label="HR < 60 min⁻¹" sublabel="(Start CPR)"
+                      <NLSActionButton tone="primary" icon={<Heart size={18} />} label="HR < 60 min⁻¹" sublabel="(Start CPR)"
                         onClick={() => advanceNLS(NLSState.Compressions)} height="h-16" />
                       <NLSActionButton color="bg-blue-500" icon={<Wind size={18} />} label="Not Breathing" sublabel="(Cont. Vent)"
                         onClick={() => {
@@ -956,8 +978,8 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                       <button onClick={toggleMetronome}
                         className={`w-full py-4 rounded-xl font-bold text-base flex items-center justify-center space-x-2 active:scale-95 transition-all ${
                           metronomeOn 
-                            ? 'bg-blue-600 text-white' 
-                            : 'bg-blue-600/15 text-blue-600 dark:text-blue-400 border border-blue-600/30'
+                            ? 'bg-tone-accent text-tone-on-accent' 
+                            : 'bg-tone-tint text-tone-on-tint border border-tone-accent/30'
                         }`}>
                         {metronomeOn ? <VolumeX size={20} /> : <Volume2 size={20} />}
                         <span>{metronomeOn ? 'STOP 3:1 METRONOME' : 'START 3:1 METRONOME'}</span>
@@ -970,7 +992,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
-                        <NLSActionButton color="bg-red-600" icon={<Heart size={18} />} label="Yes (HR < 60)" sublabel="(Continue CPR)"
+                        <NLSActionButton tone="primary" icon={<Heart size={18} />} label="Yes (HR < 60)" sublabel="(Continue CPR)"
                           onClick={() => {
                             saveUndo();
                             logEvent("Compressions continued (HR < 60)", "cpr");
@@ -1020,7 +1042,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                     logEvent(`${task.name} ${!task.isCompleted ? 'checked' : 'unchecked'}`);
                   }} className="flex items-center w-full text-left space-x-3">
                     {task.isCompleted ? (
-                      <CheckCircle2 size={24} className="text-green-500 flex-shrink-0" />
+                      <CheckCircle2 size={24} className="text-tone-positive flex-shrink-0" />
                     ) : (
                       <Circle size={24} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
                     )}
@@ -1038,7 +1060,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
         {/* ===== ROSC (matches iOS RoscView for NLS) ===== */}
         {arrestState === NLSArrestState.Rosc && (
           <div className="space-y-4 mt-2">
-            <NLSActionButton color="bg-orange-500" icon={<RotateCw size={20} />} label="Baby Stopped Breathing" 
+            <NLSActionButton tone="danger" icon={<RotateCw size={20} />} label="Baby Stopped Breathing" 
               onClick={reArrest} height="h-16" fontSize="text-lg" />
             <NLSActionButton color="bg-blue-600" icon={<Droplets size={20} />} label="Check Blood Glucose"
               onClick={() => { saveUndo(); logEvent("Blood Glucose Checked"); }} height="h-14" />
@@ -1063,16 +1085,16 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
             {isStopped ? (
               <>
                 <button onClick={resumeArrest}
-                  className="flex-1 py-3 rounded-xl bg-green-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+                  className="flex-1 py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
                   <Play size={18} />
                   <span>Resume</span>
                 </button>
                 <button onClick={() => setShowSummary(true)}
-                  className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+                  className="flex-1 py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
                   <span>Summary</span>
                 </button>
                 <button onClick={() => setShowReset(true)}
-                  className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+                  className="flex-1 py-3 rounded-xl bg-tone-danger text-tone-on-danger font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
                   <RotateCw size={18} />
                   <span>Reset</span>
                 </button>
@@ -1080,16 +1102,16 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
             ) : (
               <>
                 <button onClick={undo} disabled={undoStack.length === 0}
-                  className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform disabled:opacity-40">
+                  className="flex-1 py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform disabled:opacity-40">
                   <Undo size={18} />
                   <span>Undo</span>
                 </button>
                 <button onClick={() => setShowSummary(true)}
-                  className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+                  className="flex-1 py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
                   <span>Summary</span>
                 </button>
                 <button onClick={pauseArrest}
-                  className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+                  className="flex-1 py-3 rounded-xl bg-tone-danger text-tone-on-danger font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
                   <Square size={18} />
                   <span>Stop</span>
                 </button>
@@ -1114,13 +1136,13 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
           <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
             {[...events].reverse().map((e, i) => (
               <div key={i} className="flex">
-                <span className="font-bold w-16 flex-shrink-0 text-blue-600 dark:text-blue-400">[{formatTime(e.timestamp)}]</span>
+                <span className="font-bold w-16 flex-shrink-0 text-tone-accent">[{formatTime(e.timestamp)}]</span>
                 <span className="ml-2 text-gray-800 dark:text-gray-200">{e.message}</span>
               </div>
             ))}
           </div>
           <button onClick={() => { copySummary(); setShowSummary(false); }}
-            className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
+            className="w-full py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
             <Clipboard size={18} />
             <span>Copy to Clipboard</span>
           </button>
@@ -1129,14 +1151,14 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
 
       <NLSModal isOpen={showReset} onClose={() => setShowReset(false)} title="Reset NLS?">
         <div className="flex flex-col items-center text-center space-y-4">
-          <RotateCw size={48} className="text-red-500" />
+          <RotateCw size={48} className="text-tone-danger" />
           <p className="text-gray-700 dark:text-gray-300">This will save the current log. Cannot be undone.</p>
           <button onClick={() => { performReset(true, true); setShowReset(false); }}
-            className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform">
+            className="w-full py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold active:scale-95 transition-transform">
             Copy, Save & Reset
           </button>
           <button onClick={() => { performReset(true, false); setShowReset(false); }}
-            className="w-full py-3 rounded-xl bg-red-600 text-white font-bold active:scale-95 transition-transform">
+            className="w-full py-3 rounded-xl bg-tone-danger text-tone-on-danger font-bold active:scale-95 transition-transform">
             Reset & Save
           </button>
           <button onClick={() => setShowReset(false)} className="text-gray-500 font-medium py-2">Cancel</button>
@@ -1150,7 +1172,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
             <button onClick={() => setShowConfirmBack(false)}
               className="flex-1 py-3 rounded-xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white font-bold active:scale-95 transition-transform">Stay</button>
             <button onClick={confirmBack}
-              className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold active:scale-95 transition-transform">Save & Leave</button>
+              className="flex-1 py-3 rounded-xl bg-tone-danger text-tone-on-danger font-bold active:scale-95 transition-transform">Save & Leave</button>
           </div>
         </div>
       </NLSModal>
@@ -1190,10 +1212,10 @@ const NLSSquareTimer: React.FC<{ time: number; totalDuration: number }> = ({ tim
   return (
     <div className={`px-8 py-3 rounded-2xl shadow-sm text-center border-[3px] ${
       isEnding 
-        ? 'border-red-500 bg-card' 
+        ? 'border-tone-danger bg-card' 
         : 'border-primary/60 bg-card'
     }`}>
-      <div className={`font-mono text-4xl font-bold ${isEnding ? 'text-red-500' : 'text-foreground'}`}>
+      <div className={`font-mono text-4xl font-bold ${isEnding ? 'text-tone-danger' : 'text-foreground'}`}>
         {formatTime(Math.max(0, time))}
       </div>
       <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -1218,7 +1240,7 @@ const WizardCard: React.FC<{
       <div className="space-y-2 pt-1">
         {bullets.map((b, i) => (
           <div key={i} className="flex items-start space-x-2 text-sm">
-            <ChevronRight size={10} className="text-purple-500 mt-1.5 flex-shrink-0 font-black" />
+            <ChevronRight size={10} className="text-tone-accent mt-1.5 flex-shrink-0 font-black" />
             <span className="text-muted-foreground" dangerouslySetInnerHTML={{ __html: b }} />
           </div>
         ))}
@@ -1235,8 +1257,8 @@ const WizardCard: React.FC<{
 
 // SpO2 Table — matches iOS SpO2TargetTable
 const SpO2Table: React.FC = () => (
-  <div className="rounded-xl overflow-hidden border-2 border-purple-500 bg-card shadow-sm">
-    <div className="bg-purple-600 py-2 text-center text-sm font-bold text-white">
+  <div className="rounded-xl overflow-hidden border-2 border-tone-accent bg-card shadow-sm">
+    <div className="bg-tone-accent py-2 text-center text-sm font-bold text-white">
       Acceptable Pre-ductal SpO₂
     </div>
     <div>
@@ -1254,8 +1276,16 @@ const SpO2Table: React.FC = () => (
 );
 
 // NLS Action Button
+// Older call sites name a colour; read their intent so they pick up the calm palette (matches iOS tones).
+const toneFromColour = (color: string): ButtonTone => {
+  if (color.includes('bg-red')) return 'danger';
+  if (color.includes('bg-green')) return 'positive';
+  return 'standard';
+};
+
 const NLSActionButton: React.FC<{
-  color: string;
+  color?: string;
+  tone?: ButtonTone;
   icon?: React.ReactNode;
   label: string;
   sublabel?: string;
@@ -1263,10 +1293,10 @@ const NLSActionButton: React.FC<{
   disabled?: boolean;
   height?: string;
   fontSize?: string;
-}> = ({ color, icon, label, sublabel, onClick, disabled = false, height = 'h-14', fontSize = 'text-base' }) => (
+}> = ({ color = '', tone, icon, label, sublabel, onClick, disabled = false, height = 'h-14', fontSize = 'text-base' }) => (
   <button onClick={onClick}
     disabled={disabled}
-    className={`${color} text-white ${height} w-full rounded-xl font-semibold ${fontSize} flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed`}>
+    className={`${TONE_CLASSES[tone ?? toneFromColour(color)]} ${height} w-full rounded-xl font-semibold ${fontSize} flex items-center justify-center space-x-2 active:scale-95 active:brightness-90 transition-all disabled:opacity-40 disabled:cursor-not-allowed`}>
     {icon}
     <div className="text-center leading-tight">
       <div>{label}</div>
