@@ -4,6 +4,18 @@
 
 @layer base {
   :root {
+    /* eResus palette: one calm sage tone; amber means act now, red means shock or stop.
+       Values must match the iOS app (Theme.swift). */
+    --tone-tint: 230 239 233;
+    --tone-on-tint: 29 58 43;
+    --tone-accent: 46 107 78;
+    --tone-on-accent: 255 255 255;
+    --tone-alert: 242 179 61;
+    --tone-on-alert: 58 36 0;
+    --tone-danger: 198 54 44;
+    --tone-on-danger: 255 255 255;
+    --tone-danger-tint: 249 227 224;
+    --tone-on-danger-tint: 156 39 31;
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
@@ -55,6 +67,16 @@
   }
 
   .dark {
+    --tone-tint: 30 42 35;
+    --tone-on-tint: 207 228 214;
+    --tone-accent: 63 140 104;
+    --tone-on-accent: 255 255 255;
+    --tone-alert: 242 179 61;
+    --tone-on-alert: 58 36 0;
+    --tone-danger: 216 70 59;
+    --tone-on-danger: 255 255 255;
+    --tone-danger-tint: 59 31 28;
+    --tone-on-danger-tint: 243 167 158;
     --background: 222 47% 11%;
     --foreground: 210 40% 98%;
     --card: 217 33% 17%;

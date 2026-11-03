@@ -76,6 +76,18 @@ export default {
         "surface-primary": "hsl(var(--surface-primary))",
         "surface-secondary": "hsl(var(--surface-secondary))",
         "surface-elevated": "hsl(var(--surface-elevated))",
+        tone: {
+          tint: "rgb(var(--tone-tint) / <alpha-value>)",
+          "on-tint": "rgb(var(--tone-on-tint) / <alpha-value>)",
+          accent: "rgb(var(--tone-accent) / <alpha-value>)",
+          "on-accent": "rgb(var(--tone-on-accent) / <alpha-value>)",
+          alert: "rgb(var(--tone-alert) / <alpha-value>)",
+          "on-alert": "rgb(var(--tone-on-alert) / <alpha-value>)",
+          danger: "rgb(var(--tone-danger) / <alpha-value>)",
+          "on-danger": "rgb(var(--tone-on-danger) / <alpha-value>)",
+          "danger-tint": "rgb(var(--tone-danger-tint) / <alpha-value>)",
+          "on-danger-tint": "rgb(var(--tone-on-danger-tint) / <alpha-value>)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

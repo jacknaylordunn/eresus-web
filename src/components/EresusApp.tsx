@@ -1281,6 +1281,12 @@ const useArrestViewModel = () => {
     lastRhythmNonShockable,
   ]);
 
+  // Buttons light up while their reminder is showing, so the thing to press is the thing that's lit.
+  const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
+  const isAdrenalineHighlighted =
+    shouldShowAdrenalinePrompt || (isAdrenalineAvailable && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0);
+  const isAmiodaroneHighlighted = shouldShowAmiodaroneFirstDosePrompt || shouldShowAmiodaroneReminder;
+
   // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
   const activePromptsRef = useRef<Set<VoicePrompt>>(new Set());
   useEffect(() => {
@@ -2647,6 +2653,9 @@ ${[...events]
     // Computed
     totalArrestTime,
     resuscitationTime,
+    isRhythmCheckDue,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
     canUndo,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
@@ -3436,9 +3445,8 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
 
         <ActionButton
           title="Confirm TOR (Stop CPR)"
+          tone="danger"
           icon={<Shield size={18} />}
-          backgroundColor="bg-red-600"
-          foregroundColor="text-white"
           onClick={() => {
             onConfirmTOR();
             onClose();
@@ -3770,20 +3778,17 @@ const HypothermiaModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
         </p>
         <ActionButton
           title="Severe (< 30°C)"
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Severe)}
         />
         <ActionButton
           title="Moderate (30-35°C)"
-          backgroundColor="bg-orange-500"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Moderate)}
         />
         <ActionButton
           title="Clear / Normothermic"
-          backgroundColor="bg-green-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Normothermic)}
         />
       </div>
@@ -4065,11 +4070,31 @@ const DosageEntryModal: React.FC<{
 // REUSABLE UI COMPONENTS
 //============================================================================
 
+// What a button is for, not what colour it is. Reminders override any tone with the alert colour.
+// Matches ButtonTone in the iOS app (Theme.swift).
+type ButtonTone = "standard" | "primary" | "danger" | "dangerTint";
+
+const TONE_CLASSES: Record<ButtonTone, string> = {
+  standard: "bg-tone-tint text-tone-on-tint",
+  primary: "bg-tone-accent text-tone-on-accent",
+  danger: "bg-tone-danger text-tone-on-danger",
+  dangerTint: "bg-tone-danger-tint text-tone-on-danger-tint",
+};
+
+// Older call sites still pass colour classes; read their intent so they pick up the calm palette.
+const toneFromLegacyColour = (backgroundColor = ""): ButtonTone => {
+  if (backgroundColor.includes("bg-red")) return "danger";
+  if (/bg-(blue|green)-(5|6)00/.test(backgroundColor)) return "primary";
+  return "standard";
+};
+
 interface ActionButtonProps {
   title: string;
   icon?: React.ReactNode;
-  backgroundColor: string;
-  foregroundColor: string;
+  tone?: ButtonTone;
+  highlighted?: boolean;
+  backgroundColor?: string;
+  foregroundColor?: string;
   height?: string;
   fontSize?: string;
   onClick: () => void;
@@ -4080,25 +4105,37 @@ interface ActionButtonProps {
 const ActionButton: React.FC<ActionButtonProps> = ({
   title,
   icon,
+  tone,
+  highlighted = false,
   backgroundColor,
-  foregroundColor,
   height = "h-14",
   fontSize = "text-base",
   onClick,
   disabled = false,
   className = "",
 }) => {
+  const [flash, setFlash] = useState(false);
+  const colours = highlighted
+    ? "bg-tone-alert text-tone-on-alert ring-4 ring-tone-alert/40 animate-pulse"
+    : TONE_CLASSES[tone ?? toneFromLegacyColour(backgroundColor)];
+
   return (
     <button
-      onClick={onClick}
+      onClick={() => {
+        onClick();
+        // A brief ring on release confirms the tap even when nothing else on screen changes.
+        setFlash(true);
+        setTimeout(() => setFlash(false), 350);
+      }}
       disabled={disabled}
       className={`
-        flex items-center justify-center space-x-2 w-full px-4 rounded-xl 
-        font-semibold shadow-md
-        transition-all duration-150 ease-in-out
-        active:scale-95 active:shadow-inner
+        flex items-center justify-center space-x-2 w-full px-4 rounded-xl
+        font-semibold
+        transition-all duration-150 ease-out
+        active:scale-95 active:brightness-90
         disabled:opacity-40 disabled:cursor-not-allowed
-        ${height} ${fontSize} ${backgroundColor} ${foregroundColor} ${className}
+        ${flash ? "ring-2 ring-tone-accent ring-offset-2 ring-offset-background" : ""}
+        ${height} ${fontSize} ${colours} ${className}
       `}
     >
       {icon}
@@ -4125,8 +4162,8 @@ const HeaderView: React.FC = () => {
 
   const stateInfo = {
     [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" },
-    [ArrestState.Active]: { text: "ACTIVE", color: "bg-red-500" },
-    [ArrestState.Rosc]: { text: "ROSC", color: "bg-green-500" },
+    [ArrestState.Active]: { text: "ACTIVE", color: "bg-tone-danger" },
+    [ArrestState.Rosc]: { text: "ROSC", color: "bg-tone-accent" },
     [ArrestState.Ended]: { text: "DECEASED", color: "bg-black" },
   };
 
@@ -4137,9 +4174,9 @@ const HeaderView: React.FC = () => {
   };
 
   const headerBg = isTimerPaused
-    ? "bg-orange-100 dark:bg-orange-900/30"
+    ? "bg-tone-alert/20"
     : isRhythmCheckDue
-      ? "bg-red-600"
+      ? "bg-tone-danger"
       : "bg-white dark:bg-gray-800";
 
   return (
@@ -4156,7 +4193,7 @@ const HeaderView: React.FC = () => {
           )}
           <span
             className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${
-              isTimerPaused ? "bg-orange-500" : isRhythmCheckDue ? "bg-white/30" : stateInfo[arrestState].color
+              isTimerPaused ? "bg-tone-alert text-tone-on-alert" : isRhythmCheckDue ? "bg-white/30" : stateInfo[arrestState].color
             }`}
           >
             {isTimerPaused ? "PAUSED" : stateInfo[arrestState].text}
@@ -4168,7 +4205,7 @@ const HeaderView: React.FC = () => {
             {timeOffset > 0 && (
               <span
                 className={`font-mono font-bold text-2xl mr-1 ${
-                  isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-blue-600 dark:text-blue-400"
+                  isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
                 }`}
               >
                 {Math.floor(timeOffset / 60)}+
@@ -4176,7 +4213,7 @@ const HeaderView: React.FC = () => {
             )}
             <span
               className={`font-mono font-bold text-4xl ${
-                isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-blue-600 dark:text-blue-400"
+                isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
               }`}
             >
               {TimeFormatter.format(masterTime)}
@@ -4243,25 +4280,25 @@ const StatsRow: React.FC = () => {
       <StatItem
         label="Shocks"
         value={shockCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-orange-500"}`}
+        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
         isDue={isRhythmCheckDue}
       />
       <StatItem
         label="Adrenaline"
         value={adrenalineCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-red-500"}`}
+        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
         isDue={isRhythmCheckDue}
       />
       <StatItem
         label="Amiodarone"
         value={amiodaroneCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-pink-500"}`}
+        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
         isDue={isRhythmCheckDue}
       />
       <StatItem
         label="Lidocaine"
         value={Math.max(lidocaineCount, dynamicLidocaineCount)}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-purple-500"}`}
+        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
         isDue={isRhythmCheckDue}
       />
     </div>
@@ -4306,7 +4343,7 @@ const CPRTimerView: React.FC = () => {
           cy="60"
         />
         <circle
-          className={`transition-all duration-1000 linear ${isEnding ? "text-red-500" : "text-blue-600"}`}
+          className={`transition-all duration-1000 linear ${isEnding ? "text-tone-danger" : "text-tone-accent"}`}
           strokeWidth="10"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
@@ -4320,7 +4357,7 @@ const CPRTimerView: React.FC = () => {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`font-mono font-bold text-5xl ${isEnding ? "text-red-500" : "text-gray-900 dark:text-white"}`}>
+        <span className={`font-mono font-bold text-5xl ${isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"}`}>
           {TimeFormatter.format(cprTime)}
         </span>
         <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
@@ -4337,7 +4374,7 @@ const IosAppStoreBanner: React.FC = () => {
   if (!isIos || dismissed) return null;
 
   return (
-    <div className="p-4 bg-blue-50 dark:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 flex items-center space-x-3">
+    <div className="p-4 bg-tone-tint rounded-xl border border-tone-accent/30 flex items-center space-x-3">
       <img
         src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg"
         className="w-12 h-12 rounded-xl flex-shrink-0"
@@ -4349,7 +4386,7 @@ const IosAppStoreBanner: React.FC = () => {
           href="https://apps.apple.com/gb/app/eresus/id6753123316"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm text-blue-600 dark:text-blue-400 font-medium"
+          className="text-sm text-tone-accent font-medium"
         >
           Download for iOS →
         </a>
@@ -4408,8 +4445,7 @@ const PendingView: React.FC<{
           <div className="flex space-x-3">
             <ActionButton
               title="Resume"
-              backgroundColor="bg-green-600"
-              foregroundColor="text-white"
+              tone="primary"
               height="h-12"
               onClick={resumeRecoveredSession}
             />
@@ -4426,8 +4462,7 @@ const PendingView: React.FC<{
       <IosAppStoreBanner />
       <ActionButton
         title="Start Arrest"
-        backgroundColor="bg-red-600"
-        foregroundColor="text-white"
+        tone="primary"
         height="h-20"
         fontSize="text-2xl"
         onClick={startArrest}
@@ -4435,8 +4470,7 @@ const PendingView: React.FC<{
 
       <ActionButton
         title="Newborn Life Support"
-        backgroundColor="bg-purple-600"
-        foregroundColor="text-white"
+        tone="standard"
         height="h-16"
         fontSize="text-lg"
         onClick={onShowNewborn}
@@ -4533,7 +4567,7 @@ const VoicePromptButton: React.FC = () => {
       aria-label={isOn ? "Mute spoken prompts" : "Unmute spoken prompts"}
       className={`absolute bottom-4 left-4 w-12 h-12 rounded-full flex items-center justify-center
       shadow-lg transition-colors
-      ${isOn ? "bg-blue-600 text-white" : "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400"}`}
+      ${isOn ? "bg-tone-accent text-tone-on-accent" : "bg-white dark:bg-gray-700 text-tone-accent"}`}
     >
       {isOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
     </button>
@@ -4589,7 +4623,7 @@ const ActiveArrestContentView: React.FC<{
           aria-label={isMetronomeOn ? "Turn metronome off" : "Turn metronome on"}
           className={`absolute bottom-4 right-4 w-12 h-12 rounded-full flex items-center justify-center
           shadow-lg transition-colors
-          ${isMetronomeOn ? "bg-blue-600 text-white" : "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400"}`}
+          ${isMetronomeOn ? "bg-tone-accent text-tone-on-accent" : "bg-white dark:bg-gray-700 text-tone-accent"}`}
         >
           <MetronomeIcon size={24} />
         </button>
@@ -4640,9 +4674,8 @@ const RoscView: React.FC<{
     <div className="p-4 space-y-6 pb-36">
       <ActionButton
         title="Patient Re-Arrested"
+        tone="danger"
         icon={<RotateCw size={20} />}
-        backgroundColor="bg-orange-500"
-        foregroundColor="text-white"
         height="h-16"
         fontSize="text-lg"
         onClick={reArrest}
@@ -4795,7 +4828,7 @@ const TransferArrestPill: React.FC = () => {
     <>
       <button
         onClick={() => setShowTransfer(true)}
-        className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-semibold text-sm transition-all active:scale-95"
+        className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-full bg-tone-tint text-tone-on-tint font-semibold text-sm transition-all active:scale-95"
       >
         <QrCode size={16} />
         <span>Transfer Arrest</span>
@@ -4827,6 +4860,9 @@ const ActionGridView: React.FC<{
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
     isLidocaineAvailable,
+    isRhythmCheckDue,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
   } = useArrest();
 
   // Green success flash states
@@ -4848,9 +4884,9 @@ const ActionGridView: React.FC<{
       {uiState === UIState.Default && (
         <ActionButton
           title="Analyse Rhythm"
+          tone="primary"
+          highlighted={isRhythmCheckDue}
           icon={<Activity size={20} />}
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
           height="h-16"
           fontSize="text-lg"
           onClick={analyseRhythm}
@@ -4862,34 +4898,29 @@ const ActionGridView: React.FC<{
           <div className="grid grid-cols-2 gap-3">
             <ActionButton
               title="VF"
-              backgroundColor="bg-orange-500"
-              foregroundColor="text-white"
+              tone="dangerTint"
               onClick={() => logRhythm("VF", true)}
             />
             <ActionButton
               title="VT"
-              backgroundColor="bg-orange-500"
-              foregroundColor="text-white"
+              tone="dangerTint"
               onClick={() => logRhythm("VT", true)}
             />
             <ActionButton
               title="PEA"
-              backgroundColor="bg-gray-500"
-              foregroundColor="text-white"
+              tone="standard"
               onClick={() => logRhythm("PEA", false)}
             />
             <ActionButton
               title="Asystole"
-              backgroundColor="bg-gray-500"
-              foregroundColor="text-white"
+              tone="standard"
               onClick={() => logRhythm("Asystole", false)}
             />
           </div>
           <ActionButton
             title="ROSC"
+            tone="standard"
             icon={<Heart size={18} />}
-            backgroundColor="bg-green-600"
-            foregroundColor="text-white"
             onClick={achieveROSC}
           />
         </div>
@@ -4897,9 +4928,8 @@ const ActionGridView: React.FC<{
       {uiState === UIState.ShockAdvised && (
         <ActionButton
           title="Deliver Shock"
+          tone="danger"
           icon={<Bolt size={20} />}
-          backgroundColor="bg-orange-500"
-          foregroundColor="text-white"
           height="h-16"
           fontSize="text-lg"
           onClick={deliverShock}
@@ -4912,9 +4942,9 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="Adrenaline"
+            tone="standard"
+            highlighted={isAdrenalineHighlighted}
             icon={<Syringe size={16} />}
-            backgroundColor="bg-pink-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onLogAdrenaline}
@@ -4922,9 +4952,9 @@ const ActionGridView: React.FC<{
           />
           <ActionButton
             title="Amiodarone"
+            tone="standard"
+            highlighted={isAmiodaroneHighlighted}
             icon={<Syringe size={16} />}
-            backgroundColor="bg-purple-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onLogAmiodarone}
@@ -4932,9 +4962,8 @@ const ActionGridView: React.FC<{
           />
           <ActionButton
             title="Lidocaine"
+            tone="standard"
             icon={<Syringe size={16} />}
-            backgroundColor="bg-indigo-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onLogLidocaine}
@@ -4942,9 +4971,8 @@ const ActionGridView: React.FC<{
           />
           <ActionButton
             title="Other Meds..."
+            tone="standard"
             icon={<Pill size={16} />}
-            backgroundColor="bg-gray-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onShowOtherDrugs}
@@ -4958,18 +4986,16 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="Adv. Airway"
+            tone="standard"
             icon={<AirVent size={16} />}
-            backgroundColor="bg-blue-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={handleAirway}
           />
           <ActionButton
             title="Log ETCO2"
+            tone="standard"
             icon={<Gauge size={16} />}
-            backgroundColor="bg-teal-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onShowEtco2}
@@ -4978,9 +5004,8 @@ const ActionGridView: React.FC<{
         {/* Full-width IV/IO button */}
         <ActionButton
           title="Log IV / IO"
+          tone="standard"
           icon={<Droplet size={16} />}
-          backgroundColor="bg-fuchsia-600"
-          foregroundColor="text-white"
           height="h-12"
           fontSize="text-sm"
           onClick={handleIVIO}
@@ -4993,18 +5018,16 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="ROSC"
+            tone="standard"
             icon={<HeartPulse size={16} />}
-            backgroundColor="bg-green-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={achieveROSC}
           />
           <ActionButton
             title="TOR"
+            tone="dangerTint"
             icon={<XSquare size={16} />}
-            backgroundColor="bg-red-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onShowTOR}
@@ -5025,7 +5048,7 @@ const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemainin
 const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
   <button
     onClick={onClick}
-    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
   >
     <AlertTriangle size={20} />
     <span>Adrenaline Due - Tap to Log</span>
@@ -5036,7 +5059,7 @@ const AmiodaroneReminderView: React.FC<{ onClick?: () => void; onDismiss?: () =>
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider 2nd Amiodarone - Tap to Log</span>
@@ -5059,7 +5082,7 @@ const AdrenalinePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => v
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-pink-500 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider Adrenaline - Tap to Log</span>
@@ -5082,7 +5105,7 @@ const AmiodaronePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => v
   <div className="relative">
     <button
       onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-500 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
+      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
     >
       <Syringe size={20} />
       <span>Consider Amiodarone - Tap to Log</span>
@@ -5192,24 +5215,21 @@ const BottomControlsView: React.FC<{
           <>
             <ActionButton
               title="Resume"
+              tone="primary"
               icon={<Heart size={18} />}
-              backgroundColor="bg-green-600"
-              foregroundColor="text-white"
               height="h-12"
               onClick={resumeArrest}
             />
             <ActionButton
               title="Summary"
-              backgroundColor="bg-blue-600"
-              foregroundColor="text-white"
+              tone="primary"
               height="h-12"
               onClick={onShowSummary}
             />
             <ActionButton
               title="Reset"
+              tone="danger"
               icon={<RotateCw size={18} />}
-              backgroundColor="bg-red-600"
-              foregroundColor="text-white"
               height="h-12"
               onClick={onShowReset}
             />
@@ -5218,25 +5238,22 @@ const BottomControlsView: React.FC<{
           <>
             <ActionButton
               title="Undo"
+              tone="primary"
               icon={<Undo size={18} />}
-              backgroundColor="bg-gray-200 dark:bg-gray-700"
-              foregroundColor="text-gray-800 dark:text-gray-200"
               height="h-12"
               onClick={undo}
               disabled={!canUndo}
             />
             <ActionButton
               title="Summary"
-              backgroundColor="bg-blue-600"
-              foregroundColor="text-white"
+              tone="primary"
               height="h-12"
               onClick={onShowSummary}
             />
             <ActionButton
               title="Stop"
+              tone="danger"
               icon={<Square size={18} />}
-              backgroundColor="bg-red-600"
-              foregroundColor="text-white"
               height="h-12"
               onClick={pauseArrest}
             />
@@ -5874,8 +5891,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
           </p>
           <ActionButton
             title="Sign Out"
-            backgroundColor="bg-red-600"
-            foregroundColor="text-white"
+            tone="dangerTint"
             onClick={handleSignOut}
           />
         </div>
