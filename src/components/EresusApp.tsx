@@ -2422,7 +2422,13 @@ ${[...events]
   const hostSessionTransfer = async (): Promise<string | null> => {
     try {
       const state = generateTransferState();
-      const transferId = String(Math.floor(100000 + Math.random() * 900000));
+      // Pick a code that isn't already in use, so two crews transferring at once can't overwrite each other.
+      let transferId: string | null = null;
+      for (let attempt = 0; attempt < 5 && !transferId; attempt++) {
+        const candidate = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
+        if (!(await getDoc(doc(db, "transfers", candidate))).exists()) transferId = candidate;
+      }
+      if (!transferId) return null;
       // Write stateData as Firestore Bytes/Blob so iOS can read it as Swift Data
       const encodedStateData = convertToiOSTransferFormat(state);
       await setDoc(doc(db, "transfers", transferId), {
@@ -2478,6 +2484,16 @@ ${[...events]
         }
       }
       const state = JSON.parse(rawStateData);
+
+      // The web app has no newborn transfer support yet. Refuse rather than silently treating it as ALS,
+      // and leave the code valid so it can still be received on an iPhone or iPad.
+      if (state.arrestType === "NEWBORN") {
+        return {
+          success: false,
+          error:
+            "This is a newborn life support session. It can't be opened in the web app yet. Receive it on an iPhone or iPad with eResus instead.",
+        };
+      }
 
       // --- Normalize iOS format to PWA format ---
 
