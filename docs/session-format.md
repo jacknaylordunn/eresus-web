@@ -23,7 +23,7 @@ Rules for future versions:
 - JSON object, UTF-8.
 - Firestore `transfers/{code}`: in field `stateData`, as a string (iOS) or Bytes (PWA). Readers accept both, plus a base64 string or plain JSON from older PWA builds.
 - Dates are **seconds since 1 January 2001 UTC** (Apple reference date), as numbers. PWA builds before v1.3 sometimes sent ISO 8601 strings; readers accept both.
-- Times within the arrest (`masterTime`, `cprCycleStartTime`, event timestamps and so on) are **seconds**, measured on the total-time scale: time since Start plus `timeOffset` (downtime).
+- Times within the arrest (`cprCycleStartTime`, event timestamps and so on) are **seconds**, measured on the total-time scale: time since Start plus `timeOffset`. 0 is when the first ambulance resource (crew or CFR) confirmed cardiac arrest, or for a newborn, birth.
 
 ## Fields
 
@@ -35,7 +35,7 @@ Required means iOS 1.2 cannot decode the session without it.
 |---|---|---|---|
 | `startTime` | number (Apple date) or null | | When Start was tapped (shifted forward by any paused time) |
 | `masterTime` | number | yes | Seconds since Start at the moment of encoding. Readers recompute from `startTime` |
-| `timeOffset` | number | yes | Estimated downtime added with +1/+5/+10 |
+| `timeOffset` | number | yes | Estimated time between the arrest being confirmed (newborn: birth) and Start, set with +1/+5/+10 or by voice. Counts towards ToR timing. Apps before v1.3 called it downtime and may have included time before arrival |
 | `cprTime` | number | yes | Seconds left in the current CPR cycle at encoding |
 | `cprCycleStartTime` | number | | Total time at which the current cycle started. If missing, derive: `masterTime + timeOffset - (cycleDuration - cprTime)` |
 | `isTimerPaused` | bool | | |
@@ -99,6 +99,10 @@ Required means iOS 1.2 cannot decode the session without it.
 ```
 
 `type` is one of `status`, `cpr`, `shock`, `analysis`, `rhythm`, `drug`, `airway`, `etco2`, `cause`. Writers map anything else (such as the PWA's `vascularAccess`) to `status`.
+
+A message containing `(estimated)` was logged after the fact: back-dated by voice, or given before eResus was started (those sit at the moment of Start, `timestamp` = `timeOffset`, and say "times unknown"). The text is the record, so there is no separate field; research uploads add `estimated` derived from it.
+
+When `timeOffset` > 0 there is one `status` event at 0 starting "Cardiac arrest confirmed ~" (newborn: "Born ~"), giving the estimate in whole minutes. Writers replace it rather than adding another when the estimate changes, and move every other timestamp by the same amount.
 
 ## Fixtures
 

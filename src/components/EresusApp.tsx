@@ -10,6 +10,7 @@ import React, {
   useCallback,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { initializeApp, FirebaseApp } from "firebase/app";
 import {
   getFirestore,
@@ -95,7 +96,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
-import { formatNumber, parseVoiceCommand, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
+import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
 import {
   checkVoiceCommandAvailability,
   installVoiceCommandLanguage,
@@ -139,6 +140,18 @@ export interface Event {
   message: string;
   type: EventType;
 }
+
+// The message is the record: entries logged after the fact carry "(estimated)" (before any "(voice)").
+export const isEstimated = (message: string) => message.includes("(estimated)");
+export const CONFIRMED_ENTRY_PREFIXES = ["Cardiac arrest confirmed ~", "Born ~"];
+const isConfirmedEntry = (event: Event) =>
+  event.type === EventType.Status && CONFIRMED_ENTRY_PREFIXES.some((prefix) => event.message.startsWith(prefix));
+// Seconds between the arrest being confirmed and eResus being started, read from the log's own entry.
+export const timeBeforeStart = (events: { message: string }[]): number => {
+  const entry = events.find((e) => CONFIRMED_ENTRY_PREFIXES.some((prefix) => e.message.startsWith(prefix)));
+  const minutes = entry ? Number(entry.message.split("~")[1]?.split(" ")[0]) : 0;
+  return Number.isFinite(minutes) ? minutes * 60 : 0;
+};
 
 export enum ArrestState {
   Pending = "PENDING",
@@ -1116,13 +1129,32 @@ const extractRealWorldTime = (events: Event[], searchPatterns: string[]): string
   return null;
 };
 
+// Event times count from when the arrest was confirmed, which can be before the Start tap; the
+// "Arrest Started" entry marks the Start tap on that scale (matches iOS).
+const startTapTimestamp = (events: { timestamp: number; message: string }[]): number =>
+  events.find((e) => e.message.startsWith("Arrest Started") || e.message.startsWith("Transitioned to Paediatric ALS"))
+    ?.timestamp ?? 0;
+
+// Lidocaine doses in a log: one "Given" entry per dose, plus "Lidocaine ×2 before eResus" entries.
+export const lidocaineDosesIn = (events: { message: string }[]): number =>
+  events.reduce((total, e) => {
+    const message = e.message.toLowerCase();
+    if (message.includes("lidocaine") && message.includes("given")) return total + 1;
+    const before = e.message.match(/^Lidocaine ×(\d+) before eResus/);
+    return before ? total + Number(before[1]) : total;
+  }, 0);
+
+const clockTimeOf = (startTime: Date, events: { timestamp: number; message: string }[], timestamp: number): Date =>
+  new Date(startTime.getTime() + (timestamp - startTapTimestamp(events)) * 1000);
+
 const extractFirstEventTime = (events: Event[], searchPatterns: string[], startTime: Date | null): string | null => {
   const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
   for (const event of sorted) {
     for (const pattern of searchPatterns) {
       if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
+        if (event.message.includes("before eResus")) return "Before eResus";
         if (startTime) {
-          const eventDate = new Date(startTime.getTime() + event.timestamp * 1000);
+          const eventDate = clockTimeOf(startTime, events, event.timestamp);
           return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
         }
         return TimeFormatter.format(event.timestamp);
@@ -1137,8 +1169,9 @@ const extractLastEventTime = (events: Event[], searchPatterns: string[], startTi
   for (const event of sorted) {
     for (const pattern of searchPatterns) {
       if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
+        if (event.message.includes("before eResus")) return "Before eResus";
         if (startTime) {
-          const eventDate = new Date(startTime.getTime() + event.timestamp * 1000);
+          const eventDate = clockTimeOf(startTime, events, event.timestamp);
           return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
         }
         return TimeFormatter.format(event.timestamp);
@@ -1250,13 +1283,14 @@ const useArrestViewModel = () => {
   const [hideAdrenalinePrompt, setHideAdrenalinePrompt] = useState(false);
   const [hideAmiodaronePrompt, setHideAmiodaronePrompt] = useState(false);
   const [lastRhythmNonShockable, setLastRhythmNonShockable] = useState(false);
-  const [roscTime, setRoscTime] = useState<number | null>(null);
+  const [roscTime, setRoscTime] = useState<number | null>(s?.roscTime ?? null);
   const [airwayAdjunct, setAirwayAdjunct] = useState<AirwayAdjunctType | null>(null);
 
   // Computed
   const totalArrestTime = useMemo(() => masterTime + timeOffset, [masterTime, timeOffset]);
-  // JRCALC ToR timing runs from when the crew confirms arrest (the Start tap), so downtime is excluded.
-  const resuscitationTime = masterTime;
+  // JRCALC ToR timing runs from when the first ambulance resource (crew or CFR) confirmed the arrest,
+  // which includes any time entered as before eResus was started.
+  const resuscitationTime = totalArrestTime;
   const canUndo = undoHistory.length > 0;
 
   const isAdrenalineAvailable = useMemo(() => {
@@ -1268,14 +1302,20 @@ const useArrestViewModel = () => {
   const isAmiodaroneAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && isAdrenalineAvailable;
   const isLidocaineAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone;
 
+  const currentAdrenalineInterval =
+    reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus === HypothermiaStatus.Moderate
+      ? adrenalineInterval * 2
+      : adrenalineInterval;
+
   const timeUntilAdrenaline = useMemo(() => {
     const lastAdrenalineTime = lastAdrenalineTimeRef.current;
     if (lastAdrenalineTime === null) return null;
-    const hypothermiaStatus = reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus;
-    const interval = hypothermiaStatus === HypothermiaStatus.Moderate ? adrenalineInterval * 2 : adrenalineInterval;
-    const timeSince = totalArrestTime - lastAdrenalineTime;
-    return interval - timeSince;
-  }, [totalArrestTime, reversibleCauses, adrenalineInterval]);
+    return currentAdrenalineInterval - (totalArrestTime - lastAdrenalineTime);
+  }, [totalArrestTime, currentAdrenalineInterval]);
+
+  // Adrenaline was given before eResus but nobody knows when. There's no timer to run, so the screen asks;
+  // if nobody answers, the next rhythm check treats it as due rather than staying silent.
+  const isLastAdrenalineTimeUnknown = adrenalineCount > 0 && lastAdrenalineTimeRef.current === null && isAdrenalineAvailable;
 
   const shouldShowAmiodaroneReminder = useMemo(() => {
     const shockCountDose1 = shockCountForAmiodarone1Ref.current;
@@ -1413,6 +1453,7 @@ const useArrestViewModel = () => {
       patientAgeStr,
       patientGenderStr,
       initialRhythm,
+      roscTime,
       torTime,
       vodTime,
       vodChecklist,
@@ -1442,6 +1483,7 @@ const useArrestViewModel = () => {
     patientAgeStr,
     patientGenderStr,
     initialRhythm,
+    roscTime,
     torTime,
     vodTime,
     vodChecklist,
@@ -1471,6 +1513,7 @@ const useArrestViewModel = () => {
     setPatientAgeStr(s.patientAgeStr ?? "");
     setPatientGenderStr(s.patientGenderStr ?? "");
     setInitialRhythm(s.initialRhythm ?? null);
+    setRoscTime(s.roscTime ?? null);
     setTorTime(s.torTime ?? null);
     setVodTime(s.vodTime ?? null);
     setVodChecklist(s.vodChecklist ?? AppConstants.vodChecklistTemplate());
@@ -1540,8 +1583,8 @@ const useArrestViewModel = () => {
     return (Date.now() - startTimeRef.current.getTime()) / 1000 + timeOffset;
   };
 
-  // Converts a spoken time to the total-time scale. Null if it's in the future or before the arrest began.
-  const arrestTime = (time: VoiceTime, now: Date = new Date()): number | null => {
+  // The moment a spoken time refers to. Null if it's in the future.
+  const dateFor = (time: VoiceTime, now: Date = new Date()): Date | null => {
     let date: Date;
     if ("secondsAgo" in time) {
       date = new Date(now.getTime() - time.secondsAgo * 1000);
@@ -1561,9 +1604,16 @@ const useArrestViewModel = () => {
       if (candidates.length === 0) return null;
       date = new Date(Math.max(...candidates));
     }
+    return date.getTime() <= now.getTime() + 60_000 ? date : null;
+  };
+
+  // Converts a spoken time to the total-time scale. Null if it's in the future or before the arrest began.
+  const arrestTime = (time: VoiceTime, now: Date = new Date()): number | null => {
+    const date = dateFor(time, now);
+    if (!date) return null;
     const current = actionTime();
     const total = current - (now.getTime() - date.getTime()) / 1000;
-    if (total < 0 || date.getTime() > now.getTime() + 60_000) return null;
+    if (total < 0) return null;
     return Math.min(total, current);
   };
 
@@ -1571,7 +1621,11 @@ const useArrestViewModel = () => {
     const fromVoice = nextEventFromVoiceRef.current;
     nextEventFromVoiceRef.current = false;
     const timestamp = eventTimeOverrideRef.current ?? totalArrestTime;
-    const newEvent: Event = { timestamp, message: fromVoice ? `${message} (voice)` : message, type };
+    // Anything not logged at the moment it happened is an estimate, and the record says so.
+    let finalMessage = message;
+    if (eventTimeOverrideRef.current !== null && !isEstimated(message)) finalMessage += " (estimated)";
+    if (fromVoice) finalMessage += " (voice)";
+    const newEvent: Event = { timestamp, message: finalMessage, type };
     // Newest first; a back-dated entry goes into its place in the timeline.
     setEvents((prevEvents) => {
       const index = prevEvents.findIndex((event) => event.timestamp <= timestamp);
@@ -1796,6 +1850,8 @@ const useArrestViewModel = () => {
     setLastRhythmNonShockable(false);
     setUiState(UIState.Analyzing);
     logEvent("Rhythm analysis. Pausing CPR.", EventType.Analysis);
+    // After the analysis entry, so a "(voice)" mark goes on the right one.
+    if (isLastAdrenalineTimeUnknown) markLastAdrenalineTime(null);
   };
 
   const logRhythm = (rhythm: string, isShockable: boolean) => {
@@ -1969,13 +2025,118 @@ const useArrestViewModel = () => {
   };
 
   const addTimeOffset = (seconds: number) => {
+    setTimeBeforeStart(timeOffset + seconds);
+  };
+
+  // How long before the Start tap the first ambulance resource confirmed the arrest. Everything already
+  // recorded keeps its real moment, so it all moves by the same amount. Returns false, changing nothing,
+  // if that would put an entry before 00:00 (matches iOS).
+  const setTimeBeforeStart = (offset: number): boolean => {
+    const newOffset = Math.max(0, offset);
+    const delta = newOffset - timeOffset;
+    if (delta === 0) return true;
+    const kept = events.filter((e) => !isConfirmedEntry(e));
+    if (kept.length > 0 && Math.min(...kept.map((e) => e.timestamp)) + delta < 0) return false;
+    if (cprCycleStartTimeRef.current + delta < 0) return false;
+
     saveUndoState();
-    setTimeOffset((t) => t + seconds);
-    // Interval timers are stored on the total-time scale, so move them with the offset
-    // or adding downtime mid-cycle triggers a false rhythm check and an early adrenaline prompt.
-    cprCycleStartTimeRef.current += seconds;
-    if (lastAdrenalineTimeRef.current !== null) lastAdrenalineTimeRef.current += seconds;
-    logEvent(`Time offset added: +${seconds / 60} min`, EventType.Status);
+    setTimeOffset(newOffset);
+    cprCycleStartTimeRef.current += delta;
+    if (lastAdrenalineTimeRef.current !== null) lastAdrenalineTimeRef.current += delta;
+    setRoscTime((t) => (t === null ? t : t + delta));
+    setTorTime((t) => (t === null ? t : t + delta));
+    setVodTime((t) => (t === null ? t : t + delta));
+    setEvents((prev) => {
+      const shifted = prev.filter((e) => !isConfirmedEntry(e)).map((e) => ({ ...e, timestamp: e.timestamp + delta }));
+      if (newOffset > 0) {
+        shifted.push({
+          timestamp: 0,
+          message: `Cardiac arrest confirmed ~${Math.round(newOffset / 60)} min before eResus was started (estimated)`,
+          type: EventType.Status,
+        });
+      }
+      return shifted;
+    });
+    return true;
+  };
+
+  // Shocks and drugs given before eResus, times unknown, recorded at the moment eResus was started.
+  // Several at once share one undo step. Returns false if it conflicts with the antiarrhythmic already recorded.
+  const logBeforeStart = (counts: Partial<Record<GivenItem, number>>): boolean => {
+    const shocks = counts.shock ?? 0;
+    const adrenaline = counts.adrenaline ?? 0;
+    const amiodarone = counts.amiodarone ?? 0;
+    const lidocaine = counts.lidocaine ?? 0;
+    if (amiodarone > 0 && (antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine || lidocaine > 0)) return false;
+    if (lidocaine > 0 && antiarrhythmicGiven === AntiarrhythmicDrug.Amiodarone) return false;
+    if (shocks + adrenaline + amiodarone + lidocaine === 0) return true;
+    if (arrestState !== ArrestState.Active) return false;
+
+    saveUndoState();
+    const entries: [string, EventType][] = [];
+    if (shocks > 0) {
+      setShockCount((c) => c + shocks);
+      setHideAdrenalinePrompt(false);
+      setHideAmiodaronePrompt(false);
+      // Amiodarone recorded before the shocks was timed from too few shocks; now the count is known.
+      const anchor = shockCountForAmiodarone1Ref.current;
+      if (amiodarone === 0 && amiodaroneCount > 0 && anchor !== null && anchor < 3 + stackedShockExtra) {
+        shockCountForAmiodarone1Ref.current = Math.min(3 + stackedShockExtra, shockCount + shocks);
+      }
+      entries.push([shocks === 1 ? "1 shock" : `${shocks} shocks`, EventType.Shock]);
+    }
+    if (adrenaline > 0) {
+      setAdrenalineCount((c) => c + adrenaline);
+      entries.push([`Adrenaline ×${adrenaline}`, EventType.Drug]);
+    }
+    if (amiodarone > 0) {
+      setAmiodaroneCount((c) => c + amiodarone);
+      setAntiarrhythmicGiven(AntiarrhythmicDrug.Amiodarone);
+      // RCUK: the first dose follows the 3rd shock. If fewer shocks are known the count is probably
+      // incomplete, so time the next dose from now rather than waiting for shocks that already happened.
+      if (shockCountForAmiodarone1Ref.current === null) {
+        const totalShocks = shockCount + shocks;
+        shockCountForAmiodarone1Ref.current = totalShocks - stackedShockExtra >= 3 ? 3 + stackedShockExtra : totalShocks;
+      }
+      entries.push([`Amiodarone ×${amiodarone}`, EventType.Drug]);
+    }
+    if (lidocaine > 0) {
+      setLidocaineCount((c) => c + lidocaine);
+      setAntiarrhythmicGiven(AntiarrhythmicDrug.Lidocaine);
+      entries.push([`Lidocaine ×${lidocaine}`, EventType.Drug]);
+    }
+    for (const [message, type] of entries) logAtStart(`${message} before eResus, times unknown (estimated)`, type);
+    return true;
+  };
+
+  // A rhythm from before eResus: recorded only, it doesn't start a rhythm check or advise a shock.
+  const logEarlierRhythm = (rhythm: string) => {
+    saveUndoState();
+    if (initialRhythm === null) setInitialRhythm(rhythm);
+    logAtStart(`Rhythm before eResus: ${rhythm} (estimated)`, EventType.Rhythm);
+  };
+
+  const setLastAdrenaline = (minutesAgo: number | null) => {
+    if (!isLastAdrenalineTimeUnknown) return;
+    saveUndoState();
+    markLastAdrenalineTime(minutesAgo);
+  };
+
+  const markLastAdrenalineTime = (minutesAgo: number | null) => {
+    if (minutesAgo !== null) {
+      lastAdrenalineTimeRef.current = actionTime() - minutesAgo * 60;
+      logEvent(`Last adrenaline ~${minutesAgo} min ago (estimated)`, EventType.Status);
+    } else {
+      lastAdrenalineTimeRef.current = actionTime() - currentAdrenalineInterval;
+      logEvent("Last adrenaline time unknown: treated as due now", EventType.Status);
+    }
+  };
+
+  const logAtStart = (message: string, type: EventType) => {
+    const previous = eventTimeOverrideRef.current;
+    eventTimeOverrideRef.current = timeOffset;
+    logEvent(message, type);
+    eventTimeOverrideRef.current = previous;
   };
 
   const toggleChecklistItemCompletion = (item: ChecklistItem) => {
@@ -2016,11 +2177,7 @@ const useArrestViewModel = () => {
   );
 
   // Dynamically count lidocaine from events (fixes iOS parity issue)
-  const dynamicLidocaineCount = useMemo(() => {
-    return events.filter(
-      (e) => e.message.toLowerCase().includes("lidocaine") && e.message.toLowerCase().includes("given"),
-    ).length;
-  }, [events]);
+  const dynamicLidocaineCount = useMemo(() => lidocaineDosesIn(events), [events]);
 
   const copySummaryToClipboard = () => {
     const startText = startTimeRef.current
@@ -2049,7 +2206,7 @@ const useArrestViewModel = () => {
       roscTime !== null
         ? startTimeRef.current
           ? `ROSC at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + roscTime * 1000);
+              const d = clockTimeOf(startTimeRef.current, events, roscTime);
               return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
             })()}`
           : `ROSC at: ${TimeFormatter.format(roscTime)}`
@@ -2058,7 +2215,7 @@ const useArrestViewModel = () => {
       torTime !== null
         ? startTimeRef.current
           ? `TOR at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + torTime * 1000);
+              const d = clockTimeOf(startTimeRef.current, events, torTime);
               return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
             })()}`
           : `TOR at: ${TimeFormatter.format(torTime)}`
@@ -2067,7 +2224,7 @@ const useArrestViewModel = () => {
       vodTime !== null
         ? startTimeRef.current
           ? `VOD at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + vodTime * 1000);
+              const d = clockTimeOf(startTimeRef.current, events, vodTime);
               return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
             })()}`
           : `VOD at: ${TimeFormatter.format(vodTime)}`
@@ -2131,9 +2288,13 @@ ${[...events]
       initialRhythm: initialRhythm || null,
       organization: userOrganization || null,
       isSynced: false,
+      timeBeforeStart: timeBeforeStart(events),
+      // 3: event times count from when the arrest was confirmed, including time before eResus was started.
+      // Sessions from older builds added "downtime" that may have been before arrival (matches iOS).
+      timingVersion: events.some((e) => e.message.startsWith("Time offset added")) ? 2 : 3,
     };
 
-    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type }));
+    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type, estimated: isEstimated(e.message) }));
 
     if (!navigator.onLine) {
       // Queue for later sync
@@ -2180,6 +2341,8 @@ ${[...events]
             organization: userOrganization || "Unknown",
             uid: userId,
             timestamp: serverTimestamp(),
+            timeBeforeStart: logData.timeBeforeStart,
+            timingVersion: logData.timingVersion,
           };
           if (roscTime !== null) researchData.roscTime = roscTime;
           if (torTime !== null) researchData.torTime = torTime;
@@ -2192,6 +2355,7 @@ ${[...events]
               timestamp: event.timestamp,
               message: event.message,
               type: event.type,
+              estimated: isEstimated(event.message),
             });
           }
 
@@ -2301,6 +2465,8 @@ ${[...events]
               organization: entry.logData.organization || "Unknown",
               uid: entry.userId,
               timestamp: serverTimestamp(),
+              // Logs queued by older builds have no timing version; leave it off rather than guess.
+              ...(entry.logData.timingVersion ? { timeBeforeStart: entry.logData.timeBeforeStart ?? 0, timingVersion: entry.logData.timingVersion } : {}),
             };
             if (entry.logData.roscTime !== null) researchData.roscTime = entry.logData.roscTime;
             if (entry.logData.torTime !== null) researchData.torTime = entry.logData.torTime;
@@ -2312,6 +2478,7 @@ ${[...events]
                 timestamp: event.timestamp,
                 message: event.message,
                 type: event.type,
+                estimated: isEstimated(event.message),
               });
             }
             await updateDoc(doc(db, logsCollectionPath, logDocRef.id), { isSynced: true });
@@ -2685,7 +2852,14 @@ ${[...events]
     deliverStackedShocks,
     stackedShockExtra,
     performFromVoice,
+    drugTimingShockCount,
     arrestTime,
+    dateFor,
+    setTimeBeforeStart,
+    logBeforeStart,
+    logEarlierRhythm,
+    setLastAdrenaline,
+    isLastAdrenalineTimeUnknown,
     // v1.2 transfer
     hostSessionTransfer,
     receiveSessionTransfer,
@@ -3345,14 +3519,16 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
           <p
             className={`font-semibold ${resuscitationTime >= thresholdTime ? "text-red-600 dark:text-red-400" : "text-gray-700 dark:text-gray-300"}`}
           >
-            Resuscitation Time: {TimeFormatter.format(resuscitationTime)}
+            Resuscitation Time: {timeOffset > 0 ? "~" : ""}
+            {TimeFormatter.format(resuscitationTime)}
+            {timeOffset > 0 ? " (estimated)" : ""}
           </p>
-          {timeOffset > 0 && (
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Plus estimated downtime before arrival: {Math.floor(timeOffset / 60)} min
-            </p>
-          )}
-          <p className="text-xs text-gray-500 dark:text-gray-400">Timed from when the crew confirmed cardiac arrest.</p>
+          {/* With no time added, the clock started with eResus, so say that rather than claim more. */}
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {timeOffset > 0
+              ? `Timed from when the first ambulance resource (crew or CFR) confirmed cardiac arrest, including about ${Math.round(timeOffset / 60)} min before eResus was started (estimated).`
+              : "Timed from when eResus was started. If the arrest was confirmed earlier, add the time with +1/+5/+10."}
+          </p>
         </div>
 
         <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
@@ -3589,7 +3765,7 @@ const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpe
 
   const getRealWorldTime = (offsetSeconds: number | null): string | null => {
     if (offsetSeconds === null || !startTime) return null;
-    const d = new Date(startTime.getTime() + offsetSeconds * 1000);
+    const d = clockTimeOf(startTime, events, offsetSeconds);
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
 
@@ -4150,10 +4326,9 @@ const ActionButton: React.FC<ActionButtonProps> = ({
 };
 
 // Header & Timers
-const HeaderView: React.FC = () => {
+const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
   const {
     arrestState,
-    masterTime,
     timeOffset,
     totalArrestTime,
     addTimeOffset,
@@ -4162,8 +4337,12 @@ const HeaderView: React.FC = () => {
     isTimerPaused,
     analyseRhythm,
   } = useArrest();
+  const [showTimeCorrection, setShowTimeCorrection] = useState(false);
+  const [showBeforeEResus, setShowBeforeEResus] = useState(false);
 
   const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
+  const canCorrectTime = timeOffset > 0 && !isRhythmCheckDue && arrestState !== ArrestState.Ended;
+  const canAddBeforeEResus = arrestState === ArrestState.Active && !isRhythmCheckDue && !isTimerPaused;
 
   const stateInfo = {
     [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" },
@@ -4206,30 +4385,36 @@ const HeaderView: React.FC = () => {
         </div>
 
         <div className="flex flex-col items-end">
-          <div className="flex items-baseline">
-            {timeOffset > 0 && (
-              <span
-                className={`font-mono font-bold text-2xl mr-1 ${
-                  isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
-                }`}
-              >
-                {Math.floor(timeOffset / 60)}+
-              </span>
-            )}
-            <span
-              className={`font-mono font-bold text-4xl ${
-                isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
-              }`}
-            >
-              {TimeFormatter.format(masterTime)}
-            </span>
-          </div>
+          {/* Time since the arrest was confirmed. "~" when part of it is estimated; tapping it then lets a
+              mis-tapped +10 be corrected. */}
+          {/* Not disabled: a disabled button swallows the tap the header needs when a rhythm check is due. */}
+          <button
+            type="button"
+            tabIndex={canCorrectTime ? 0 : -1}
+            onClick={(e) => {
+              if (!canCorrectTime) return;
+              e.stopPropagation();
+              setShowTimeCorrection(true);
+            }}
+            aria-label={
+              timeOffset > 0
+                ? `${TimeFormatter.format(totalArrestTime)}, including about ${Math.round(timeOffset / 60)} minutes estimated`
+                : undefined
+            }
+            className={`flex items-baseline ${canCorrectTime ? "" : "pointer-events-none"} ${
+              isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
+            }`}
+          >
+            {timeOffset > 0 && <span className="font-mono font-bold text-2xl mr-1">~</span>}
+            <span className="font-mono font-bold text-4xl">{TimeFormatter.format(totalArrestTime)}</span>
+          </button>
           {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
             <div className="flex space-x-1 mt-1">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   addTimeOffset(60);
+                  onAddTime?.();
                 }}
                 className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
               >
@@ -4239,6 +4424,7 @@ const HeaderView: React.FC = () => {
                 onClick={(e) => {
                   e.stopPropagation();
                   addTimeOffset(300);
+                  onAddTime?.();
                 }}
                 className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
               >
@@ -4248,6 +4434,7 @@ const HeaderView: React.FC = () => {
                 onClick={(e) => {
                   e.stopPropagation();
                   addTimeOffset(600);
+                  onAddTime?.();
                 }}
                 className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
               >
@@ -4258,9 +4445,165 @@ const HeaderView: React.FC = () => {
         </div>
       </div>
 
-      {/* Stats Row */}
-      {arrestState !== ArrestState.Pending && <StatsRow />}
+      {/* Stats Row. Tapping it adds shocks and drugs given before eResus was started. */}
+      {arrestState !== ArrestState.Pending && (
+        <button
+          type="button"
+          tabIndex={canAddBeforeEResus ? 0 : -1}
+          className={`block w-full text-left ${canAddBeforeEResus ? "" : "pointer-events-none"}`}
+          aria-describedby={canAddBeforeEResus ? "before-eresus-hint" : undefined}
+          onClick={(e) => {
+            if (!canAddBeforeEResus) return;
+            e.stopPropagation();
+            setShowBeforeEResus(true);
+          }}
+        >
+          <StatsRow />
+          <span id="before-eresus-hint" className="sr-only">
+            Add shocks or drugs given before eResus was started
+          </span>
+        </button>
+      )}
+      {/* Outside the header, so the backdrop isn't under the bottom bar and its taps don't reach the header. */}
+      {createPortal(
+        <div onClick={(e) => e.stopPropagation()}>
+          <TimeCorrectionModal isOpen={showTimeCorrection} onClose={() => setShowTimeCorrection(false)} />
+          <BeforeEResusModal isOpen={showBeforeEResus} onClose={() => setShowBeforeEResus(false)} />
+        </div>,
+        document.body,
+      )}
     </div>
+  );
+};
+
+const TimeCorrectionModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { timeOffset, setTimeBeforeStart } = useArrest();
+  const [refused, setRefused] = useState(false);
+  const minutes = Math.round(timeOffset / 60);
+  const close = () => {
+    setRefused(false);
+    onClose();
+  };
+  const correct = (seconds: number) => {
+    if (setTimeBeforeStart(timeOffset - seconds)) close();
+    else setRefused(true);
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={close} title={`~${minutes} min before eResus (estimated)`}>
+      <div className="space-y-3">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Time between the first ambulance resource confirming arrest and starting eResus, included in the clock and ToR
+          timing.
+        </p>
+        {refused && (
+          <p className="text-sm text-tone-danger">
+            <strong>Can't reduce it that far.</strong> Some entries are earlier than that, so the time wasn't changed.
+          </p>
+        )}
+        <button onClick={() => correct(60)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+          Remove 1 min
+        </button>
+        {timeOffset >= 300 && (
+          <button onClick={() => correct(300)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+            Remove 5 min
+          </button>
+        )}
+        <button
+          onClick={() => correct(timeOffset)}
+          className="w-full py-3 rounded-xl font-semibold bg-tone-danger text-tone-on-danger"
+        >
+          Clear
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+// Shocks and drugs given before eResus was started, which keep the drug prompts in step.
+// Times aren't known, so they're recorded at the moment eResus was started and marked as estimated.
+const BEFORE_ITEMS: [GivenItem, string][] = [
+  ["shock", "Shocks"],
+  ["adrenaline", "Adrenaline"],
+  ["amiodarone", "Amiodarone"],
+  ["lidocaine", "Lidocaine"],
+];
+
+const BeforeEResusModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { logBeforeStart, antiarrhythmicGiven, drugTimingShockCount } = useArrest();
+  const [counts, setCounts] = useState<Partial<Record<GivenItem, number>>>({});
+  const close = () => {
+    setCounts({});
+    onClose();
+  };
+  // One antiarrhythmic per arrest, as on the main screen.
+  const isAllowed = (item: GivenItem) =>
+    item === "amiodarone"
+      ? antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && !counts.lidocaine
+      : item === "lidocaine"
+        ? antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone && !counts.amiodarone
+        : true;
+  const change = (item: GivenItem, by: number) =>
+    setCounts((c) => ({ ...c, [item]: Math.min(10, Math.max(0, (c[item] ?? 0) + by)) }));
+  const hasAny = Object.values(counts).some((n) => (n ?? 0) > 0);
+  const antiarrhythmicBeforeThirdShock =
+    (counts.amiodarone ?? 0) + (counts.lidocaine ?? 0) > 0 && drugTimingShockCount + (counts.shock ?? 0) < 3;
+
+  return (
+    <Modal isOpen={isOpen} onClose={close} title="Given before eResus">
+      <div className="divide-y divide-gray-200 dark:divide-gray-700">
+        {BEFORE_ITEMS.map(([item, label]) => {
+          const value = counts[item] ?? 0;
+          const allowed = isAllowed(item);
+          return (
+            <div key={item} className={`flex items-center justify-between py-2 ${allowed ? "" : "opacity-40"}`}>
+              <span className="font-semibold text-gray-900 dark:text-white">{label}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => change(item, -1)}
+                  disabled={!allowed || value === 0}
+                  aria-label={`One fewer ${label.toLowerCase()}`}
+                  className="w-11 h-11 rounded-xl flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-tone-accent disabled:opacity-40"
+                >
+                  <Minus size={20} />
+                </button>
+                <span className="w-8 text-center font-mono text-xl font-bold text-gray-900 dark:text-white" aria-live="polite">
+                  {value}
+                </span>
+                <button
+                  onClick={() => change(item, 1)}
+                  disabled={!allowed || value === 10}
+                  aria-label={`One more ${label.toLowerCase()}`}
+                  className="w-11 h-11 rounded-xl flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-tone-accent disabled:opacity-40"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {antiarrhythmicBeforeThirdShock && (
+        <p className="mt-3 p-3 rounded-xl text-sm font-semibold bg-tone-alert/25 text-tone-on-alert">
+          Amiodarone and lidocaine are usually given after the 3rd shock. Add the shocks given too, so the next dose is
+          prompted at the right time.
+        </p>
+      )}
+      <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+        Recorded as given before eResus, times unknown (estimated). If you know when the last adrenaline was, you can choose it
+        on the arrest screen.
+      </p>
+      <button
+        disabled={!hasAny}
+        onClick={() => {
+          logBeforeStart(counts);
+          close();
+        }}
+        className="mt-4 w-full py-3 rounded-xl font-semibold bg-tone-accent text-tone-on-accent disabled:opacity-40"
+      >
+        Add
+      </button>
+    </Modal>
   );
 };
 
@@ -4687,6 +5030,9 @@ const ActiveArrestContentView: React.FC<{
     isTimerPaused,
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
+    isLastAdrenalineTimeUnknown,
+    setLastAdrenaline,
+    totalArrestTime,
   } = useArrest();
   const { voicePromptsEnabled } = useSettings();
   const { metronomeBPM } = useSettings();
@@ -4721,6 +5067,7 @@ const ActiveArrestContentView: React.FC<{
       </div>
       <VoiceListeningStatus />
 
+      {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
         <AdrenalineTimerView timeRemaining={timeUntilAdrenaline} />
       )}
@@ -5156,6 +5503,34 @@ const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemainin
   </div>
 );
 
+// Adrenaline was given before eResus at an unknown time. Choosing roughly when starts the usual timer;
+// "Don't know" makes it due now. Left alone, the next rhythm check does the same (matches iOS).
+// totalTime: the arrest clock now; a choice earlier than 00:00 isn't offered.
+const AdrenalineTimeUnknownView: React.FC<{ totalTime: number; onSelect: (minutesAgo: number | null) => void }> = ({
+  totalTime,
+  onSelect,
+}) => (
+  <div className="p-3 rounded-2xl bg-tone-tint text-tone-on-tint space-y-2">
+    <div className="flex items-center justify-center gap-2 font-bold">
+      <Syringe size={20} />
+      <span>Last adrenaline: time unknown</span>
+    </div>
+    <div className="flex gap-2">
+      {([[2, "~2 min ago"], [4, "~4 min ago"], [null, "Don't know"]] as [number | null, string][])
+        .filter(([minutes]) => minutes === null || totalTime >= minutes * 60)
+        .map(([minutes, label]) => (
+        <button
+          key={label}
+          onClick={() => onSelect(minutes)}
+          className="flex-1 min-h-11 px-2 rounded-xl text-sm font-semibold bg-white/60 dark:bg-white/10 active:scale-95 transition-transform"
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
 const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
   <button
     onClick={onClick}
@@ -5517,6 +5892,8 @@ const ArrestView: React.FC<{
     heard: string;
     actions: VoiceAction[];
     index: number;
+    // A handover's "started" runs first and can move the clock, so the spoken time is read after it.
+    spokenTime: VoiceTime | null;
     time: number | null;
     depthBefore: number;
     done: string[];
@@ -5525,6 +5902,18 @@ const ArrestView: React.FC<{
   } | null>(null);
   const { etco2Unit, voiceHandsFree, voiceWakeWord } = useSettings();
   const voiceAvailable = useVoiceCommandsAvailable();
+
+  // The first time someone adds time before eResus, point them to where earlier shocks and drugs go.
+  const hasShownBeforeEResusHintRef = useRef(false);
+  useEffect(() => {
+    if (viewModel.arrestState === ArrestState.Pending) hasShownBeforeEResusHintRef.current = false;
+  }, [viewModel.arrestState]);
+  const showBeforeEResusHint = () => {
+    // Never over a voice result, which may still be offering Undo.
+    if (hasShownBeforeEResusHintRef.current || voiceFeedback || viewModel.arrestState !== ArrestState.Active) return;
+    hasShownBeforeEResusHintRef.current = true;
+    showVoiceFeedback("Given shocks or drugs before eResus? Tap the counters at the top to add them.", true);
+  };
 
   const showVoiceFeedback = (message: string, succeeded: boolean, undoDepth: number | null = null) => {
     const id = Date.now();
@@ -5544,26 +5933,20 @@ const ArrestView: React.FC<{
         notGiven: "That sounded like something not yet done; nothing logged.",
         conflict: "That contained conflicting details; nothing logged. Please say it again.",
         nothing: "No command recognised; nothing logged.",
+        downtime:
+          "Downtime before arrival isn't recorded. To set the clock, say when the arrest was confirmed, e.g. “resus started 10 minutes ago”.",
+        countUnclear: "For shocks or drugs given before eResus, say so, e.g. “2 shocks before eResus”; nothing logged.",
       }[parse.reason];
       showVoiceFeedback(`${heard} ${explanation}`, false);
       return;
-    }
-
-    let time: number | null = null;
-    if (parse.time) {
-      time = viewModel.arrestTime(parse.time);
-      if (time === null) {
-        navigator.vibrate?.([30, 50, 30]);
-        showVoiceFeedback(`${heard} That time is in the future or before the arrest started; nothing logged.`, false);
-        return;
-      }
     }
 
     setVoiceRun({
       heard,
       actions: parse.actions,
       index: 0,
-      time,
+      spokenTime: parse.time,
+      time: null,
       depthBefore: viewModel.undoDepth,
       done: [],
       notes: [],
@@ -5578,6 +5961,16 @@ const ArrestView: React.FC<{
     if (!voiceRun) return;
     const action = voiceRun.actions[voiceRun.index];
     if (action && !voiceRun.stoppedBecause) {
+      // History entries sit at the moment eResus was started; only what happened since takes the spoken time.
+      if (!["started", "given", "earlierRhythm"].includes(action.type) && voiceRun.spokenTime) {
+        const time = viewModel.arrestTime(voiceRun.spokenTime);
+        setVoiceRun(
+          time === null
+            ? { ...voiceRun, spokenTime: null, stoppedBecause: "That time is in the future or before the arrest was confirmed; not logged." }
+            : { ...voiceRun, spokenTime: null, time },
+        );
+        return;
+      }
       const result = performVoiceAction(action, voiceRun.time);
       if (result === "continue") {
         setVoiceRun({ ...voiceRun });
@@ -5627,6 +6020,46 @@ const ArrestView: React.FC<{
     }
 
     switch (action.type) {
+      case "started": {
+        const confirmed = vm.dateFor(action.time);
+        if (!confirmed) return { failure: "That time is in the future; the clock wasn't changed." };
+        // Whole minutes: it's an estimate, and the clock shouldn't pretend otherwise.
+        const offset = Math.round(((Date.now() - confirmed.getTime()) / 1000 - vm.masterTime) / 60) * 60;
+        if (offset < 0) return { failure: "eResus was started before then; the clock wasn't changed." };
+        let moved = false;
+        vm.performFromVoice(null, () => {
+          moved = vm.setTimeBeforeStart(offset);
+        });
+        if (!moved) return { failure: "Earlier entries are before that time; the clock wasn't changed." };
+        return {
+          summary: offset === 0 ? "arrest confirmed when eResus was started" : `arrest confirmed ~${offset / 60} min before eResus`,
+        };
+      }
+      case "given": {
+        const { item, count } = action;
+        let added = false;
+        vm.performFromVoice(null, () => {
+          added = vm.logBeforeStart({ [item]: count });
+        });
+        if (!added) {
+          const other = item === "amiodarone" ? "Lidocaine" : "Amiodarone";
+          return { failure: `${other} is already recorded, so ${item} wasn't added.` };
+        }
+        const name = item.charAt(0).toUpperCase() + item.slice(1);
+        const summary = item === "shock" ? (count === 1 ? "1 shock" : `${count} shocks`) : `${name} ×${count}`;
+        // An antiarrhythmic before the 3rd shock is unusual; the shock count is probably incomplete.
+        const note =
+          (item === "amiodarone" || item === "lidocaine") && vm.drugTimingShockCount < 3
+            ? `${name} is usually given after the 3rd shock: say how many shocks were given.`
+            : undefined;
+        return { summary: `${summary} before eResus`, note };
+      }
+      case "earlierRhythm": {
+        const name =
+          action.rhythm === "Shockable" ? "Shockable rhythm" : action.rhythm === "Non-shockable" ? "Non-shockable rhythm" : action.rhythm;
+        vm.performFromVoice(null, () => vm.logEarlierRhythm(name));
+        return { summary: `${name} before eResus` };
+      }
       case "drug": {
         const { drug, dose } = action;
         if (drug === "adrenaline") {
@@ -5728,7 +6161,7 @@ const ArrestView: React.FC<{
 
   return (
     <div className="flex flex-col h-full">
-      <HeaderView />
+      <HeaderView onAddTime={showBeforeEResusHint} />
 
       <div className="flex-grow overflow-y-auto bg-gray-100 dark:bg-gray-900">
         {viewModel.arrestState === ArrestState.Pending && (
@@ -5910,11 +6343,7 @@ const LogbookView: React.FC = () => {
   };
 
   // Dynamic lidocaine count from events
-  const getDynamicLidocaineCount = (logEvents: Event[]): number => {
-    return logEvents.filter(
-      (e) => e.message.toLowerCase().includes("lidocaine") && e.message.toLowerCase().includes("given"),
-    ).length;
-  };
+  const getDynamicLidocaineCount = (logEvents: Event[]): number => lidocaineDosesIn(logEvents);
 
   return (
     <div className="flex flex-col h-full">
@@ -6040,9 +6469,7 @@ const LogbookView: React.FC = () => {
                 <p className="text-red-500 font-semibold">
                   TOR at{" "}
                   {selectedLog.startTime
-                    ? new Date(
-                        selectedLog.startTime.toDate().getTime() + selectedLog.torTime * 1000,
-                      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.torTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                     : TimeFormatter.format(selectedLog.torTime)}
                 </p>
               )}
@@ -6050,9 +6477,7 @@ const LogbookView: React.FC = () => {
                 <p className="text-red-500 font-semibold">
                   VOD at{" "}
                   {selectedLog.startTime
-                    ? new Date(
-                        selectedLog.startTime.toDate().getTime() + selectedLog.vodTime * 1000,
-                      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.vodTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                     : TimeFormatter.format(selectedLog.vodTime)}
                 </p>
               )}
@@ -6145,7 +6570,7 @@ const LogbookView: React.FC = () => {
                     : "Unknown";
                   const patientInfo = hasPatientInfo(selectedLog) ? getPatientInfoText(selectedLog) : "";
                   const evtsSorted = selectedLogEvents.sort((a, b) => a.timestamp - b.timestamp);
-                  const text = `eResus - Arrest Summary\nDate: ${dateText}\n${patientInfo ? `Patient: ${patientInfo}\n` : ""}Start Time: ${startText}\nInitial Rhythm: ${selectedLog.initialRhythm || "None"}\n${selectedLog.torTime != null ? `TOR: ${selectedLog.startTime ? new Date(selectedLog.startTime.toDate().getTime() + selectedLog.torTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.torTime)}\n` : ""}${selectedLog.vodTime != null ? `VOD: ${selectedLog.startTime ? new Date(selectedLog.startTime.toDate().getTime() + selectedLog.vodTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.vodTime)}\n` : ""}Total Duration: ${TimeFormatter.format(selectedLog.totalDuration)}\n\nShocks: ${selectedLog.shockCount ?? 0}  |  Adrenaline: ${selectedLog.adrenalineCount ?? 0}  |  Amiodarone: ${selectedLog.amiodaroneCount ?? 0}  |  Lidocaine: ${Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}\n\n--- Event Log ---\n${evtsSorted.map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`).join("\n")}`;
+                  const text = `eResus - Arrest Summary\nDate: ${dateText}\n${patientInfo ? `Patient: ${patientInfo}\n` : ""}Start Time: ${startText}\nInitial Rhythm: ${selectedLog.initialRhythm || "None"}\n${selectedLog.torTime != null ? `TOR: ${selectedLog.startTime ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.torTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.torTime)}\n` : ""}${selectedLog.vodTime != null ? `VOD: ${selectedLog.startTime ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.vodTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.vodTime)}\n` : ""}Total Duration: ${TimeFormatter.format(selectedLog.totalDuration)}\n\nShocks: ${selectedLog.shockCount ?? 0}  |  Adrenaline: ${selectedLog.adrenalineCount ?? 0}  |  Amiodarone: ${selectedLog.amiodaroneCount ?? 0}  |  Lidocaine: ${Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}\n\n--- Event Log ---\n${evtsSorted.map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`).join("\n")}`;
                   navigator.clipboard.writeText(text.trim()).catch(console.error);
                   if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
                 }}

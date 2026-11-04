@@ -1386,5 +1386,505 @@
    "time": null,
    "reason": "notGiven"
   }
+ },
+ {
+  "heard": "CPR started 10 minutes ago, 2 shocks, adrenaline 4 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 10 minutes ago, adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "arrest confirmed at 14:20",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "clock": "14:20"
+     }
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we've been going for 15 minutes, in VF, shocked 3 times",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 900
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    },
+    {
+     "type": "earlierRhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we're 10 minutes in, 2 adrenaline, amiodarone 300",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 2
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "half an hour in",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 1800
+     }
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "crew started CPR at 2:15, asystole throughout",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "clock": "02:15",
+      "twelveHour": true
+     }
+    },
+    {
+     "type": "earlierRhythm",
+     "rhythm": "Asystole"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline x2, last 4 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 1
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "2 shocks",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "shocked twice",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "AED shocked 3 times",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "two doses of adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "2 adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "no shocks, adrenaline 1 mg",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "IV started 5 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IV",
+     "successful": true,
+     "gauge": null,
+     "location": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 300
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "down for 10 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "downtime 15 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "collapsed at 14:10",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "bystander CPR started 10 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "family started CPR 5 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "CPR for 2 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "resus started 5 minutes ago, amiodarone and lidocaine",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "adrenaline 4 minutes ago and amiodarone 2 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "2 shocks before eResus",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "AED shocked 3 times before we arrived",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "two doses of adrenaline already",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 2
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "one shock delivered",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "1 adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we started compressions again, shock delivered",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 10 minutes ago, adrenaline 4 minutes ago, amiodarone",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "we're 10 minutes in, amiodarone, 3 shocks",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we started amiodarone 2 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 120
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline amiodarone due",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "preparing adrenaline amiodarone",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "adrenaline 1 amiodarone 300",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock 2 adrenaline given",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
  }
 ]

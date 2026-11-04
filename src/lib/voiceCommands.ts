@@ -13,12 +13,21 @@ export type VoiceAction =
   | { type: "undo" }
   | { type: "airway"; device: "sga" | "ett" | "unspecified" }
   | { type: "access"; route: "IV" | "IO"; successful: boolean; gauge: string | null; location: string | null }
-  | { type: "etco2"; value: number; unit: "kPa" | "mmHg" | null };
+  | { type: "etco2"; value: number; unit: "kPa" | "mmHg" | null }
+  // Handover ("resus started 10 minutes ago, 2 shocks, in VF"): what happened before eResus was started.
+  | { type: "started"; time: VoiceTime } // when the first ambulance resource confirmed the arrest
+  | { type: "given"; item: GivenItem; count: number } // times unknown
+  | { type: "earlierRhythm"; rhythm: Rhythm }; // recorded only; doesn't start a rhythm check
+
+export type GivenItem = "shock" | "adrenaline" | "amiodarone" | "lidocaine";
+type Rhythm = "VF" | "VT" | "PEA" | "Asystole" | "Shockable" | "Non-shockable";
 
 // twelveHour: said without am/pm and could be either (e.g. "at 2:52"); the app picks the most recent.
 export type VoiceTime = { clock: string; twelveHour?: true } | { secondsAgo: number };
 
-export type VoiceReason = "question" | "instruction" | "notGiven" | "conflict" | "nothing";
+// downtime: pre-arrival downtime isn't recorded, so it can never be counted towards ToR by mistake.
+// countUnclear: "2 shocks" mid-arrest could be a running total; earlier doses need "before eResus" or similar.
+export type VoiceReason = "question" | "instruction" | "notGiven" | "conflict" | "nothing" | "downtime" | "countUnclear";
 
 export interface VoiceParse {
   actions: VoiceAction[];
@@ -72,7 +81,7 @@ const PHRASES: [string, Kind][] = [
   ...["non shockable", "nonshockable", "not shockable", "unshockable", "no shock advised", "shock not advised"].map(
     (p): [string, Kind] => [p, { type: "rhythm", rhythm: "Non-shockable" }],
   ),
-  ...["shock", "shocked", "shocking", "shock delivered", "shock given", "delivered shock", "defib", "defibrillated"].map(
+  ...["shock", "shocks", "shocked", "shocking", "shock delivered", "shock given", "delivered shock", "defib", "defibbed", "defibrillated"].map(
     (p): [string, Kind] => [p, { type: "shock" }],
   ),
   ...[
@@ -97,7 +106,7 @@ const QUESTION_STARTS = new Set(["is", "are", "should", "do", "does", "did", "ca
 // Words near a mention that mean it hasn't happened (yet).
 const NOT_GIVEN_BEFORE = new Set([
   "no", "not", "without", "hold", "withhold", "withholding", "holding", "draw", "drawing", "prepare", "preparing",
-  "get", "getting", "need", "needs", "want", "skip", "failed", "failure", "unable", "lost", "charging", "charge",
+  "get", "getting", "need", "needs", "want", "skip", "failed", "failure", "unable", "lost", "charging", "charge", "nil",
 ]);
 const NOT_GIVEN_AFTER = new Set(["due", "next", "ready", "needed", "drawn", "prepared", "soon", "failed", "not"]);
 const INSTRUCTION_BEFORE = new Set(["give", "giving", "administer"]);
@@ -105,6 +114,22 @@ const INSTRUCTION_AFTER = new Set(["please"]);
 
 // Small words that can sit between an action and its number ("ETCO2 is 3.8", "adrenaline given 1 mg").
 const FILLERS = new Set(["is", "of", "was", "now", "about", "around", "reading", "given", "at"]);
+
+// When the arrest was confirmed. Kept narrow: "on scene" can mean arrival before the arrest, which would
+// wrongly lengthen the ToR clock. "CPR started" is accepted because crews say it, but never alongside
+// bystander or family wording, and the banner reads back what it was taken to mean.
+const STARTED_ANCHORS = [
+  "cpr started", "started cpr", "compressions started", "started compressions",
+  "arrest confirmed", "confirmed arrest", "confirmed the arrest", "confirmed cardiac arrest", "cardiac arrest confirmed",
+  "resus started", "started resus", "started the resus", "resuscitation started", "started resuscitation",
+  "been going",
+];
+// Words that make a count history rather than something just done ("2 shocks before we arrived").
+const HISTORY_MARKERS = ["before", "already", "earlier", "previously", "prior", "so far", "last"];
+const DOWNTIME_PHRASES = ["downtime", "down time", "down for", "no flow", "noflow", "collapsed", "collapse", "bystander", "bystanders", "last seen"];
+// Only a problem alongside a "started" anchor ("family started CPR", "found 10 minutes ago").
+const DOWNTIME_WITH_STARTED = ["family", "public", "found", "999", "call", "called"];
+const COUNT_WORDS: Record<string, number> = { once: 1, twice: 2, thrice: 3 };
 
 const ACCESS_FAILURE = new Set(["failed", "fail", "unsuccessful", "missed", "tissued", "blown", "lost"]);
 
@@ -215,61 +240,104 @@ const numberWordsToDigits = (words: string[]): string[] => {
 const isNumber = (t: string | undefined) => t !== undefined && /^\d+(\.\d+)?$/.test(t);
 const UNIT_WORDS = new Set(UNITS.flatMap(([u]) => u.split(" ")));
 
-const extractTime = (tokens: string[]): { time: VoiceTime | null; rest: string[] } => {
-  for (let i = 0; i < tokens.length; i++) {
-    // Relative: N minutes/seconds ago
-    const n = tokens[i] === "a" ? 1 : isNumber(tokens[i]) ? Number(tokens[i]) : null;
-    if (n !== null && tokens[i + 2] === "ago") {
-      const unit = tokens[i + 1];
-      const seconds = /^(minute|minutes|min|mins)$/.test(unit) ? n * 60 : /^(second|seconds|sec|secs)$/.test(unit) ? n : null;
-      if (seconds !== null) return { time: { secondsAgo: seconds }, rest: [...tokens.slice(0, i), ...tokens.slice(i + 3)] };
-    }
-
-    if (tokens[i] !== "at") continue;
-    let hours: number | null = null;
-    let minutes: number | null = null;
-    let used = 0;
-    const a = tokens[i + 1];
-    const b = tokens[i + 2];
-    // "at quarter past 2", "at half past two", "at quarter to three"
-    const spoken = tokens[i + 1] === "a" ? 1 : 0;
-    const part = tokens[i + 1 + spoken];
-    const relation = tokens[i + 2 + spoken];
-    const hour = tokens[i + 3 + spoken];
-    if ((part === "quarter" || part === "half") && (relation === "past" || relation === "to") && /^\d{1,2}$/.test(hour ?? "")) {
-      const offset = part === "quarter" ? 15 : 30;
-      if (!(part === "half" && relation === "to")) {
-        hours = relation === "past" ? Number(hour) : (Number(hour) + 23) % 24;
-        minutes = relation === "past" ? offset : 60 - offset;
-        used = 3 + spoken;
-      }
-    } else if (a && /^\d{1,2}:\d{2}$/.test(a)) {
-      [hours, minutes] = a.split(":").map(Number);
-      used = 1;
-    } else if (a && /^\d{3,4}$/.test(a) && !UNIT_WORDS.has(b ?? "")) {
-      hours = Math.floor(Number(a) / 100);
-      minutes = Number(a) % 100;
-      used = 1;
-    } else if (a && /^\d{1,2}$/.test(a) && b && /^\d{1,2}$/.test(b) && !UNIT_WORDS.has(tokens[i + 3] ?? "")) {
-      hours = Number(a);
-      minutes = Number(b);
-      used = 2;
-    }
-    if (hours === null || minutes === null) continue;
-    const meridiem = tokens[i + 1 + used];
-    let twelveHour = hours >= 1 && hours <= 12;
-    if (meridiem === "pm" || meridiem === "am") {
-      if (meridiem === "pm" && hours < 12) hours += 12;
-      if (meridiem === "am" && hours === 12) hours = 0;
-      used += 1;
-      twelveHour = false;
-    }
-    if (hours > 23 || minutes > 59) continue;
-    const clock = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-    const time: VoiceTime = twelveHour ? { clock, twelveHour: true } : { clock };
-    return { time, rest: [...tokens.slice(0, i), ...tokens.slice(i + 1 + used)] };
+// A time starting at token i, with how many tokens it uses.
+const timeAt = (tokens: string[], i: number): { time: VoiceTime; length: number } | null => {
+  // Relative: N minutes/seconds ago
+  const n = tokens[i] === "a" ? 1 : isNumber(tokens[i]) ? Number(tokens[i]) : null;
+  if (n !== null && tokens[i + 2] === "ago") {
+    const unit = tokens[i + 1];
+    if (/^(minute|minutes|min|mins)$/.test(unit)) return { time: { secondsAgo: n * 60 }, length: 3 };
+    if (/^(second|seconds|sec|secs)$/.test(unit)) return { time: { secondsAgo: n }, length: 3 };
   }
-  return { time: null, rest: tokens };
+
+  if (tokens[i] !== "at") return null;
+  let hours: number | null = null;
+  let minutes: number | null = null;
+  let used = 0;
+  const a = tokens[i + 1];
+  const b = tokens[i + 2];
+  // "at quarter past 2", "at half past two", "at quarter to three"
+  const spoken = tokens[i + 1] === "a" ? 1 : 0;
+  const part = tokens[i + 1 + spoken];
+  const relation = tokens[i + 2 + spoken];
+  const hour = tokens[i + 3 + spoken];
+  if ((part === "quarter" || part === "half") && (relation === "past" || relation === "to") && /^\d{1,2}$/.test(hour ?? "")) {
+    const offset = part === "quarter" ? 15 : 30;
+    if (!(part === "half" && relation === "to")) {
+      hours = relation === "past" ? Number(hour) : (Number(hour) + 23) % 24;
+      minutes = relation === "past" ? offset : 60 - offset;
+      used = 3 + spoken;
+    }
+  } else if (a && /^\d{1,2}:\d{2}$/.test(a)) {
+    [hours, minutes] = a.split(":").map(Number);
+    used = 1;
+  } else if (a && /^\d{3,4}$/.test(a) && !UNIT_WORDS.has(b ?? "")) {
+    hours = Math.floor(Number(a) / 100);
+    minutes = Number(a) % 100;
+    used = 1;
+  } else if (a && /^\d{1,2}$/.test(a) && b && /^\d{1,2}$/.test(b) && !UNIT_WORDS.has(tokens[i + 3] ?? "")) {
+    hours = Number(a);
+    minutes = Number(b);
+    used = 2;
+  }
+  if (hours === null || minutes === null) return null;
+  const meridiem = tokens[i + 1 + used];
+  let twelveHour = hours >= 1 && hours <= 12;
+  if (meridiem === "pm" || meridiem === "am") {
+    if (meridiem === "pm" && hours < 12) hours += 12;
+    if (meridiem === "am" && hours === 12) hours = 0;
+    used += 1;
+    twelveHour = false;
+  }
+  if (hours > 23 || minutes > 59) return null;
+  const clock = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  return { time: twelveHour ? { clock, twelveHour: true } : { clock }, length: 1 + used };
+};
+
+interface TimeSpan {
+  time: VoiceTime;
+  start: number;
+  end: number;
+}
+
+const findTimes = (tokens: string[]): TimeSpan[] => {
+  const times: TimeSpan[] = [];
+  for (let i = 0; i < tokens.length; ) {
+    const found = timeAt(tokens, i);
+    if (found) {
+      times.push({ time: found.time, start: i, end: Math.min(tokens.length, i + found.length) });
+      i += found.length;
+    } else {
+      i += 1;
+    }
+  }
+  return times;
+};
+
+// How long the resus has been going: "for 10 minutes", "10 minutes", "10 minutes in", "half an hour in".
+const durationAt = (tokens: string[], i: number): { seconds: number; length: number } | null => {
+  const start = tokens[i] === "for" ? i + 1 : i;
+  if (!isNumber(tokens[start])) return null;
+  const n = Number(tokens[start]);
+  let unitIndex = start + 1;
+  if (tokens[unitIndex] === "an" || tokens[unitIndex] === "a") unitIndex += 1;
+  let seconds: number;
+  if (/^(minute|minutes|min|mins)$/.test(tokens[unitIndex] ?? "")) seconds = n * 60;
+  else if (/^(hour|hours)$/.test(tokens[unitIndex] ?? "")) seconds = n * 3600;
+  else return null;
+  let end = unitIndex + 1;
+  if (tokens[end] === "in" || tokens[end] === "into") end += 1;
+  return { seconds, length: end - i };
+};
+
+const findPhrase = (tokens: string[], phrases: string[]): { start: number; end: number } | null => {
+  for (let i = 0; i < tokens.length; i++) {
+    for (const phrase of phrases) {
+      const length = matchAt(tokens, i, phrase);
+      if (length) return { start: i, end: i + length };
+    }
+  }
+  return null;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -280,6 +348,7 @@ interface Mention {
   start: number;
   end: number; // exclusive
   quantities: Quantity[];
+  count?: number;
 }
 
 interface Quantity {
@@ -332,7 +401,57 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   if (all.length === 0) return nothing("nothing");
   if (QUESTION_STARTS.has(all[0])) return nothing("question");
 
-  const { time, rest: tokens } = extractTime(all);
+  if (findPhrase(all, DOWNTIME_PHRASES)) return nothing("downtime");
+
+  // A handover names when the arrest was confirmed. Its time belongs to that, not to the actions.
+  const removed = new Set<number>();
+  const removeRange = (from: number, to: number) => {
+    for (let k = from; k < to; k++) removed.add(k);
+  };
+  let startedTime: VoiceTime | null = null;
+  let isHandover = false;
+  const times = findTimes(all);
+  const anchor = findPhrase(all, STARTED_ANCHORS);
+  if (anchor) {
+    if (findPhrase(all, DOWNTIME_WITH_STARTED)) return nothing("downtime");
+    removeRange(anchor.start, anchor.end);
+    const t =
+      times.find((t) => t.start >= anchor.end && t.start <= anchor.end + 5) ??
+      times.find((t) => t.end <= anchor.start && t.end >= anchor.start - 3);
+    if (t) {
+      startedTime = t.time;
+      isHandover = true;
+      removeRange(t.start, t.end);
+    } else {
+      for (let i = anchor.end; i < Math.min(all.length, anchor.end + 5); i++) {
+        const d = durationAt(all, i);
+        if (!d) continue;
+        startedTime = { secondsAgo: d.seconds };
+        isHandover = true;
+        removeRange(i, i + d.length);
+        break;
+      }
+    }
+  }
+  // "we're 10 minutes in", "10 minutes into the resus"
+  if (!startedTime) {
+    for (let i = 0; i < all.length; i++) {
+      const d = durationAt(all, i);
+      if (!d || !["in", "into"].includes(all[i + d.length - 1])) continue;
+      startedTime = { secondsAgo: d.seconds };
+      isHandover = true;
+      removeRange(i, i + d.length);
+      break;
+    }
+  }
+  const otherTimes = times.filter((t) => !removed.has(t.start));
+  if (otherTimes.length > 1) return nothing("conflict");
+  const time = otherTimes[0]?.time ?? null;
+  if (otherTimes[0]) removeRange(otherTimes[0].start, otherTimes[0].end);
+  const tokens = all.filter((_, i) => !removed.has(i));
+  // Where the time was said, among the remaining words: in a handover it belongs to the drug just before it.
+  const timePosition = otherTimes[0] ? all.slice(0, otherTimes[0].start).filter((_, i) => !removed.has(i)).length : null;
+  const hasHistoryMarker = findPhrase(tokens, HISTORY_MARKERS) !== null;
 
   // Find mentions, longest phrase first at each position.
   const mentions: Mention[] = [];
@@ -350,8 +469,20 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
     }
   }
 
+  // Counts ("2 shocks", "adrenaline x2", "shocked 3 times", "two doses of amio") mean given before, times unknown.
+  // A count of 1 outside a handover is just the thing being done now, so its number stays a dose.
+  const countTokens = new Set<number>();
+  mentions.forEach((m, index) => {
+    if (m.kind.type !== "drug" && m.kind.type !== "shock") return;
+    const found = countAround(tokens, m, index > 0 ? mentions[index - 1].end : null);
+    if (!found || !(isHandover || hasHistoryMarker || found.count > 1)) return;
+    m.count = found.count;
+    found.used.forEach((k) => countTokens.add(k));
+  });
+
   // Attach each number to the nearest mention it can belong to; ties go to the earlier mention.
   for (const quantity of findQuantities(tokens)) {
+    if (countTokens.has(quantity.start)) continue;
     if (mentions.some((m) => quantity.start >= m.start && quantity.start < m.end)) continue;
     let best: { mention: Mention; gap: number } | null = null;
     for (const mention of mentions) {
@@ -367,10 +498,15 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   // Drop mentions that are plans, negatives or instructions.
   let droppedAsInstruction = false;
   let droppedAsNotGiven = false;
-  const kept = mentions.filter((m) => {
+  // A negative or plan word applies to the mention next to it. If it might also reach past another
+  // mention ("preparing adrenaline, amiodarone", "adrenaline, amiodarone due"), the phrase is refused.
+  let unclearNegation = false;
+  const kept = mentions.filter((m, index) => {
     if (m.kind.type === "undo" || m.kind.type === "access") return true;
-    const before = tokens.slice(Math.max(0, m.start - 2), m.start);
-    const after = tokens.slice(m.end, m.end + 2);
+    const previousEnd = index > 0 ? mentions[index - 1].end : 0;
+    const nextStart = index + 1 < mentions.length ? mentions[index + 1].start : tokens.length;
+    const before = tokens.slice(Math.max(previousEnd, m.start - 2), m.start);
+    const after = tokens.slice(m.end, Math.min(nextStart, m.end + 2));
     if (before.some((w) => INSTRUCTION_BEFORE.has(w)) || after.some((w) => INSTRUCTION_AFTER.has(w))) {
       droppedAsInstruction = true;
       return false;
@@ -379,14 +515,35 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       droppedAsNotGiven = true;
       return false;
     }
+    const wideBefore = tokens.slice(Math.max(0, m.start - 2), m.start);
+    const wideAfter = tokens.slice(m.end, m.end + 2);
+    if (
+      wideBefore.some((w) => NOT_GIVEN_BEFORE.has(w) || INSTRUCTION_BEFORE.has(w)) ||
+      wideAfter.some((w) => NOT_GIVEN_AFTER.has(w) || INSTRUCTION_AFTER.has(w))
+    ) {
+      unclearNegation = true;
+    }
     return true;
   });
+  if (unclearNegation) return nothing("notGiven");
 
   // Build actions, merging repeats and refusing contradictions.
   const actions: VoiceAction[] = [];
+  const history: VoiceAction[] = [];
   let rhythmIndex = -1;
+  let earlierRhythmIndex = -1;
   const drugIndex = new Map<string, number>();
   let shockIndex = -1;
+  // In a handover, only the drug said just before the time is timed; the others are times unknown.
+  const timedDrugMention =
+    timePosition === null ? null : [...kept].reverse().find((m) => m.kind.type === "drug" && m.end <= timePosition) ?? null;
+
+  const addGiven = (item: GivenItem, count: number): boolean => {
+    const existing = history.find((a) => a.type === "given" && a.item === item) as Extract<VoiceAction, { type: "given" }> | undefined;
+    if (existing) return existing.count === count;
+    history.push({ type: "given", item, count });
+    return true;
+  };
 
   for (const m of kept) {
     const kind = m.kind;
@@ -394,6 +551,19 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       case "drug": {
         const q = m.quantities[0];
         const dose = q ? `${formatNumber(q.value)} ${q.unit ?? "mg"}` : null;
+        if (m.count !== undefined && (isHandover || hasHistoryMarker || m.count > 1)) {
+          if (!isHandover && !hasHistoryMarker) return nothing("countUnclear");
+          // "adrenaline x2, last 4 minutes ago": the last dose has a time, the others don't.
+          if (time && tokens.includes("last")) {
+            if (m.count > 1 && !addGiven(kind.drug, m.count - 1)) return nothing("conflict");
+          } else {
+            if (!addGiven(kind.drug, m.count)) return nothing("conflict");
+            break;
+          }
+        } else if (isHandover && m !== timedDrugMention) {
+          if (!addGiven(kind.drug, 1)) return nothing("conflict");
+          break;
+        }
         const existing = drugIndex.get(kind.drug);
         if (existing !== undefined) {
           const prior = actions[existing] as Extract<VoiceAction, { type: "drug" }>;
@@ -406,6 +576,18 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         break;
       }
       case "rhythm": {
+        if (isHandover) {
+          if (earlierRhythmIndex >= 0) {
+            const prior = history[earlierRhythmIndex] as Extract<VoiceAction, { type: "earlierRhythm" }>;
+            const merged = mergeRhythms(prior.rhythm, kind.rhythm);
+            if (!merged) return nothing("conflict");
+            prior.rhythm = merged;
+          } else {
+            earlierRhythmIndex = history.length;
+            history.push({ type: "earlierRhythm", rhythm: kind.rhythm });
+          }
+          break;
+        }
         if (rhythmIndex >= 0) {
           const prior = actions[rhythmIndex] as Extract<VoiceAction, { type: "rhythm" }>;
           const merged = mergeRhythms(prior.rhythm, kind.rhythm);
@@ -418,6 +600,12 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         break;
       }
       case "shock": {
+        // A single shock outside a handover is one just delivered, as before.
+        if (isHandover || (m.count !== undefined && (m.count > 1 || hasHistoryMarker))) {
+          if (!isHandover && !hasHistoryMarker) return nothing("countUnclear");
+          if (!addGiven("shock", m.count ?? 1)) return nothing("conflict");
+          break;
+        }
         const q = m.quantities[0];
         const energy = q && (q.unit === "J" || q.value >= 50) ? `${formatNumber(q.value)} J` : null;
         if (shockIndex >= 0) {
@@ -453,6 +641,8 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         actions.push({ type: "airway", device: kind.device });
         break;
       default: {
+        // A rhythm check or ROSC mentioned in a handover is history, not something happening now.
+        if (isHandover && kind.type !== "undo") break;
         // analyse, rosc and undo: merge immediate repeats.
         const last = actions[actions.length - 1];
         if (last && last.type === kind.type && kind.type !== "undo") break;
@@ -464,11 +654,62 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   // A shock after a non-shockable rhythm makes no sense.
   const rhythm = rhythmIndex >= 0 ? (actions[rhythmIndex] as Extract<VoiceAction, { type: "rhythm" }>).rhythm : null;
   if (shockIndex >= 0 && rhythm && !["VF", "VT", "Shockable"].includes(rhythm)) return nothing("conflict");
+  // Only one antiarrhythmic is used in an arrest.
+  const givenItems = history.flatMap((a) => (a.type === "given" ? [a.item] : []));
+  if (givenItems.includes("amiodarone") && givenItems.includes("lidocaine")) return nothing("conflict");
+  // A time with nothing to apply it to was meant for something we didn't catch.
+  if (time && actions.length === 0 && history.length > 0) return nothing("conflict");
 
-  if (actions.length === 0) {
+  // Shocks first, so an antiarrhythmic given before eResus is timed against the full shock count.
+  const isShockHistory = (a: VoiceAction) => a.type === "given" && a.item === "shock";
+  const orderedHistory = [...history.filter(isShockHistory), ...history.filter((a) => !isShockHistory(a))];
+  const result: VoiceAction[] = [
+    ...(startedTime ? [{ type: "started" as const, time: startedTime }] : []),
+    ...orderedHistory,
+    ...actions,
+  ];
+  if (result.length === 0) {
     return nothing(droppedAsInstruction ? "instruction" : droppedAsNotGiven ? "notGiven" : "nothing");
   }
-  return { actions, time, reason: null };
+  return { actions: result, time: actions.length ? time : null, reason: null };
+};
+
+// A count next to a shock or drug mention, and the tokens it used.
+const countAround = (
+  tokens: string[],
+  span: { start: number; end: number },
+  previousEnd: number | null,
+): { count: number; used: number[] } | null => {
+  const integer = (i: number): number | null => {
+    const t = tokens[i];
+    if (t === undefined || !/^\d+$/.test(t)) return null;
+    const n = Number(t);
+    return n >= 1 && n <= 10 ? n : null;
+  };
+  // Before: "2 shocks", "two doses of adrenaline". Not a number straight after another mention,
+  // which is that mention's dose or energy ("adrenaline 1 amiodarone 300", "shock 2 adrenaline").
+  // A plural ("3 shocks") settles it either way.
+  const isPlural = tokens.slice(span.start, span.end).some((t) => t === "shocks" || t === "adrenalines");
+  const before = integer(span.start - 1);
+  if (before !== null && (previousEnd !== span.start - 1 || isPlural)) return { count: before, used: [span.start - 1] };
+  if (tokens[span.start - 1] === "of" && ["doses", "dose", "rounds", "lots"].includes(tokens[span.start - 2] ?? "")) {
+    const n = integer(span.start - 3);
+    if (n !== null) return { count: n, used: [span.start - 3, span.start - 2, span.start - 1] };
+  }
+  // After, allowing one filler: "shocked 3 times", "adrenaline x2", "adrenaline given twice"
+  let i = span.end;
+  if (["given", "was", "delivered"].includes(tokens[i] ?? "")) i += 1;
+  const word = tokens[i];
+  if (word !== undefined && COUNT_WORDS[word] !== undefined) return { count: COUNT_WORDS[word], used: [i] };
+  const x = word?.match(/^x(\d+)$/);
+  if (x && Number(x[1]) >= 1 && Number(x[1]) <= 10) return { count: Number(x[1]), used: [i] };
+  if (word === "x" || word === "times") {
+    const n = integer(i + 1);
+    if (n !== null) return { count: n, used: [i, i + 1] };
+  }
+  const n = integer(i);
+  if (n !== null && tokens[i + 1] === "times") return { count: n, used: [i, i + 1] };
+  return null;
 };
 
 // A specific rhythm refines a general one ("shock advised, VF" -> VF); two different ones conflict.

@@ -528,13 +528,41 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
     logEvent("Reassessed Patient HR and Chest Rise");
   };
 
-  const addTimeOffset = (seconds: number) => {
+  // Time between birth and starting eResus. Everything already recorded keeps its real moment, so it all
+  // moves by the same amount, and one "Born ~" entry at 00:00 holds the estimate (matches iOS).
+  // Returns false, changing nothing, if that would put an entry before 00:00.
+  const setTimeBeforeStart = (offset: number): boolean => {
+    const newOffset = Math.max(0, offset);
+    const delta = newOffset - timeOffset;
+    if (delta === 0) return true;
+    const kept = events.filter(e => !e.message.startsWith('Born ~'));
+    if (kept.length > 0 && Math.min(...kept.map(e => e.timestamp)) + delta < 0) return false;
+    if (cprCycleStartTimeRef.current + delta < 0) return false;
     saveUndo();
-    setTimeOffset(prev => prev + seconds);
-    // The cycle start is on the total-time scale, so move it with the offset or the
-    // reassessment falls due early (matches the adult screen and iOS).
-    cprCycleStartTimeRef.current += seconds;
-    logEvent(`Time offset added: +${Math.round(seconds / 60)} min`);
+    setTimeOffset(newOffset);
+    cprCycleStartTimeRef.current += delta;
+    setEvents([
+      ...kept.map(e => ({ ...e, timestamp: e.timestamp + delta })),
+      ...(newOffset > 0
+        ? [{ timestamp: 0, message: `Born ~${Math.round(newOffset / 60)} min before eResus was started (estimated)`, category: 'status' }]
+        : []),
+    ]);
+    return true;
+  };
+
+  const addTimeOffset = (seconds: number) => {
+    setTimeBeforeStart(timeOffset + seconds);
+  };
+
+  const [showTimeCorrection, setShowTimeCorrection] = useState(false);
+  const [correctionRefused, setCorrectionRefused] = useState(false);
+  const closeTimeCorrection = () => {
+    setShowTimeCorrection(false);
+    setCorrectionRefused(false);
+  };
+  const correctTimeBeforeStart = (seconds: number) => {
+    if (setTimeBeforeStart(timeOffset - seconds)) closeTimeCorrection();
+    else setCorrectionRefused(true);
   };
 
   const toggleMetronome = async () => {
@@ -691,6 +719,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
   const mainTimeSplit = formatTimeSplit(totalArrestTime);
   const isActive = arrestState === NLSArrestState.Active;
   const isDue = isRhythmCheckDue && isActive && !isStopped;
+  const canCorrectTime = timeOffset > 0 && !isDue && arrestState !== NLSArrestState.Ended;
 
   // Spoken prompt when the reassessment falls due, matching the "REASSESS PATIENT" header (as on iOS).
   const wasDueRef = useRef(false);
@@ -742,12 +771,22 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
             </div>
           </div>
           <div className="flex flex-col items-end">
-            <div className="flex items-baseline">
+            {/* Tapping the clock corrects the time before eResus. Not disabled, so the REASSESS tap still reaches the header. */}
+            <button
+              type="button"
+              tabIndex={canCorrectTime ? 0 : -1}
+              onClick={(e) => {
+                if (!canCorrectTime) return;
+                e.stopPropagation();
+                setShowTimeCorrection(true);
+              }}
+              className={`flex items-baseline ${canCorrectTime ? '' : 'pointer-events-none'}`}
+            >
               {timeOffset > 0 && (
                 <span className={`font-mono font-bold text-2xl mr-1 ${
                   isDue ? 'text-white' : 'text-primary'
                 }`}>
-                  {Math.floor(timeOffset / 60)}+
+                  ~
                 </span>
               )}
               <span className={`font-mono font-bold text-4xl ${
@@ -755,7 +794,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
               }`}>
                 {mainTimeSplit.mins}<span className="mx-0.5">:</span>{mainTimeSplit.secs}
               </span>
-            </div>
+            </button>
             {isActive && !isStopped && (
               <div className="flex space-x-1 mt-1">
                 {[1, 5, 10].map(m => (
@@ -1184,6 +1223,29 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
           <NLSActionButton color="bg-blue-600" label="Supraglottic Airway (i-Gel)" onClick={() => { saveUndo(); setAirwayPlaced(true); logEvent("Advanced Airway Placed - Supraglottic Airway (i-Gel)", "airway"); setShowAirwayModal(false); }} />
           <NLSActionButton color="bg-indigo-600" label="Endotracheal Tube" onClick={() => { saveUndo(); setAirwayPlaced(true); logEvent("Advanced Airway Placed - Endotracheal Tube", "airway"); setShowAirwayModal(false); }} />
           <NLSActionButton color="bg-gray-500" label="Unspecified" onClick={() => { saveUndo(); setAirwayPlaced(true); logEvent("Advanced Airway Placed - Unspecified", "airway"); setShowAirwayModal(false); }} />
+        </div>
+      </NLSModal>
+
+      {/* Time before eResus correction (matches iOS) */}
+      <NLSModal isOpen={showTimeCorrection} onClose={closeTimeCorrection} title={`~${Math.round(timeOffset / 60)} min before eResus (estimated)`}>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">Time between birth and starting eResus, included in the clock.</p>
+          {correctionRefused && (
+            <p className="text-sm text-tone-danger">
+              <strong>Can't reduce it that far.</strong> Some entries are earlier than that, so the time wasn't changed.
+            </p>
+          )}
+          <button onClick={() => correctTimeBeforeStart(60)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+            Remove 1 min
+          </button>
+          {timeOffset >= 300 && (
+            <button onClick={() => correctTimeBeforeStart(300)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+              Remove 5 min
+            </button>
+          )}
+          <button onClick={() => correctTimeBeforeStart(timeOffset)} className="w-full py-3 rounded-xl font-semibold bg-tone-danger text-tone-on-danger">
+            Clear
+          </button>
         </div>
       </NLSModal>
 
