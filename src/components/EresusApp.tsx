@@ -92,6 +92,7 @@ import {
   Shield,
   AudioWaveform,
   Ear,
+  Mic,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
@@ -1300,7 +1301,8 @@ const useArrestViewModel = () => {
   // Once one antiarrhythmic is chosen the other is blocked, and amiodarone is withheld in severe
   // hypothermia along with adrenaline (matches iOS).
   const isAmiodaroneAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && isAdrenalineAvailable;
-  const isLidocaineAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone;
+  // Like amiodarone and adrenaline, withheld in severe hypothermia (RCUK: below 30 °C; matches iOS).
+  const isLidocaineAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone && isAdrenalineAvailable;
 
   const currentAdrenalineInterval =
     reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus === HypothermiaStatus.Moderate
@@ -1320,15 +1322,16 @@ const useArrestViewModel = () => {
   const shouldShowAmiodaroneReminder = useMemo(() => {
     const shockCountDose1 = shockCountForAmiodarone1Ref.current;
     if (shockCountDose1 === null) return false;
-    return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt;
-  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt]);
+    return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt && isAdrenalineAvailable;
+  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt, isAdrenalineAvailable]);
 
   // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
   const shouldShowLidocaineReminder =
     antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine &&
     lidocaineCount === 1 &&
     drugTimingShockCount >= 5 &&
-    !hideAmiodaronePrompt;
+    !hideAmiodaronePrompt &&
+    isAdrenalineAvailable;
 
   const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
     // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
@@ -1458,6 +1461,11 @@ const useArrestViewModel = () => {
       vodTime,
       vodChecklist,
       vodConfirmed,
+      // A reload while paused mustn't add the paused time to the arrest and ToR clocks (matches iOS).
+      isTimerPaused,
+      pauseStartTime: pauseStartTimeRef.current?.toISOString() ?? null,
+      hideAmiodaronePrompt,
+      lastRhythmNonShockable,
     };
     try {
       localStorage.setItem(ARREST_SESSION_KEY, JSON.stringify(session));
@@ -1488,6 +1496,9 @@ const useArrestViewModel = () => {
     vodTime,
     vodChecklist,
     vodConfirmed,
+    isTimerPaused,
+    hideAmiodaronePrompt,
+    lastRhythmNonShockable,
   ]);
 
   // Session recovery
@@ -1519,9 +1530,15 @@ const useArrestViewModel = () => {
     setVodChecklist(s.vodChecklist ?? AppConstants.vodChecklistTemplate());
     setVodConfirmed(s.vodConfirmed ?? false);
 
+    setHideAmiodaronePrompt(s.hideAmiodaronePrompt ?? false);
+    setLastRhythmNonShockable(s.lastRhythmNonShockable ?? false);
     if (s.startTime) {
       startTimeRef.current = new Date(s.startTime);
-      const elapsed = (Date.now() - new Date(s.startTime).getTime()) / 1000;
+      // Paused: the clock stays where it stopped, and resuming later drops the paused time as usual.
+      const pausedAt = s.isTimerPaused && s.pauseStartTime ? new Date(s.pauseStartTime) : null;
+      pauseStartTimeRef.current = pausedAt;
+      setIsTimerPaused(pausedAt !== null);
+      const elapsed = ((pausedAt?.getTime() ?? Date.now()) - new Date(s.startTime).getTime()) / 1000;
       setMasterTime(elapsed);
     }
     cprCycleStartTimeRef.current = s.cprCycleStartTime ?? 0;
@@ -4702,13 +4719,22 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
   const strokeDashoffset = strokeDasharray * (1 - percentage);
   const isEnding = cprTime <= 10;
 
+  // Only a deliberate hold turns the microphone on, never a tap or a brush of the ring (matches iOS).
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTalking = (e: React.PointerEvent) => {
     e.preventDefault();
     setIsPressed(true);
-    if (voiceCommandListener.startPushToTalk()) navigator.vibrate?.(15);
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      if (voiceCommandListener.startPushToTalk()) navigator.vibrate?.(15);
+    }, 350);
   };
   const stopTalking = () => {
     setIsPressed(false);
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
     voiceCommandListener.stopPushToTalk((transcript) => onVoiceTranscript?.(transcript));
   };
   const pushToTalk = voiceAvailable
@@ -4790,7 +4816,14 @@ const PushToTalkRing: React.FC<{ transcript: string }> = ({ transcript }) => (
       />
     </svg>
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
-      <AudioWaveform size={28} className={`text-tone-danger ${transcript ? "" : "motion-safe:animate-pulse"}`} />
+      {/* The timer gives way to a microphone as listening starts. */}
+      <Mic
+        size={44}
+        strokeWidth={2.5}
+        className={`text-tone-danger motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:duration-300 ${
+          transcript ? "" : "motion-safe:animate-pulse"
+        }`}
+      />
       <span className="font-semibold text-sm text-foreground line-clamp-4">{transcript || "Listening…"}</span>
     </div>
   </div>
