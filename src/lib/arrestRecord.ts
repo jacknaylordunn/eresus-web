@@ -34,6 +34,8 @@ export const TRAUMA_GROUPS: { title: string; procedures: string[] }[] = [
 
 const TRAUMA_NAMES = new Set([...TRAUMA_EARLY_ACTIONS, ...TRAUMA_GROUPS.flatMap((g) => g.procedures)]);
 
+export const isTraumaProcedureName = (name: string): boolean => TRAUMA_NAMES.has(name);
+
 // Read from the log (newest first), so it survives a reload, an undo and a transfer without extra state.
 export const isTraumaArrest = (events: { message: string }[]): boolean => {
   for (const event of events) {

@@ -17,9 +17,15 @@ export type VoiceAction =
   // Handover ("resus started 10 minutes ago, 2 shocks, in VF"): what happened before eResus was started.
   | { type: "started"; time: VoiceTime } // when the first ambulance resource confirmed the arrest
   | { type: "given"; item: GivenItem; count: number } // times unknown
-  | { type: "earlierRhythm"; rhythm: Rhythm }; // recorded only; doesn't start a rhythm check
+  | { type: "earlierRhythm"; rhythm: Rhythm } // recorded only; doesn't start a rhythm check
+  | { type: "otherDrug"; drug: string; dose: string | null } // from the Other Meds list, by its listed name
+  | { type: "procedure"; procedure: string } // a trauma intervention; thoracostomy without a side is refused
+  | { type: "trauma" } // treat as a traumatic arrest
+  | { type: "observation"; kind: ObservationKind; value: string }; // mostly post-ROSC
 
-export type GivenItem = "shock" | "adrenaline" | "amiodarone" | "lidocaine";
+// shock, adrenaline, amiodarone, lidocaine, or an Other Meds drug or trauma intervention by name.
+export type GivenItem = string;
+export type ObservationKind = "spo2" | "bp" | "glucose" | "temperature" | "ecg";
 type Rhythm = "VF" | "VT" | "PEA" | "Asystole" | "Shockable" | "Non-shockable";
 
 // twelveHour: said without am/pm and could be either (e.g. "at 2:52"); the app picks the most recent.
@@ -47,7 +53,9 @@ export type WakeWord = keyof typeof WAKE_WORDS;
 export const VOICE_VOCABULARY = [
   "adrenaline", "amiodarone", "lidocaine", "milligrams", "micrograms", "rhythm check", "VF", "VT", "PEA",
   "asystole", "shockable", "shock delivered", "joules", "ROSC", "undo", "i-gel", "intubated", "IV", "IO",
-  "ETCO2", "kPa", "scribe", "eResus",
+  "ETCO2", "kPa", "scribe", "eResus", "TXA", "tranexamic acid", "naloxone", "atropine", "calcium chloride",
+  "sodium bicarbonate", "magnesium", "tenecteplase", "ketamine", "rocuronium", "pelvic binder", "tourniquet",
+  "thoracostomy", "needle decompression", "sats", "BM", "blood pressure", "12 lead", "STEMI", "trauma",
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -62,7 +70,15 @@ type Kind =
   | { type: "undo" }
   | { type: "airway"; device: "sga" | "ett" | "unspecified" }
   | { type: "access"; route: "IV" | "IO" }
-  | { type: "etco2" };
+  | { type: "etco2" }
+  | { type: "otherDrug"; drug: string }
+  | { type: "procedure"; procedure: string }
+  | { type: "trauma" }
+  | { type: "observation"; kind: ObservationKind };
+
+const otherDrug = (phrases: string[], drug: string): [string, Kind][] => phrases.map((p) => [p, { type: "otherDrug", drug }]);
+const procedure = (phrases: string[], name: string): [string, Kind][] => phrases.map((p) => [p, { type: "procedure", procedure: name }]);
+const observation = (phrases: string[], kind: ObservationKind): [string, Kind][] => phrases.map((p) => [p, { type: "observation", kind }]);
 
 const PHRASES: [string, Kind][] = [
   ...["adrenaline", "adrenalin", "epinephrine", "epi", "adrenalines"].map((p): [string, Kind] => [p, { type: "drug", drug: "adrenaline" }]),
@@ -99,6 +115,74 @@ const PHRASES: [string, Kind][] = [
   ...["iv", "i v", "cannula", "cannulated", "venflon"].map((p): [string, Kind] => [p, { type: "access", route: "IV" }]),
   ...["io", "i o", "intraosseous", "ez io", "ezio"].map((p): [string, Kind] => [p, { type: "access", route: "IO" }]),
   ...["etco2", "et co2", "etco 2", "et co 2", "e t c o 2", "e t co2", "end tidal", "end tidal co2", "co2", "capnography"].map((p): [string, Kind] => [p, { type: "etco2" }]),
+
+  // Other Meds, by the name on the list. Short forms that are easily misheard in noise ("mag", "sux", "roc",
+  // "calc") are left out on purpose. Bare "glucose" is a reading (below), not the drug.
+  ...otherDrug(["atropine"], "Atropine"),
+  ...otherDrug(["adenosine"], "Adenosine"),
+  ...otherDrug(["calcium", "calcium chloride"], "Calcium chloride 10%"),
+  ...otherDrug(["calcium gluconate"], "Calcium gluconate 10%"),
+  ...otherDrug(["magnesium", "magnesium sulphate", "magnesium sulfate", "mag sulphate", "mag sulph"], "Magnesium sulphate"),
+  ...otherDrug(["bicarb", "bicarbonate", "sodium bicarbonate", "sodium bicarb"], "Sodium bicarbonate 8.4%"),
+  ...otherDrug(["adrenaline infusion", "adrenaline infusion started", "epinephrine infusion"], "Adrenaline infusion"),
+  ...otherDrug(["push dose adrenaline", "push dose epi", "push dose of adrenaline", "push dose epinephrine"], "Adrenaline push-dose"),
+  ...otherDrug(["noradrenaline", "norad", "norepinephrine"], "Noradrenaline infusion"),
+  ...otherDrug(["naloxone", "narcan"], "Naloxone"),
+  ...otherDrug(["glucagon"], "Glucagon"),
+  ...otherDrug(["intralipid", "lipid emulsion", "lipid"], "Lipid emulsion 20%"),
+  ...otherDrug(["flumazenil"], "Flumazenil"),
+  ...otherDrug(["hydroxocobalamin", "cyanokit"], "Hydroxocobalamin"),
+  ...otherDrug(["dextrose", "10 percent glucose", "glucose 10 percent"], "Glucose 10%"),
+  ...otherDrug(["insulin", "insulin and dextrose", "insulin and glucose"], "Insulin & glucose"),
+  ...otherDrug(["potassium chloride"], "Potassium chloride"),
+  ...otherDrug(["hydrocortisone"], "Hydrocortisone"),
+  ...otherDrug(["salbutamol", "ventolin"], "Salbutamol"),
+  ...otherDrug(["ipratropium", "atrovent"], "Ipratropium bromide"),
+  ...otherDrug(["alteplase"], "Alteplase"),
+  ...otherDrug(["tenecteplase", "tnk"], "Tenecteplase"),
+  ...otherDrug(["normal saline", "sodium chloride", "saline bolus", "bag of saline", "bolus of saline"], "Sodium chloride 0.9%"),
+  ...otherDrug(["hartmann", "hartmanns", "hartmann is", "hartmann solution"], "Hartmann’s solution"),
+  ...otherDrug(["packed red cells", "red cells", "unit of blood", "units of blood", "prbc", "prbcs"], "Packed red cells"),
+  ...otherDrug(["whole blood"], "Whole blood"),
+  ...otherDrug(["plasma", "ffp", "lyoplas"], "Plasma"),
+  ...otherDrug(["fibrinogen"], "Fibrinogen concentrate"),
+  ...otherDrug(["txa", "t x a", "tranexamic", "tranexamic acid"], "Tranexamic acid"),
+  ...otherDrug(["ketamine"], "Ketamine"),
+  ...otherDrug(["midazolam", "midaz"], "Midazolam"),
+  ...otherDrug(["fentanyl"], "Fentanyl"),
+  ...otherDrug(["morphine"], "Morphine"),
+  ...otherDrug(["propofol"], "Propofol"),
+  ...otherDrug(["rocuronium"], "Rocuronium"),
+  ...otherDrug(["suxamethonium", "succinylcholine"], "Suxamethonium"),
+  ...otherDrug(["ondansetron"], "Ondansetron"),
+
+  // Trauma interventions. Chest procedures take their side from nearby words.
+  ...procedure(["pelvic binder", "binder", "pelvic splint", "sam pelvic sling"], "Pelvic binder"),
+  ...procedure(["tourniquet", "tourniquets"], "Tourniquet"),
+  ...procedure(["traction splint", "kendrick", "kts"], "Traction splint"),
+  ...procedure(
+    ["wound packing", "packed the wound", "haemostatic", "hemostatic", "haemostatic dressing", "hemostatic dressing", "celox"],
+    "Haemostatic dressing / packing",
+  ),
+  ...procedure(
+    ["needle decompression", "needle decompressed", "needle thoracocentesis", "needled", "needle decompress"],
+    "Needle decompression",
+  ),
+  ...procedure(["thoracostomy", "thoracostomies", "finger thoracostomy", "simple thoracostomy", "finger thoracostomies"], "Thoracostomy"),
+  ...procedure(["thoracotomy", "clamshell", "clam shell"], "Thoracotomy"),
+  ...procedure(["reboa"], "REBOA"),
+  ...procedure(
+    ["critical care requested", "hems requested", "hems activated", "enhanced care requested", "critical care activated", "air ambulance requested"],
+    "Enhanced / critical care requested",
+  ),
+  ...["trauma arrest", "traumatic arrest", "traumatic cardiac arrest", "trauma cardiac arrest"].map((p): [string, Kind] => [p, { type: "trauma" }]),
+
+  // Readings, mostly after ROSC.
+  ...observation(["sats", "sat", "spo2", "sp o2", "saturations", "saturating", "o2 sats", "oxygen sats", "oxygen saturation"], "spo2"),
+  ...observation(["bp", "b p", "blood pressure", "pressure"], "bp"),
+  ...observation(["bm", "b m", "cbg", "blood sugar", "blood glucose", "sugar", "sugars", "glucose", "blood sugars"], "glucose"),
+  ...observation(["temp", "temperature", "temp is"], "temperature"),
+  ...observation(["12 lead", "12 lead ecg", "stemi", "nstemi"], "ecg"),
 ].map(([p, k]) => [p.replace(/'s$/, " is"), k]);
 
 const QUESTION_STARTS = new Set(["is", "are", "should", "do", "does", "did", "can", "could", "what", "why", "when", "how", "who", "shall", "has"]);
@@ -139,10 +223,14 @@ const UNITS: [string, string][] = [
   ["milligrams", "mg"], ["milligram", "mg"], ["mgs", "mg"], ["mg", "mg"], ["milli", "mg"],
   ["micrograms", "mcg"], ["microgram", "mcg"], ["mcg", "mcg"], ["ug", "mcg"], ["mics", "mcg"],
   ["joules", "J"], ["joule", "J"], ["j", "J"],
+  ["grams", "g"], ["gram", "g"], ["millilitres", "ml"], ["milliliters", "ml"], ["mls", "ml"], ["ml", "ml"],
+  ["millimoles", "mmol"], ["millimole", "mmol"], ["mmol", "mmol"], ["units", "units"],
   ["gauge", "G"], ["g", "G"],
 ];
 
-const UNIT_FOR: Record<string, Kind["type"]> = { mg: "drug", mcg: "drug", J: "shock", kPa: "etco2", mmHg: "etco2", G: "access" };
+const UNIT_FOR: Record<string, Kind["type"]> = {
+  mg: "drug", mcg: "drug", g: "drug", ml: "drug", mmol: "drug", units: "drug", J: "shock", kPa: "etco2", mmHg: "etco2", G: "access",
+};
 
 const SITES: [string, string][] = [
   ["antecubital", "AC"], ["ac", "AC"], ["hand", "hand"], ["wrist", "wrist"], ["forearm", "forearm"], ["foot", "foot"],
@@ -390,7 +478,8 @@ const gapBetween = (tokens: string[], a: { start: number; end: number }, b: { st
 };
 
 const MAX_GAP: Record<Kind["type"], number> = {
-  drug: 2, shock: 2, etco2: 2, access: 4, analyse: 0, rhythm: 0, rosc: 0, undo: 0, airway: 0,
+  drug: 2, otherDrug: 2, shock: 2, etco2: 2, access: 4, analyse: 0, rhythm: 0, rosc: 0, undo: 0, airway: 0,
+  procedure: 0, trauma: 0, observation: 0,
 };
 
 const kindKey = (kind: Kind) => JSON.stringify(kind);
@@ -487,7 +576,7 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
     let best: { mention: Mention; gap: number } | null = null;
     for (const mention of mentions) {
       const type = mention.kind.type;
-      if (quantity.unit ? UNIT_FOR[quantity.unit] !== type : !["drug", "shock", "etco2"].includes(type)) continue;
+      if (quantity.unit ? UNIT_FOR[quantity.unit] !== (type === "otherDrug" ? "drug" : type) : !["drug", "shock", "etco2"].includes(type)) continue;
       const gap = gapBetween(tokens, quantity, mention);
       if (gap > MAX_GAP[type] || (!quantity.unit && gap > 0)) continue;
       if (!best || gap < best.gap) best = { mention, gap };
@@ -503,6 +592,8 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   let unclearNegation = false;
   const kept = mentions.filter((m, index) => {
     if (m.kind.type === "undo" || m.kind.type === "access") return true;
+    // A reading is a reading ("12 lead, no STEMI"); a missing number is handled when it's built.
+    if (m.kind.type === "observation") return true;
     const previousEnd = index > 0 ? mentions[index - 1].end : 0;
     const nextStart = index + 1 < mentions.length ? mentions[index + 1].start : tokens.length;
     const before = tokens.slice(Math.max(previousEnd, m.start - 2), m.start);
@@ -640,6 +731,67 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       case "airway":
         actions.push({ type: "airway", device: kind.device });
         break;
+      case "otherDrug": {
+        // Before eResus: recorded as given then, time unknown.
+        if (isHandover || hasHistoryMarker) {
+          if (!addGiven(kind.drug, 1)) return nothing("conflict");
+          break;
+        }
+        const q = m.quantities.find((q) => q.unit !== null);
+        const dose = q ? `${formatNumber(q.value)} ${q.unit}` : null;
+        const prior = actions.find((a) => a.type === "otherDrug" && a.drug === kind.drug) as
+          | Extract<VoiceAction, { type: "otherDrug" }>
+          | undefined;
+        if (prior) {
+          if (prior.dose && dose && prior.dose !== dose) return nothing("conflict");
+          prior.dose ??= dose;
+          break;
+        }
+        actions.push({ type: "otherDrug", drug: kind.drug, dose });
+        break;
+      }
+      case "procedure": {
+        const base = kind.procedure;
+        let names = [base];
+        if (base === "Thoracostomy" || base === "Needle decompression") {
+          const window = new Set(tokens.slice(Math.max(0, m.start - 3), m.end + 3));
+          const both =
+            window.has("bilateral") || window.has("both") || window.has("thoracostomies") || (window.has("left") && window.has("right"));
+          if (both) {
+            names = base === "Thoracostomy" ? ["Thoracostomy (bilateral)"] : ["Needle decompression (left)", "Needle decompression (right)"];
+          } else if (window.has("left")) {
+            names = [`${base} (left)`];
+          } else if (window.has("right")) {
+            names = [`${base} (right)`];
+          }
+        }
+        for (const name of names) {
+          if (isHandover || hasHistoryMarker) {
+            if (!addGiven(name, 1)) return nothing("conflict");
+          } else if (!actions.some((a) => a.type === "procedure" && a.procedure === name)) {
+            actions.push({ type: "procedure", procedure: name });
+          }
+        }
+        break;
+      }
+      case "trauma":
+        if (!actions.some((a) => a.type === "trauma")) actions.push({ type: "trauma" });
+        break;
+      case "observation": {
+        // Readings in a handover aren't current; leave them out.
+        if (isHandover) break;
+        const value = reading(kind.kind, tokens, m);
+        if (value === null) break;
+        const prior = actions.find((a) => a.type === "observation" && a.kind === kind.kind) as
+          | Extract<VoiceAction, { type: "observation" }>
+          | undefined;
+        if (prior) {
+          if (prior.value !== value) return nothing("conflict");
+          break;
+        }
+        actions.push({ type: "observation", kind: kind.kind, value });
+        break;
+      }
       default: {
         // A rhythm check or ROSC mentioned in a handover is history, not something happening now.
         if (isHandover && kind.type !== "undo") break;
@@ -672,6 +824,45 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
     return nothing(droppedAsInstruction ? "instruction" : droppedAsNotGiven ? "notGiven" : "nothing");
   }
   return { actions: result, time: actions.length ? time : null, reason: null };
+};
+
+// The value said after a reading ("sats 96", "BP 110 over 70", "BM 6.2", "temp 36.4", "12 lead, no STEMI"),
+// formatted as it's logged. Null when there's no believable number, so nothing is logged.
+const reading = (kind: ObservationKind, tokens: string[], span: { start: number; end: number }): string | null => {
+  const number = (start: number, skipping: Set<string>): { value: number; at: number } | null => {
+    for (let i = start, skipped = 0; i < tokens.length && skipped <= 2; i++, skipped++) {
+      if (isNumber(tokens[i])) return { value: Number(tokens[i]), at: i };
+      if (!FILLERS.has(tokens[i]) && !skipping.has(tokens[i])) return null;
+    }
+    return null;
+  };
+  const within = (v: number, lo: number, hi: number) => v >= lo && v <= hi;
+  switch (kind) {
+    case "ecg": {
+      const window = tokens.slice(Math.max(0, span.start - 4), span.end + 4);
+      const index = window.findIndex((t) => t === "stemi" || t === "nstemi");
+      if (index < 0) return "Recorded, not yet interpreted";
+      if (window[index] === "nstemi") return "No STEMI";
+      const before = window.slice(Math.max(0, index - 2), index);
+      return before.includes("no") || before.includes("not") || before.includes("non") ? "No STEMI" : "STEMI";
+    }
+    case "bp": {
+      const systolic = number(span.end, new Set());
+      if (!systolic || !within(systolic.value, 40, 300)) return null;
+      const diastolic = number(systolic.at + 1, new Set(["over", "on", "by"]));
+      if (!diastolic || !within(diastolic.value, 20, 200) || diastolic.value >= systolic.value) return null;
+      const map = Math.round((systolic.value + 2 * diastolic.value) / 3);
+      return `${Math.trunc(systolic.value)}/${Math.trunc(diastolic.value)} (MAP ${map})`;
+    }
+    default: {
+      const found = number(span.end, new Set(["of", "are", "percent", "degrees", "mmol"]));
+      if (!found) return null;
+      const v = found.value;
+      if (kind === "spo2") return within(v, 50, 100) ? `${Math.trunc(v)}%` : null;
+      if (kind === "glucose") return within(v, 0.5, 50) ? `${formatNumber(v)} mmol/L` : null;
+      return within(v, 25, 43) ? `${formatNumber(v)} °C` : null;
+    }
+  }
 };
 
 // A count next to a shock or drug mention, and the tokens it used.

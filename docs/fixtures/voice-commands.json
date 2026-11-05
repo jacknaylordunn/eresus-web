@@ -1886,5 +1886,500 @@
    "time": null,
    "reason": null
   }
+ },
+ {
+  "heard": "TXA given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tranexamic acid",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tranexamic acid 1 gram",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tranexamic acid",
+     "dose": "1 g"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "calcium chloride 10 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Calcium chloride 10%",
+     "dose": "10 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "bicarb 50 mmol",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium bicarbonate 8.4%",
+     "dose": "50 mmol"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "naloxone 400 micrograms",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Naloxone",
+     "dose": "400 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "Narcan given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Naloxone",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 100 milligrams",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "100 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tenecteplase given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tenecteplase",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "noradrenaline started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Noradrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "push dose adrenaline 10 micrograms",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline push-dose",
+     "dose": "10 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline infusion started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "give TXA",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "instruction"
+  }
+ },
+ {
+  "heard": "prepare calcium",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "unit of blood",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Packed red cells",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline flush",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "pelvic binder on",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Pelvic binder"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tourniquet left leg",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Tourniquet"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "left thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (left)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "bilateral thoracostomies",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (bilateral)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle decompression right",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle decompression both sides",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (left)"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "no binder",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "HEMS requested",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Enhanced / critical care requested"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "traumatic arrest",
+  "expected": {
+   "actions": [
+    {
+     "type": "trauma"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "major trauma centre",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "sats 96",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "spo2",
+     "value": "96%"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "sats are 94 percent",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "spo2",
+     "value": "94%"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BP 110 over 70",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "110/70 (MAP 83)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood pressure 90 on 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "90/50 (MAP 63)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BM 6.2",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "glucose",
+     "value": "6.2 mmol/L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood sugar is 4.5",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "glucose",
+     "value": "4.5 mmol/L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "temp 36.4",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "temperature",
+     "value": "36.4 °C"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "12 lead shows a STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "twelve lead no STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "No STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "sats 300",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "BP 70 over 110",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "CPR started 10 minutes ago, 2 shocks, TXA given",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    },
+    {
+     "type": "given",
+     "item": "Tranexamic acid",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
  }
 ]

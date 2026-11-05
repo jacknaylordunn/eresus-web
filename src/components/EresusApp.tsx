@@ -128,6 +128,7 @@ import {
   doseNote as checkDose,
   hhmm,
   isTraumaArrest as traumaFromLog,
+  isTraumaProcedureName,
   latestObservation as latestObservationIn,
   observationEntry,
   POST_ROSC_TASKS,
@@ -2121,6 +2122,16 @@ const useArrestViewModel = () => {
     return true;
   };
 
+  // A drug or trauma intervention from before eResus, said in a handover. Recorded at the start, time unknown.
+  const logOtherBeforeStart = (name: string): boolean => {
+    if (arrestState !== ArrestState.Active) return false;
+    saveUndoState();
+    const isProcedure = isTraumaProcedureName(name);
+    if (isProcedure && !isTraumaArrest) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    logAtStart(`${name} before eResus, time unknown (estimated)`, isProcedure ? EventType.Airway : EventType.Drug);
+    return true;
+  };
+
   // A rhythm from before eResus: recorded only, it doesn't start a rhythm check or advise a shock.
   const logEarlierRhythm = (rhythm: string) => {
     saveUndoState();
@@ -2827,6 +2838,7 @@ const useArrestViewModel = () => {
     dateFor,
     setTimeBeforeStart,
     logBeforeStart,
+    logOtherBeforeStart,
     logEarlierRhythm,
     setLastAdrenaline,
     isLastAdrenalineTimeUnknown,
@@ -4515,21 +4527,11 @@ const useVoiceCommandsAvailable = () => {
   return voiceCommandsEnabled && available;
 };
 
-// Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
-const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
-  const { cprTime, isRhythmCheckDue } = useArrest();
-  const { cprCycleDuration } = useSettings();
+// Press and hold to speak, then let go (matches iOS). Only a deliberate hold turns the microphone on,
+// never a tap or a brush.
+const usePushToTalk = (onVoiceTranscript: ((transcript: string) => void) | undefined, label: string) => {
   const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
-  const listener = useVoiceListener();
   const [isPressed, setIsPressed] = useState(false);
-
-  // Agrees with the header: a check that's due shows as due, not as time left in the next cycle.
-  const percentage = isRhythmCheckDue ? 1 : cprTime / cprCycleDuration;
-  const strokeDasharray = 2 * Math.PI * 52;
-  const strokeDashoffset = strokeDasharray * (1 - percentage);
-  const isEnding = isRhythmCheckDue || cprTime <= 10;
-
-  // Only a deliberate hold turns the microphone on, never a tap or a brush of the ring (matches iOS).
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTalking = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -4555,9 +4557,24 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
         onPointerCancel: stopTalking,
         onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
         role: "button",
-        "aria-label": "Press and hold to speak a command",
+        "aria-label": label,
       }
     : {};
+  return { voiceAvailable, isPressed, pushToTalk };
+};
+
+// Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
+const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
+  const { cprTime, isRhythmCheckDue } = useArrest();
+  const { cprCycleDuration } = useSettings();
+  const listener = useVoiceListener();
+  const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Press and hold to speak a command");
+
+  // Agrees with the header: a check that's due shows as due, not as time left in the next cycle.
+  const percentage = isRhythmCheckDue ? 1 : cprTime / cprCycleDuration;
+  const strokeDasharray = 2 * Math.PI * 52;
+  const strokeDashoffset = strokeDasharray * (1 - percentage);
+  const isEnding = isRhythmCheckDue || cprTime <= 10;
 
   return (
     <div
@@ -4643,7 +4660,10 @@ const PushToTalkRing: React.FC<{ transcript: string }> = ({ transcript }) => (
   </div>
 );
 
-const VoiceListeningStatus: React.FC = () => {
+const VoiceListeningStatus: React.FC<{ holdHint?: string; className?: string }> = ({
+  holdHint = "Hold the ring to talk.",
+  className = "-mt-4 justify-center",
+}) => {
   const listener = useVoiceListener();
   const { voiceWakeWord } = useSettings();
   if (!listener.isHandsFreeActive || listener.isPushToTalkActive) return null;
@@ -4651,7 +4671,7 @@ const VoiceListeningStatus: React.FC = () => {
   // Long transcripts are cut from the start so the latest words stay visible.
   return (
     <p
-      className={`-mt-4 flex items-center justify-center gap-1.5 text-xs ${
+      className={`${className} flex items-center gap-1.5 text-xs ${
         listener.heardWakeWord ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"
       }`}
     >
@@ -4660,7 +4680,7 @@ const VoiceListeningStatus: React.FC = () => {
         <bdi>
           {listener.heardWakeWord
             ? `“${wakeWord}” heard: ${listener.transcript}`
-            : `Listening for “${wakeWord}”. Hold the ring to talk.`}
+            : `Listening for “${wakeWord}”. ${holdHint}`}
         </bdi>
       </span>
     </p>
@@ -4984,7 +5004,8 @@ const RoscView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onOpenDrugs: (focus: DrugGroupKind | null) => void;
   onShowEtco2: () => void;
-}> = ({ onShowPdf, onOpenDrugs, onShowEtco2 }) => {
+  onVoiceTranscript?: (transcript: string) => void;
+}> = ({ onShowPdf, onOpenDrugs, onShowEtco2, onVoiceTranscript }) => {
   const {
     reArrest,
     postROSCTasks,
@@ -4998,6 +5019,9 @@ const RoscView: React.FC<{
   } = useArrest();
   const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
   const [showDestination, setShowDestination] = useState(false);
+  const listener = useVoiceListener();
+  const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Hold to talk");
+  const talking = voiceAvailable && listener.isPushToTalkActive;
 
   return (
     <div className="p-4 space-y-6 pb-36">
@@ -5010,6 +5034,29 @@ const RoscView: React.FC<{
         fontSize="text-lg"
         onClick={reArrest}
       />
+
+      {voiceAvailable && (
+        // The ring isn't on this screen, so the microphone gets its own hold target.
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <div
+              className={`flex h-[52px] w-[52px] shrink-0 select-none touch-none items-center justify-center rounded-full text-white motion-safe:transition-transform motion-safe:duration-200 ${
+                talking ? "bg-tone-danger motion-safe:animate-pulse" : "bg-tone-accent"
+              } ${isPressed ? "motion-safe:scale-95" : ""}`}
+              {...pushToTalk}
+            >
+              <Mic size={22} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">{talking ? "Listening…" : "Hold to talk"}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
+                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”, “ketamine 100 mg”"}
+              </p>
+            </div>
+          </div>
+          <VoiceListeningStatus holdHint="Hold the mic to talk." className="" />
+        </div>
+      )}
 
       <div className="space-y-2">
         <SectionTitle title="Observations" />
@@ -5933,7 +5980,10 @@ const ArrestView: React.FC<{
       vm.undo();
       return { summary: "undo" };
     }
-    if (vm.arrestState !== ArrestState.Active || vm.isTimerPaused) {
+    // Drugs, readings and interventions are also logged after ROSC; everything else needs an active arrest.
+    const worksAfterROSC = action.type === "otherDrug" || action.type === "observation" || action.type === "procedure";
+    const stateAllows = vm.arrestState === ArrestState.Active || (worksAfterROSC && vm.arrestState === ArrestState.Rosc);
+    if (!stateAllows || vm.isTimerPaused) {
       return { failure: "Voice commands work during an active adult arrest." };
     }
 
@@ -5956,6 +6006,13 @@ const ArrestView: React.FC<{
       case "given": {
         const { item, count } = action;
         let added = false;
+        if (!["shock", "adrenaline", "amiodarone", "lidocaine"].includes(item)) {
+          vm.performFromVoice(null, () => {
+            added = vm.logOtherBeforeStart(item);
+          });
+          if (!added) return { failure: `${item} wasn't added.` };
+          return { summary: `${item} before eResus` };
+        }
         vm.performFromVoice(null, () => {
           added = vm.logBeforeStart({ [item]: count });
         });
@@ -5992,6 +6049,30 @@ const ArrestView: React.FC<{
         }
         const name = drug.charAt(0).toUpperCase() + drug.slice(1);
         return { summary: dose ? `${name} ${dose}` : name, note: doseNote(drug, dose) ?? undefined };
+      }
+      case "otherDrug": {
+        const { drug, dose } = action;
+        vm.performFromVoice(time, () => vm.logOtherDrug(drug, dose, true));
+        return { summary: dose ? `${drug} ${dose}` : drug };
+      }
+      case "procedure": {
+        // Chest procedures need a side; guessing one would put the wrong side on the record.
+        if (!isTraumaProcedureName(action.procedure)) return { failure: `${action.procedure}: say left, right or both.` };
+        const wasTrauma = vm.isTraumaArrest;
+        vm.performFromVoice(time, () => vm.logTraumaProcedure(action.procedure));
+        return {
+          summary: action.procedure,
+          note: wasTrauma ? undefined : "Treated as a traumatic arrest: HOTT first, drug prompts quietened.",
+        };
+      }
+      case "trauma":
+        if (vm.isTraumaArrest) return { summary: "traumatic arrest (already set)" };
+        vm.performFromVoice(null, () => vm.setTraumaArrest(true));
+        return { summary: "traumatic arrest: HOTT first, drug prompts quietened" };
+      case "observation": {
+        const { kind, value } = action;
+        vm.performFromVoice(null, () => vm.logObservation(kind, value));
+        return { summary: `${ROSC_OBSERVATIONS[kind].title} ${value}` };
       }
       case "analyse":
         if (vm.uiState !== UIState.Default) return { failure: "A rhythm check is already in progress." };
@@ -6067,9 +6148,12 @@ const ArrestView: React.FC<{
       minute: "2-digit",
     });
 
-  // Hands-free listens only while an adult arrest is running on screen.
+  // Hands-free listens only while an adult arrest is running on screen, or after ROSC.
   const shouldListenHandsFree =
-    voiceAvailable && voiceHandsFree && viewModel.arrestState === ArrestState.Active && !viewModel.isTimerPaused;
+    voiceAvailable &&
+    voiceHandsFree &&
+    (viewModel.arrestState === ArrestState.Active || viewModel.arrestState === ArrestState.Rosc) &&
+    !viewModel.isTimerPaused;
   useEffect(() => {
     if (shouldListenHandsFree) {
       voiceCommandListener.startHandsFree(voiceWakeWord, (command) => handleVoiceTranscriptRef.current(command));
@@ -6104,7 +6188,12 @@ const ArrestView: React.FC<{
           />
         )}
         {viewModel.arrestState === ArrestState.Rosc && (
-          <RoscView onShowPdf={onShowPdf} onOpenDrugs={openDrugs} onShowEtco2={() => setShowEtco2Modal(true)} />
+          <RoscView
+            onShowPdf={onShowPdf}
+            onOpenDrugs={openDrugs}
+            onShowEtco2={() => setShowEtco2Modal(true)}
+            onVoiceTranscript={handleVoiceTranscript}
+          />
         )}
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
       </div>
