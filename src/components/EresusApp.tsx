@@ -93,6 +93,10 @@ import {
   AudioWaveform,
   Ear,
   Mic,
+  Bandage,
+  Stethoscope,
+  PhoneOutgoing,
+  Play,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
@@ -106,6 +110,38 @@ import {
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
+import Modal from "./Modal";
+import SummaryView from "./SummaryView";
+import {
+  DestinationSheet,
+  HOTTCard,
+  ObservationButton,
+  ObservationSheet,
+  OtherDrugsSheet,
+  SomaticCriteriaSection,
+  TraumaSheet,
+} from "./ClinicalSheets";
+import {
+  clockFor,
+  completeTask,
+  DESTINATION_TASK,
+  doseNote as checkDose,
+  hhmm,
+  isTraumaArrest as traumaFromLog,
+  latestObservation as latestObservationIn,
+  observationEntry,
+  POST_ROSC_TASKS,
+  recentOtherDrugs,
+  ROSC_OBSERVATION_ORDER,
+  ROSC_OBSERVATIONS,
+  TRAUMA_OFF_ENTRY,
+  TRAUMA_ON_ENTRY,
+  traumaEntryText,
+  traumaInterventionCount as traumaCountIn,
+  type DrugGroupKind,
+  type ROSCObservation,
+} from "@/lib/arrestRecord";
+import { buildSummary } from "@/lib/arrestSummary";
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -140,6 +176,9 @@ export interface Event {
   timestamp: number;
   message: string;
   type: EventType;
+  // Seconds since 1970 when it happened, kept as logged: the arrest clock stops while paused, so clock
+  // times can't be worked out from it afterwards. Missing on logs from older builds.
+  clock?: number;
 }
 
 // The message is the record: entries logged after the fact carry "(estimated)" (before any "(voice)").
@@ -534,7 +573,7 @@ const isPatientPaediatric = (ageStr: string, ageCategory: PatientAgeCategory | n
 const AppConstants = {
   reversibleCausesTemplate: (): ChecklistItem[] => [
     { id: "hypoxia", name: "Hypoxia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "hypovolemia", name: "Hypovolemia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
+    { id: "hypovolemia", name: "Hypovolaemia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
     {
       id: "hypo-hyperkalaemia",
       name: "Hypo/Hyperkalaemia",
@@ -553,24 +592,8 @@ const AppConstants = {
     { id: "thrombosis", name: "Thrombosis", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
   ],
 
-  postROSCTasksTemplate: (): ChecklistItem[] => [
-    {
-      id: "ventilation",
-      name: "Optimise Ventilation & Oxygenation",
-      isCompleted: false,
-      hypothermiaStatus: HypothermiaStatus.None,
-    },
-    { id: "ecg", name: "12-Lead ECG", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    {
-      id: "hypotension",
-      name: "Treat Hypotension (SBP < 90)",
-      isCompleted: false,
-      hypothermiaStatus: HypothermiaStatus.None,
-    },
-    { id: "glucose", name: "Check Blood Glucose", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "temp", name: "Consider Temperature Control", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "causes", name: "Identify & Treat Causes", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-  ],
+  postROSCTasksTemplate: (): ChecklistItem[] =>
+    POST_ROSC_TASKS.map((task) => ({ ...task, isCompleted: false, hypothermiaStatus: HypothermiaStatus.None })),
 
   postMortemTasksTemplate: (): ChecklistItem[] => [
     {
@@ -633,24 +656,6 @@ const AppConstants = {
       hypothermiaStatus: HypothermiaStatus.None,
     },
   ],
-
-  otherDrugs: [
-    "Adenosine",
-    "Adrenaline 1:1000",
-    "Adrenaline 1:10,000",
-    "Amiodarone (Further Dose)",
-    "Atropine",
-    "Calcium chloride",
-    "Glucose",
-    "Hartmann's solution",
-    "Magnesium sulphate",
-    "Midazolam",
-    "Naloxone",
-    "Potassium chloride",
-    "Sodium bicarbonate",
-    "Sodium chloride",
-    "Tranexamic acid",
-  ].sort(),
 
   pdfAlgorithms: [
     {
@@ -1109,33 +1114,6 @@ const removeFromOfflineLogQueue = (index: number) => {
 
 const ARREST_SESSION_KEY = "eresus_arrest_session";
 
-// Helper to extract real-world clock time from event messages
-const extractRealWorldTime = (events: Event[], searchPatterns: string[]): string | null => {
-  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        // Try to extract HH:MM from the message
-        const timeMatch = event.message.match(/(\d{1,2}:\d{2}:\d{2})/);
-        if (timeMatch) {
-          // Return HH:MM format
-          const parts = timeMatch[1].split(":");
-          return `${parts[0]}:${parts[1]}`;
-        }
-        // If no clock time in message, return the arrest-relative time
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
-
-// Event times count from when the arrest was confirmed, which can be before the Start tap; the
-// "Arrest Started" entry marks the Start tap on that scale (matches iOS).
-const startTapTimestamp = (events: { timestamp: number; message: string }[]): number =>
-  events.find((e) => e.message.startsWith("Arrest Started") || e.message.startsWith("Transitioned to Paediatric ALS"))
-    ?.timestamp ?? 0;
-
 // Lidocaine doses in a log: one "Given" entry per dose, plus "Lidocaine ×2 before eResus" entries.
 export const lidocaineDosesIn = (events: { message: string }[]): number =>
   events.reduce((total, e) => {
@@ -1144,43 +1122,6 @@ export const lidocaineDosesIn = (events: { message: string }[]): number =>
     const before = e.message.match(/^Lidocaine ×(\d+) before eResus/);
     return before ? total + Number(before[1]) : total;
   }, 0);
-
-const clockTimeOf = (startTime: Date, events: { timestamp: number; message: string }[], timestamp: number): Date =>
-  new Date(startTime.getTime() + (timestamp - startTapTimestamp(events)) * 1000);
-
-const extractFirstEventTime = (events: Event[], searchPatterns: string[], startTime: Date | null): string | null => {
-  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        if (event.message.includes("before eResus")) return "Before eResus";
-        if (startTime) {
-          const eventDate = clockTimeOf(startTime, events, event.timestamp);
-          return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
-        }
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
-
-const extractLastEventTime = (events: Event[], searchPatterns: string[], startTime: Date | null): string | null => {
-  const sorted = [...events].sort((a, b) => b.timestamp - a.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        if (event.message.includes("before eResus")) return "Before eResus";
-        if (startTime) {
-          const eventDate = clockTimeOf(startTime, events, event.timestamp);
-          return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
-        }
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
 
 const useArrestViewModel = () => {
   const { db, userId, user } = useFirebase();
@@ -1319,14 +1260,20 @@ const useArrestViewModel = () => {
   // if nobody answers, the next rhythm check treats it as due rather than staying silent.
   const isLastAdrenalineTimeUnknown = adrenalineCount > 0 && lastAdrenalineTimeRef.current === null && isAdrenalineAvailable;
 
+  // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet. Read from the log, so it survives
+  // a reload, an undo and a transfer (matches iOS).
+  const isTraumaArrest = useMemo(() => traumaFromLog(events), [events]);
+  const traumaInterventionCount = useMemo(() => traumaCountIn(events), [events]);
+
   const shouldShowAmiodaroneReminder = useMemo(() => {
     const shockCountDose1 = shockCountForAmiodarone1Ref.current;
-    if (shockCountDose1 === null) return false;
+    if (shockCountDose1 === null || isTraumaArrest) return false;
     return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt && isAdrenalineAvailable;
-  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt, isAdrenalineAvailable]);
+  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt, isAdrenalineAvailable, isTraumaArrest]);
 
   // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
   const shouldShowLidocaineReminder =
+    !isTraumaArrest &&
     antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine &&
     lidocaineCount === 1 &&
     drugTimingShockCount >= 5 &&
@@ -1336,16 +1283,17 @@ const useArrestViewModel = () => {
   const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
     // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
     return (
+      !isTraumaArrest &&
       drugTimingShockCount >= 3 &&
       amiodaroneCount === 0 &&
       !hideAmiodaronePrompt &&
       antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine &&
       isAdrenalineAvailable
     );
-  }, [drugTimingShockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable]);
+  }, [drugTimingShockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable, isTraumaArrest]);
 
   const shouldShowAdrenalinePrompt = useMemo(() => {
-    if (!isAdrenalineAvailable || hideAdrenalinePrompt) return false;
+    if (!isAdrenalineAvailable || hideAdrenalinePrompt || isTraumaArrest) return false;
     if (timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) return false;
     if (adrenalineCount === 0) {
       if (drugTimingShockCount >= 3) return true;
@@ -1359,12 +1307,13 @@ const useArrestViewModel = () => {
     hideAdrenalinePrompt,
     timeUntilAdrenaline,
     lastRhythmNonShockable,
+    isTraumaArrest,
   ]);
 
   // Buttons light up while their reminder is showing, so the thing to press is the thing that's lit.
   const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
-  const isAdrenalineHighlighted =
-    shouldShowAdrenalinePrompt || (isAdrenalineAvailable && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0);
+  const isAdrenalineDue = isAdrenalineAvailable && !isTraumaArrest && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0;
+  const isAdrenalineHighlighted = shouldShowAdrenalinePrompt || isAdrenalineDue;
   const isAmiodaroneHighlighted = shouldShowAmiodaroneFirstDosePrompt || shouldShowAmiodaroneReminder;
 
   // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
@@ -1384,7 +1333,7 @@ const useArrestViewModel = () => {
       }
     }
     if (shouldShowAdrenalinePrompt) current.add("consider_adrenaline");
-    if (isAdrenalineAvailable && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) current.add("adrenaline_due");
+    if (isAdrenalineDue) current.add("adrenaline_due");
     if (shouldShowAmiodaroneFirstDosePrompt) current.add("consider_amiodarone");
     if (shouldShowAmiodaroneReminder) current.add("consider_amiodarone_second");
     if (shouldShowLidocaineReminder) current.add("consider_lidocaine_second");
@@ -1399,6 +1348,9 @@ const useArrestViewModel = () => {
       consider_amiodarone_second: promptAntiarrhythmic,
       consider_lidocaine_second: promptAntiarrhythmic,
     };
+    // Hidden (another app in front, or the screen off): nothing can be heard, so leave the prompts to be
+    // announced when the page is next on screen rather than marking them as said.
+    if (document.visibilityState === "hidden") return;
     // Only announce prompts that have just appeared, in priority order.
     if (voicePromptsEnabled) {
       for (const prompt of VOICE_PROMPTS) {
@@ -1414,8 +1366,7 @@ const useArrestViewModel = () => {
     uiState,
     cprTime,
     shouldShowAdrenalinePrompt,
-    isAdrenalineAvailable,
-    timeUntilAdrenaline,
+    isAdrenalineDue,
     shouldShowAmiodaroneFirstDosePrompt,
     shouldShowAmiodaroneReminder,
     shouldShowLidocaineReminder,
@@ -1592,13 +1543,15 @@ const useArrestViewModel = () => {
     eventTimeOverrideRef.current = null;
   };
 
-  // When the current action happened, on the total-time scale. Usually now; earlier for a spoken time.
-  // Read from the clock rather than state so it is exact to the second.
-  const actionTime = () => {
-    if (eventTimeOverrideRef.current !== null) return eventTimeOverrideRef.current;
+  // Now on the total-time scale, read from the clock rather than state so it is exact to the second.
+  const liveTotalTime = () => {
     if (!startTimeRef.current) return totalArrestTime;
-    return (Date.now() - startTimeRef.current.getTime()) / 1000 + timeOffset;
+    const until = isTimerPaused && pauseStartTimeRef.current ? pauseStartTimeRef.current.getTime() : Date.now();
+    return (until - startTimeRef.current.getTime()) / 1000 + timeOffset;
   };
+
+  // When the current action happened, on the total-time scale. Usually now; earlier for a spoken time.
+  const actionTime = () => eventTimeOverrideRef.current ?? liveTotalTime();
 
   // The moment a spoken time refers to. Null if it's in the future.
   const dateFor = (time: VoiceTime, now: Date = new Date()): Date | null => {
@@ -1642,7 +1595,10 @@ const useArrestViewModel = () => {
     let finalMessage = message;
     if (eventTimeOverrideRef.current !== null && !isEstimated(message)) finalMessage += " (estimated)";
     if (fromVoice) finalMessage += " (voice)";
-    const newEvent: Event = { timestamp, message: finalMessage, type };
+    // Back-dated entries: the same distance before now as on the arrest clock.
+    const liveTotal = arrestState === ArrestState.Ended ? timestamp : liveTotalTime();
+    const clock = eventTimeOverrideRef.current === null ? Date.now() / 1000 : clockFor(timestamp, liveTotal);
+    const newEvent: Event = { timestamp, message: finalMessage, type, clock };
     // Newest first; a back-dated entry goes into its place in the timeline.
     setEvents((prevEvents) => {
       const index = prevEvents.findIndex((event) => event.timestamp <= timestamp);
@@ -1845,14 +1801,15 @@ const useArrestViewModel = () => {
       startTimeRef.current = new Date();
       // Downtime can be entered before Start, so the first cycle begins at the current total time.
       cprCycleStartTimeRef.current = timeOffset;
+      // Time added before Start counts back from the Start tap, which is now.
+      setEvents((prev) =>
+        prev.map((e) => (isConfirmedEntry(e) ? { ...e, clock: Date.now() / 1000 - timeOffset } : e)),
+      );
     }
 
     setArrestState(ArrestState.Active);
     setInitialRhythm(null);
-    logEvent(
-      `${priorStartTime ? "Transitioned to Paediatric ALS" : "Arrest Started"} at ${new Date().toLocaleTimeString()}`,
-      EventType.Status,
-    );
+    logEvent(`${priorStartTime ? "Transitioned to Paediatric ALS" : "Arrest Started"} at ${hhmm(new Date())}`, EventType.Status);
 
     if (!priorStartTime) {
       if (researchActive || askForPatientInfo) {
@@ -1921,7 +1878,8 @@ const useArrestViewModel = () => {
   const logAdrenaline = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setAdrenalineCount((c) => c + 1);
-    lastAdrenalineTimeRef.current = actionTime();
+    // A dose logged late ("adrenaline at 14:52") mustn't restart the timer from before a later dose.
+    lastAdrenalineTimeRef.current = Math.max(lastAdrenalineTimeRef.current ?? actionTime(), actionTime());
     setLastRhythmNonShockable(false);
     setHideAdrenalinePrompt(false);
     const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
@@ -1948,11 +1906,42 @@ const useArrestViewModel = () => {
     logEvent(`Lidocaine${dosageText} Given – Dose ${lidocaineCount + 1}`, EventType.Drug);
   };
 
-  const logOtherDrug = (drug: string, dosage: string | null = null) => {
+  const logOtherDrug = (drug: string, dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
+    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
     logEvent(`${drug}${dosageText} Given`, EventType.Drug);
   };
+
+  // The first trauma procedure marks the arrest as traumatic; it can be switched off again.
+  const logTraumaProcedure = (procedure: string) => {
+    saveUndoState();
+    if (!isTraumaArrest) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    logEvent(traumaEntryText(procedure), EventType.Airway);
+  };
+
+  const setTraumaArrest = (isTrauma: boolean) => {
+    if (isTrauma === isTraumaArrest) return;
+    saveUndoState();
+    logEvent(isTrauma ? TRAUMA_ON_ENTRY : TRAUMA_OFF_ENTRY, EventType.Status);
+  };
+
+  const completePostROSCTask = (name: string) => {
+    if (arrestState === ArrestState.Rosc) setPostROSCTasks((tasks) => completeTask(tasks, name));
+  };
+
+  const logObservation = (observation: ROSCObservation, value: string) => {
+    saveUndoState();
+    logEvent(observationEntry(observation, value), observation === "etco2" ? EventType.Etco2 : EventType.Status);
+    completePostROSCTask(ROSC_OBSERVATIONS[observation].checklistItem);
+  };
+
+  const logDestination = (text: string) => {
+    saveUndoState();
+    logEvent(text, EventType.Status);
+    completePostROSCTask(DESTINATION_TASK);
+  };
+
+  const latestObservation = (observation: ROSCObservation) => latestObservationIn(events, observation);
 
   // Allow multiple airway attempts (no longer restricted by airwayPlaced)
   const logAirwayPlacedFn = (type?: AirwayAdjunctType) => {
@@ -1986,6 +1975,7 @@ const useArrestViewModel = () => {
     const unit = spokenUnit ?? etco2Unit;
     const formatted = unit === "kPa" ? reading.toFixed(1) : String(Math.round(reading));
     logEvent(`ETCO2: ${formatted} ${unit}`, EventType.Etco2);
+    completePostROSCTask(ROSC_OBSERVATIONS.etco2.checklistItem);
   };
 
   const achieveROSC = () => {
@@ -2004,7 +1994,7 @@ const useArrestViewModel = () => {
     setTorTime(totalArrestTime);
     stopTimer();
     voicePromptPlayer.stopAll();
-    logEvent(`Termination of Resuscitation (TOR) at ${new Date().toLocaleTimeString()}`, EventType.Status);
+    logEvent("Termination of Resuscitation (TOR)", EventType.Status);
   };
 
   // VOD = Verification of Death (after 5-min observation)
@@ -2012,7 +2002,7 @@ const useArrestViewModel = () => {
     saveUndoState();
     setVodTime(totalArrestTime);
     setVodConfirmed(true);
-    logEvent(`Verification of Death (VOD) confirmed at ${new Date().toLocaleTimeString()}`, EventType.Status);
+    logEvent("Verification of Death (VOD) Confirmed", EventType.Status);
   };
 
   // Toggle VOD checklist items
@@ -2066,10 +2056,15 @@ const useArrestViewModel = () => {
     setEvents((prev) => {
       const shifted = prev.filter((e) => !isConfirmedEntry(e)).map((e) => ({ ...e, timestamp: e.timestamp + delta }));
       if (newOffset > 0) {
+        // Its clock time is the Start tap's, less the time added.
+        const started = shifted.find((e) => e.message.startsWith("Arrest Started") || e.message.includes("Life Support Started"));
+        const clock =
+          started?.clock !== undefined ? started.clock - started.timestamp : Date.now() / 1000 - newOffset;
         shifted.push({
           timestamp: 0,
           message: `Cardiac arrest confirmed ~${Math.round(newOffset / 60)} min before eResus was started (estimated)`,
           type: EventType.Status,
+          clock,
         });
       }
       return shifted;
@@ -2196,79 +2191,21 @@ const useArrestViewModel = () => {
   // Dynamically count lidocaine from events (fixes iOS parity issue)
   const dynamicLidocaineCount = useMemo(() => lidocaineDosesIn(events), [events]);
 
+  const summaryInput = () => ({
+    events,
+    totalTime: totalArrestTime,
+    startTime: startTimeRef.current,
+    shockCount,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
+    patientAge: patientAgeStr || null,
+    patientGender: patientGenderStr || null,
+  });
+
   const copySummaryToClipboard = () => {
-    const startText = startTimeRef.current
-      ? `${String(startTimeRef.current.getHours()).padStart(2, "0")}:${String(startTimeRef.current.getMinutes()).padStart(2, "0")}`
-      : "Unknown";
-    const dateText = startTimeRef.current
-      ? startTimeRef.current.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-      : "Unknown";
-
-    const demoText =
-      patientAgeStr || patientGenderStr
-        ? `${patientAgeStr ? `${patientAgeStr} y/o` : ""} ${patientGenderStr || ""}`.trim()
-        : "";
-
-    // Extract real-world times
-    const firstIVIO = extractFirstEventTime(
-      events,
-      ["vascular access", "iv access", "io access"],
-      startTimeRef.current,
-    );
-    const firstAirway = extractFirstEventTime(events, ["advanced airway"], startTimeRef.current);
-    const firstAdrenaline = extractFirstEventTime(events, ["adrenaline"], startTimeRef.current);
-    const lastAdrenaline = extractLastEventTime(events, ["adrenaline"], startTimeRef.current);
-
-    const roscText =
-      roscTime !== null
-        ? startTimeRef.current
-          ? `ROSC at: ${(() => {
-              const d = clockTimeOf(startTimeRef.current, events, roscTime);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `ROSC at: ${TimeFormatter.format(roscTime)}`
-        : null;
-    const torText =
-      torTime !== null
-        ? startTimeRef.current
-          ? `TOR at: ${(() => {
-              const d = clockTimeOf(startTimeRef.current, events, torTime);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `TOR at: ${TimeFormatter.format(torTime)}`
-        : null;
-    const vodText =
-      vodTime !== null
-        ? startTimeRef.current
-          ? `VOD at: ${(() => {
-              const d = clockTimeOf(startTimeRef.current, events, vodTime);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `VOD at: ${TimeFormatter.format(vodTime)}`
-        : null;
-
-    const summaryText = `eResus Event Summary
-
-${dateText}
-${demoText ? demoText + "\n" : ""}Start Time: ${startText}
-${roscText ? roscText + "\n" : ""}${torText ? torText + "\n" : ""}${vodText ? vodText + "\n" : ""}Total Duration: ${TimeFormatter.format(totalArrestTime)}
-
-CRITICAL INTERVENTIONS (REAL-WORLD TIME)
-Initial Rhythm: ${initialRhythm || "None"}
-First IV / IO: ${firstIVIO || "None"}
-First Airway: ${firstAirway || "None"}
-
-Last Adrenaline: ${lastAdrenaline || "None"}
-
-Shocks: ${shockCount}  |  Adrenaline: ${adrenalineCount}  |  Amiodarone: ${amiodaroneCount}  |  Lidocaine: ${Math.max(lidocaineCount, dynamicLidocaineCount)}
-
---- Event Log ---
-${[...events]
-  .sort((a, b) => a.timestamp - b.timestamp)
-  .map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`)
-  .join("\n")}`;
     navigator.clipboard
-      .writeText(summaryText.trim())
+      .writeText(buildSummary(summaryInput()).copyText)
       .then(() => HapticManager.notification("success"))
       .catch((err) => console.error("Failed to copy summary: ", err));
   };
@@ -2311,7 +2248,14 @@ ${[...events]
       timingVersion: events.some((e) => e.message.startsWith("Time offset added")) ? 2 : 3,
     };
 
-    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type, estimated: isEstimated(e.message) }));
+    // Clock times stay in the user's own logbook; the research copy below leaves them out, as iOS does.
+    const eventsCopy = events.map((e) => ({
+      timestamp: e.timestamp,
+      message: e.message,
+      type: e.type,
+      estimated: isEstimated(e.message),
+      ...(e.clock !== undefined ? { clock: e.clock } : {}),
+    }));
 
     if (!navigator.onLine) {
       // Queue for later sync
@@ -2709,6 +2653,7 @@ ${[...events]
         timestamp: realElapsed + session.timeOffset,
         message: "Session Transferred from another device",
         type: EventType.Status,
+        clock: Date.now() / 1000,
       };
 
       setArrestState(session.arrestState as ArrestState);
@@ -2828,6 +2773,9 @@ ${[...events]
     shouldShowAmiodaroneReminder,
     shouldShowAdrenalinePrompt,
     shouldShowAmiodaroneFirstDosePrompt,
+    isTraumaArrest,
+    traumaInterventionCount,
+    summaryInput,
 
     // Recovery
     showRecoveryPrompt,
@@ -2844,6 +2792,11 @@ ${[...events]
     logAmiodarone,
     logLidocaine,
     logOtherDrug,
+    logTraumaProcedure,
+    setTraumaArrest,
+    logObservation,
+    logDestination,
+    latestObservation,
     logAirwayPlaced: logAirwayPlacedFn,
     logVascularAccess,
     logEtco2,
@@ -2891,37 +2844,6 @@ const useArrest = () => useContext(ArrestContext)!;
 //============================================================================
 // MODAL COMPONENTS
 //============================================================================
-
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-  title: string;
-}
-
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-            <XSquare size={24} />
-          </button>
-        </div>
-        <div className="p-4 overflow-y-auto max-h-[70vh]">{children}</div>
-      </div>
-    </div>
-  );
-};
 
 // Patient Info Prompt (with two-way age sync)
 const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
@@ -3522,7 +3444,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   onClose,
   onConfirmTOR,
 }) => {
-  const { resuscitationTime, timeOffset, patientAgeStr, patientAgeCategory, initialRhythm } = useArrest();
+  const { resuscitationTime, timeOffset, patientAgeStr, patientAgeCategory, initialRhythm, isTraumaArrest } = useArrest();
 
   const isPaediatric = isPatientPaediatric(patientAgeStr, patientAgeCategory);
   const thresholdTime = isPaediatric ? 3600 : 2700; // 60 mins vs 45 mins
@@ -3633,6 +3555,9 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
           )}
         </div>
 
+        {/* The same ToR rules apply to traumatic arrest (JRCALC); the somatic criteria are met more often. */}
+        {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={isTraumaArrest} />}
+
         <ActionButton
           title="Confirm TOR (Stop CPR)"
           tone="danger"
@@ -3741,171 +3666,6 @@ const PLIIEModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen
   );
 };
 
-// ============================================================================
-// SUMMARY VIEW (Redesigned to match iOS)
-// ============================================================================
-const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const {
-    events,
-    startTime,
-    shockCount,
-    adrenalineCount,
-    amiodaroneCount,
-    lidocaineCount,
-    totalArrestTime,
-    roscTime,
-    copySummaryToClipboard,
-    initialRhythm,
-    patientAgeStr,
-    patientGenderStr,
-    torTime,
-    vodTime,
-    dynamicLidocaineCount,
-  } = useArrest();
-  const [copied, setCopied] = useState(false);
-
-  const sortedEvents = useMemo(() => [...events].sort((a, b) => a.timestamp - b.timestamp), [events]);
-
-  const handleCopy = () => {
-    copySummaryToClipboard();
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Real-world clock times
-  const startTimeStr = startTime
-    ? `${String(startTime.getHours()).padStart(2, "0")}:${String(startTime.getMinutes()).padStart(2, "0")}`
-    : "Unknown";
-  const dateStr = startTime
-    ? startTime.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-    : "Unknown";
-
-  const getRealWorldTime = (offsetSeconds: number | null): string | null => {
-    if (offsetSeconds === null || !startTime) return null;
-    const d = clockTimeOf(startTime, events, offsetSeconds);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
-
-  const firstIVIO = extractFirstEventTime(events, ["vascular access", "iv access", "io access"], startTime);
-  const firstAirway = extractFirstEventTime(events, ["advanced airway"], startTime);
-  const firstAdrenaline = extractFirstEventTime(events, ["adrenaline"], startTime);
-  const lastAdrenaline = extractLastEventTime(events, ["adrenaline"], startTime);
-
-  const demoText =
-    patientAgeStr || patientGenderStr
-      ? `${patientAgeStr ? `${patientAgeStr} y/o` : ""} ${patientGenderStr || ""}`.trim()
-      : "";
-
-  const effectiveLidocaine = Math.max(lidocaineCount, dynamicLidocaineCount);
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Event Summary">
-      <div className="flex flex-col space-y-4">
-        {/* Date & Demographics */}
-        <div className="space-y-1">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-white">{dateStr}</h3>
-          {demoText && (
-            <p className="text-blue-600 dark:text-blue-400 font-semibold flex items-center space-x-2">
-              <UserIcon size={16} />
-              <span>{demoText}</span>
-            </p>
-          )}
-        </div>
-
-        {/* Times */}
-        <div className="space-y-1 text-sm">
-          <p className="text-gray-700 dark:text-gray-300">Start Time: {startTimeStr}</p>
-          {roscTime !== null && (
-            <p className="text-green-600 dark:text-green-400 font-semibold">ROSC at: {getRealWorldTime(roscTime)}</p>
-          )}
-          {torTime !== null && <p className="text-red-500 font-semibold">TOR at: {getRealWorldTime(torTime)}</p>}
-          {vodTime !== null && <p className="text-red-500 font-semibold">VOD at: {getRealWorldTime(vodTime)}</p>}
-          <p className="text-gray-700 dark:text-gray-300">Total Duration: {TimeFormatter.format(totalArrestTime)}</p>
-        </div>
-
-        {/* Critical Interventions */}
-        <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-2">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-            Critical Interventions (Real-World Time)
-          </h4>
-          <div className="space-y-1 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">Initial Rhythm:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{initialRhythm || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">First IV / IO:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{firstIVIO || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">First Airway:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{firstAirway || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">Last Adrenaline:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{lastAdrenaline || "None"}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats Row */}
-        <div className="flex justify-around py-3">
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{shockCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Shocks</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{adrenalineCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Adrenaline</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{amiodaroneCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Amiodarone</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{effectiveLidocaine}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Lidocaine</p>
-          </div>
-        </div>
-
-        {/* Event Log */}
-        <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
-          <h4 className="font-bold text-gray-900 dark:text-white mb-2">Event Log</h4>
-          <div className="space-y-2 max-h-60 overflow-y-auto font-mono text-sm">
-            {sortedEvents.map((event, index) => (
-              <div key={index} className="flex">
-                <span className={`font-bold w-16 flex-shrink-0 ${getEventTypeColor(event.type)}`}>
-                  [{TimeFormatter.format(event.timestamp)}]
-                </span>
-                <span className="ml-2 text-gray-800 dark:text-gray-200">{event.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex space-x-3">
-          <ActionButton
-            title="Done"
-            backgroundColor="bg-gray-200 dark:bg-gray-700"
-            foregroundColor="text-gray-800 dark:text-gray-200"
-            onClick={onClose}
-          />
-          <button
-            onClick={handleCopy}
-            className={`flex-1 flex items-center justify-center space-x-2 h-14 rounded-xl font-semibold shadow-md transition-all duration-300 active:scale-95 ${
-              copied ? "bg-green-600 text-white" : "bg-blue-600 text-white"
-            }`}
-          >
-            {copied ? <Check size={18} /> : <Clipboard size={18} />}
-            <span>{copied ? "Copied!" : "Copy"}</span>
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-};
-
 const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { performReset } = useArrest();
   const isOffline = !navigator.onLine;
@@ -3981,28 +3741,6 @@ const HypothermiaModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Normothermic)}
         />
-      </div>
-    </Modal>
-  );
-};
-
-const OtherDrugsModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  onSelectDrug: (drug: DrugToLog) => void;
-}> = ({ isOpen, onClose, onSelectDrug }) => {
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Log Other Medication">
-      <div className="flex flex-col space-y-2">
-        {AppConstants.otherDrugs.map((drug) => (
-          <button
-            key={drug}
-            onClick={() => onSelectDrug({ type: "other", name: drug })}
-            className="w-full text-left p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white"
-          >
-            {drug}
-          </button>
-        ))}
       </div>
     </Modal>
   );
@@ -4342,6 +4080,91 @@ const ActionButton: React.FC<ActionButtonProps> = ({
   );
 };
 
+// The arrest state, coloured by meaning: red is kept for "act now", so an arrest in progress is green.
+const StateBadge: React.FC = () => {
+  const { arrestState, isTimerPaused } = useArrest();
+  const label = isTimerPaused
+    ? "PAUSED"
+    : { [ArrestState.Pending]: "READY", [ArrestState.Active]: "ACTIVE", [ArrestState.Rosc]: "ROSC", [ArrestState.Ended]: "DECEASED" }[
+        arrestState
+      ];
+  const colour =
+    isTimerPaused || arrestState === ArrestState.Pending || arrestState === ArrestState.Ended
+      ? "bg-tone-slate text-tone-on-slate"
+      : arrestState === ArrestState.Active
+        ? "bg-tone-accent text-tone-on-accent"
+        : "bg-tone-positive text-tone-on-positive";
+  return <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colour}`}>{label}</span>;
+};
+
+// Time spent on the arrest before eResus was started. Three buttons while it's likely to be needed (before
+// Start and for the first few minutes), then one "+ Time" menu so they don't sit there all arrest.
+const TimeOffsetButtons: React.FC<{ onAdd: (seconds: number) => void }> = ({ onAdd }) => {
+  const { arrestState, masterTime } = useArrest();
+  const [open, setOpen] = useState(false);
+  const isCompact = arrestState === ArrestState.Active && masterTime > 180;
+  const chip = "h-8 rounded-full bg-tone-tint text-tone-on-tint text-xs font-semibold active:scale-95 transition-transform";
+
+  if (isCompact) {
+    return (
+      <div className="relative" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          aria-label="Add time before eResus"
+          aria-expanded={open}
+          className={`${chip} flex items-center gap-1 px-3`}
+        >
+          <Plus size={14} aria-hidden="true" />
+          Time
+        </button>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+            <div className="absolute left-0 top-full mt-1 z-30 w-56 rounded-xl shadow-lg overflow-hidden bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+              {[1, 5, 10].map((minutes) => (
+                <button
+                  key={minutes}
+                  onClick={() => {
+                    onAdd(minutes * 60);
+                    setOpen(false);
+                  }}
+                  className="block w-full text-left px-4 py-3 text-sm text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  +{minutes} min before eResus
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 5, 10].map((minutes) => (
+        <button
+          key={minutes}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAdd(minutes * 60);
+          }}
+          aria-label={`Add ${minutes} minute${minutes === 1 ? "" : "s"} before eResus`}
+          className={`${chip} w-[42px] font-mono`}
+        >
+          +{minutes}
+        </button>
+      ))}
+      <span className="text-xs text-gray-500 dark:text-gray-400">min</span>
+    </div>
+  );
+};
+
+const spokenDuration = (seconds: number) => {
+  const total = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(total / 60)} minutes ${total % 60} seconds`;
+};
+
 // Header & Timers
 const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
   const {
@@ -4353,111 +4176,111 @@ const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
     uiState,
     isTimerPaused,
     analyseRhythm,
+    roscTime,
   } = useArrest();
   const [showTimeCorrection, setShowTimeCorrection] = useState(false);
   const [showBeforeEResus, setShowBeforeEResus] = useState(false);
 
   const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
+  const showsDue = isRhythmCheckDue && !isTimerPaused;
   const canCorrectTime = timeOffset > 0 && !isRhythmCheckDue && arrestState !== ArrestState.Ended;
   const canAddBeforeEResus = arrestState === ArrestState.Active && !isRhythmCheckDue && !isTimerPaused;
 
-  const stateInfo = {
-    [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" },
-    [ArrestState.Active]: { text: "ACTIVE", color: "bg-tone-danger" },
-    [ArrestState.Rosc]: { text: "ROSC", color: "bg-tone-accent" },
-    [ArrestState.Ended]: { text: "DECEASED", color: "bg-black" },
-  };
-
   const handleHeaderTap = () => {
-    if (isRhythmCheckDue && !isTimerPaused) {
-      analyseRhythm();
-    }
+    if (showsDue) analyseRhythm();
   };
 
   const headerBg = isTimerPaused
-    ? "bg-tone-alert/20"
+    ? "bg-tone-slate/15"
     : isRhythmCheckDue
-      ? "bg-tone-danger"
+      ? "bg-tone-danger-solid"
       : "bg-white dark:bg-gray-800";
+  // Frozen clocks (paused, ended) look frozen; on the red header, white.
+  const clockColour =
+    isTimerPaused || arrestState === ArrestState.Ended
+      ? "text-gray-500 dark:text-gray-400"
+      : showsDue
+        ? "text-white"
+        : "text-tone-accent";
+
+  // Time since the arrest was confirmed. "~" when part of it is estimated; tapping it then lets a
+  // mis-tapped +10 be corrected. Not disabled: a disabled button swallows the tap the header needs when a
+  // rhythm check is due.
+  const clockButton = (large: boolean, colour: string, prefix = "") => (
+    <button
+      type="button"
+      tabIndex={canCorrectTime ? 0 : -1}
+      onClick={(e) => {
+        if (!canCorrectTime) return;
+        e.stopPropagation();
+        setShowTimeCorrection(true);
+      }}
+      aria-label={
+        timeOffset > 0
+          ? `${prefix}${TimeFormatter.format(totalArrestTime)}, including about ${Math.round(timeOffset / 60)} minutes estimated`
+          : undefined
+      }
+      className={`flex items-baseline font-mono font-bold ${canCorrectTime ? "" : "pointer-events-none"} ${colour}`}
+    >
+      {prefix && <span className="font-sans font-semibold mr-1">{prefix}</span>}
+      {timeOffset > 0 && <span className={`${large ? "text-2xl" : ""} mr-0.5`}>~</span>}
+      <span className={large ? "text-4xl" : ""}>{TimeFormatter.format(totalArrestTime)}</span>
+    </button>
+  );
 
   return (
     <div
-      className={`relative z-10 p-4 shadow-md transition-colors duration-300 ${headerBg} ${isRhythmCheckDue && !isTimerPaused ? "cursor-pointer" : ""}`}
+      className={`relative z-10 px-4 pt-3 pb-3 shadow-md transition-colors duration-300 ${headerBg} ${showsDue ? "cursor-pointer" : ""}`}
       onClick={handleHeaderTap}
     >
-      <div className="flex justify-between items-center mb-3">
-        <div className="flex flex-col items-start space-y-1">
-          {isRhythmCheckDue && !isTimerPaused ? (
-            <h1 className="text-2xl font-bold text-white leading-tight">RHYTHM CHECK DUE</h1>
+      {/* The same height in every state, so the screen below never jumps when the buttons go or a check falls due. */}
+      <div className="flex justify-between items-start gap-2 h-[104px]">
+        <div className={`flex flex-col items-start gap-1.5 min-w-0 ${showsDue ? "text-white" : "text-gray-900 dark:text-white"}`}>
+          {showsDue ? (
+            <>
+              {/* The whole header is the button now; say so in words, not just colour. */}
+              <h1 className="text-2xl font-extrabold leading-tight">RHYTHM CHECK DUE</h1>
+              <p className="font-semibold">Tap to analyse</p>
+            </>
           ) : (
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1>
+            <>
+              <h1 className="text-2xl font-bold leading-tight">eResus</h1>
+              <StateBadge />
+              {/* Under the badge, where there's room, rather than adding a row to the header. */}
+              {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
+                <TimeOffsetButtons
+                  onAdd={(seconds) => {
+                    addTimeOffset(seconds);
+                    onAddTime?.();
+                  }}
+                />
+              )}
+            </>
           )}
-          <span
-            className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${
-              isTimerPaused ? "bg-tone-alert text-tone-on-alert" : isRhythmCheckDue ? "bg-white/30" : stateInfo[arrestState].color
-            }`}
-          >
-            {isTimerPaused ? "PAUSED" : stateInfo[arrestState].text}
-          </span>
         </div>
 
-        <div className="flex flex-col items-end">
-          {/* Time since the arrest was confirmed. "~" when part of it is estimated; tapping it then lets a
-              mis-tapped +10 be corrected. */}
-          {/* Not disabled: a disabled button swallows the tap the header needs when a rhythm check is due. */}
-          <button
-            type="button"
-            tabIndex={canCorrectTime ? 0 : -1}
-            onClick={(e) => {
-              if (!canCorrectTime) return;
-              e.stopPropagation();
-              setShowTimeCorrection(true);
-            }}
-            aria-label={
-              timeOffset > 0
-                ? `${TimeFormatter.format(totalArrestTime)}, including about ${Math.round(timeOffset / 60)} minutes estimated`
-                : undefined
-            }
-            className={`flex items-baseline ${canCorrectTime ? "" : "pointer-events-none"} ${
-              isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-tone-accent"
-            }`}
-          >
-            {timeOffset > 0 && <span className="font-mono font-bold text-2xl mr-1">~</span>}
-            <span className="font-mono font-bold text-4xl">{TimeFormatter.format(totalArrestTime)}</span>
-          </button>
-          {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
-            <div className="flex space-x-1 mt-1">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(60);
-                  onAddTime?.();
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
+        <div className="flex flex-col items-end flex-shrink-0">
+          {arrestState === ArrestState.Rosc && roscTime !== null ? (
+            <>
+              {/* After ROSC the time that matters most is since ROSC; the arrest clock stays alongside. */}
+              <span
+                className="font-mono font-bold text-4xl text-tone-positive"
+                aria-label={`${spokenDuration(totalArrestTime - roscTime)} since ROSC`}
               >
-                +1m
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(300);
-                  onAddTime?.();
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
-              >
-                +5m
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(600);
-                  onAddTime?.();
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
-              >
-                +10m
-              </button>
-            </div>
+                {TimeFormatter.format(totalArrestTime - roscTime)}
+              </span>
+              <span className="flex items-baseline gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+                <span>since ROSC</span>
+                {clockButton(false, "text-gray-500 dark:text-gray-400", "· Arrest")}
+              </span>
+            </>
+          ) : (
+            <>
+              {clockButton(true, clockColour)}
+              <span className={`text-sm ${showsDue ? "text-white" : "text-gray-500 dark:text-gray-400"}`}>
+                {arrestState === ArrestState.Pending ? "\u00a0" : "since arrest"}
+              </span>
+            </>
           )}
         </div>
       </div>
@@ -4467,7 +4290,7 @@ const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
         <button
           type="button"
           tabIndex={canAddBeforeEResus ? 0 : -1}
-          className={`block w-full text-left ${canAddBeforeEResus ? "" : "pointer-events-none"}`}
+          className={`block w-full mt-2 text-left ${canAddBeforeEResus ? "" : "pointer-events-none"}`}
           aria-describedby={canAddBeforeEResus ? "before-eresus-hint" : undefined}
           onClick={(e) => {
             if (!canAddBeforeEResus) return;
@@ -4635,35 +4458,23 @@ const StatsRow: React.FC = () => {
     uiState,
     arrestState,
     isTimerPaused,
+    antiarrhythmicGiven,
   } = useArrest();
 
   const isRhythmCheckDue =
     arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0 && !isTimerPaused;
+  const color = `font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`;
+  // One antiarrhythmic per arrest, so one slot: amiodarone until lidocaine is the one given.
+  const usesLidocaine = antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine;
 
   return (
-    <div className="flex justify-around">
+    <div className="flex">
+      <StatItem label="Shocks" value={shockCount} color={color} isDue={isRhythmCheckDue} />
+      <StatItem label="Adrenaline" value={adrenalineCount} color={color} isDue={isRhythmCheckDue} />
       <StatItem
-        label="Shocks"
-        value={shockCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Adrenaline"
-        value={adrenalineCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Amiodarone"
-        value={amiodaroneCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Lidocaine"
-        value={Math.max(lidocaineCount, dynamicLidocaineCount)}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`}
+        label={usesLidocaine ? "Lidocaine" : "Amiodarone"}
+        value={usesLidocaine ? Math.max(lidocaineCount, dynamicLidocaineCount) : amiodaroneCount}
+        color={color}
         isDue={isRhythmCheckDue}
       />
     </div>
@@ -4676,11 +4487,9 @@ const StatItem: React.FC<{ label: string; value: number; color: string; isDue?: 
   color,
   isDue,
 }) => (
-  <div className={`flex flex-col items-center ${color}`}>
+  <div className={`flex-1 flex flex-col items-center justify-center min-h-11 ${color}`}>
     <span className="font-mono font-bold text-lg">{value}</span>
-    <span
-      className={`text-[10px] font-semibold uppercase ${isDue ? "text-white/80" : "text-gray-500 dark:text-gray-400"}`}
-    >
+    <span className={`text-xs font-semibold ${isDue ? "text-white" : "text-gray-500 dark:text-gray-400"}`}>
       {label}
     </span>
   </div>
@@ -4708,16 +4517,17 @@ const useVoiceCommandsAvailable = () => {
 
 // Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
 const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
-  const { cprTime } = useArrest();
+  const { cprTime, isRhythmCheckDue } = useArrest();
   const { cprCycleDuration } = useSettings();
   const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
   const listener = useVoiceListener();
   const [isPressed, setIsPressed] = useState(false);
 
-  const percentage = cprTime / cprCycleDuration;
+  // Agrees with the header: a check that's due shows as due, not as time left in the next cycle.
+  const percentage = isRhythmCheckDue ? 1 : cprTime / cprCycleDuration;
   const strokeDasharray = 2 * Math.PI * 52;
   const strokeDashoffset = strokeDasharray * (1 - percentage);
-  const isEnding = cprTime <= 10;
+  const isEnding = isRhythmCheckDue || cprTime <= 10;
 
   // Only a deliberate hold turns the microphone on, never a tap or a brush of the ring (matches iOS).
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -4751,7 +4561,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
 
   return (
     <div
-      className={`relative w-56 h-56 ${
+      className={`relative w-52 h-52 ${
         voiceAvailable ? "select-none touch-none rounded-full motion-safe:transition-transform motion-safe:duration-200" : ""
       } ${isPressed ? "motion-safe:scale-95" : ""}`}
       {...pushToTalk}
@@ -4759,7 +4569,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
-          strokeWidth="10"
+          strokeWidth="9"
           stroke="currentColor"
           fill="transparent"
           r="52"
@@ -4768,7 +4578,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
         />
         <circle
           className={`transition-all duration-1000 linear ${isEnding ? "text-tone-danger" : "text-tone-accent"}`}
-          strokeWidth="10"
+          strokeWidth="9"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
@@ -4782,9 +4592,13 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className={`font-mono font-bold text-5xl ${isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"}`}>
-          {TimeFormatter.format(cprTime)}
+          {isRhythmCheckDue ? "0:00" : TimeFormatter.format(cprTime)}
         </span>
-        <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
+        <span
+          className={`text-xs font-semibold uppercase ${isRhythmCheckDue ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"}`}
+        >
+          {isRhythmCheckDue ? "Check rhythm" : "CPR Cycle"}
+        </span>
       </div>
       {voiceAvailable && listener.isPushToTalkActive && <PushToTalkRing transcript={listener.transcript} />}
     </div>
@@ -5048,11 +4862,16 @@ const ActiveArrestContentView: React.FC<{
   onLogAmiodarone: () => void;
   onLogLidocaine: () => void;
   onShowTOR: () => void;
+  onShowTrauma: () => void;
   onVoiceTranscript?: (transcript: string) => void;
 }> = (props) => {
   const {
     cprTime,
     uiState,
+    isTraumaArrest,
+    setTraumaArrest,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
     timeUntilAdrenaline,
     shouldShowAdrenalinePrompt,
     shouldShowAmiodaroneFirstDosePrompt,
@@ -5083,8 +4902,25 @@ const ActiveArrestContentView: React.FC<{
     };
   }, []);
 
+  // Bring the next thing to press to the middle of the screen, however the step was started
+  // (button, red header or voice).
+  const previousUiStateRef = useRef(uiState);
+  useEffect(() => {
+    if (previousUiStateRef.current === uiState) return;
+    previousUiStateRef.current = uiState;
+    const target =
+      uiState !== UIState.Default
+        ? "arrest-primary-action"
+        : isAdrenalineHighlighted || isAmiodaroneHighlighted || shouldShowLidocaineReminder
+          ? "arrest-medications"
+          : null;
+    if (!target) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(target)?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  }, [uiState, isAdrenalineHighlighted, isAmiodaroneHighlighted, shouldShowLidocaineReminder]);
+
   return (
-    <div className={`p-4 space-y-6 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
+    <div className={`p-4 space-y-4 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
       <div className="relative flex justify-center">
         <CPRTimerView onVoiceTranscript={props.onVoiceTranscript} />
         <button
@@ -5099,6 +4935,8 @@ const ActiveArrestContentView: React.FC<{
         <VoicePromptButton enabled={voicePromptsEnabled} className="bottom-4 left-4" />
       </div>
       <VoiceListeningStatus />
+
+      {isTraumaArrest && <HOTTCard compact onOpen={props.onShowTrauma} onNotTrauma={() => setTraumaArrest(false)} />}
 
       {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
       {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
@@ -5138,14 +4976,32 @@ const ActiveArrestContentView: React.FC<{
   );
 };
 
+const SectionTitle: React.FC<{ title: string }> = ({ title }) => (
+  <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{title}</h3>
+);
+
 const RoscView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
-  onShowOtherDrugs: () => void;
-}> = ({ onShowPdf, onShowOtherDrugs }) => {
-  const { reArrest, postROSCTasks, toggleChecklistItemCompletion, events } = useArrest();
+  onOpenDrugs: (focus: DrugGroupKind | null) => void;
+  onShowEtco2: () => void;
+}> = ({ onShowPdf, onOpenDrugs, onShowEtco2 }) => {
+  const {
+    reArrest,
+    postROSCTasks,
+    toggleChecklistItemCompletion,
+    events,
+    latestObservation,
+    logObservation,
+    logDestination,
+    totalArrestTime,
+    isTraumaArrest,
+  } = useArrest();
+  const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
+  const [showDestination, setShowDestination] = useState(false);
 
   return (
     <div className="p-4 space-y-6 pb-36">
+      {/* First and alone, so it can be hit in a second. Undo in the bar below reverses a mistap. */}
       <ActionButton
         title="Patient Re-Arrested"
         tone="danger"
@@ -5154,21 +5010,59 @@ const RoscView: React.FC<{
         fontSize="text-lg"
         onClick={reArrest}
       />
-      <ActionButton
-        title="Administer Medication"
-        icon={<Syringe size={20} />}
-        backgroundColor="bg-gray-600"
-        foregroundColor="text-white"
-        height="h-16"
-        fontSize="text-lg"
-        onClick={onShowOtherDrugs}
-      />
+
+      <div className="space-y-2">
+        <SectionTitle title="Observations" />
+        <div className="grid grid-cols-2 gap-3">
+          {ROSC_OBSERVATION_ORDER.map((observation) => (
+            <ObservationButton
+              key={observation}
+              observation={observation}
+              latest={latestObservation(observation)}
+              now={totalArrestTime}
+              onClick={() => (observation === "etco2" ? onShowEtco2() : setObservationToLog(observation))}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <SectionTitle title="Medications" />
+        <div className="grid grid-cols-2 gap-3">
+          <ActionButton title="Sedation / RSI..." icon={<Syringe size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("sedation")} />
+          <ActionButton title="Fluids & Blood..." icon={<Droplet size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("fluids")} />
+          <ActionButton title="Vasopressors..." icon={<HeartPulse size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("arrest")} />
+          <ActionButton title="Other Meds..." icon={<Pill size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs(null)} />
+        </div>
+      </div>
+
+      {isTraumaArrest && <HOTTCard compact />}
 
       <ChecklistView title="Post-ROSC Care" items={postROSCTasks} onToggle={toggleChecklistItemCompletion} />
 
-      <AlgorithmGridView onShowPdf={onShowPdf} />
+      <div className="space-y-2">
+        <SectionTitle title="Conveyance" />
+        <div className="grid grid-cols-2 gap-3">
+          <ActionButton title="Destination..." icon={<Stethoscope size={16} />} tone="slate" height="h-12" fontSize="text-sm" onClick={() => setShowDestination(true)} />
+          <ActionButton title="Pre-alert Given" icon={<PhoneOutgoing size={16} />} tone="slate" height="h-12" fontSize="text-sm" onClick={() => logDestination("Pre-alert given")} />
+        </div>
+      </div>
+
       <EventLogView events={events} />
+      <AlgorithmGridView onShowPdf={onShowPdf} />
       <TransferArrestPill />
+
+      <ObservationSheet
+        observation={observationToLog}
+        onClose={() => setObservationToLog(null)}
+        onConfirm={(value) => observationToLog && logObservation(observationToLog, value)}
+      />
+      <DestinationSheet
+        isOpen={showDestination}
+        onClose={() => setShowDestination(false)}
+        traumatic={isTraumaArrest}
+        onConfirm={logDestination}
+      />
     </div>
   );
 };
@@ -5324,8 +5218,10 @@ const ActionGridView: React.FC<{
   onLogAmiodarone: () => void;
   onLogLidocaine: () => void;
   onShowTOR: () => void;
+  onShowTrauma: () => void;
 }> = (props) => {
   const {
+    traumaInterventionCount,
     uiState,
     analyseRhythm,
     logRhythm,
@@ -5357,6 +5253,7 @@ const ActionGridView: React.FC<{
 
   return (
     <div className="space-y-6">
+      <div id="arrest-primary-action" className="space-y-6 scroll-mt-4">
       {/* Rhythm Analysis */}
       {uiState === UIState.Default && (
         <ActionButton
@@ -5425,9 +5322,10 @@ const ActionGridView: React.FC<{
           <p className="text-center text-xs text-gray-500 dark:text-gray-400">Witnessed, monitored VF/pVT only</p>
         </div>
       )}
+      </div>
 
       {/* Medications */}
-      <div className="space-y-3">
+      <div id="arrest-medications" className="space-y-3">
         <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Medications</h3>
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
@@ -5492,15 +5390,24 @@ const ActionGridView: React.FC<{
             onClick={props.onShowEtco2}
           />
         </div>
-        {/* Full-width IV/IO button */}
-        <ActionButton
-          title="Log IV / IO"
-          tone="standard"
-          icon={<Droplet size={16} />}
-          height="h-12"
-          fontSize="text-sm"
-          onClick={handleIVIO}
-        />
+        <div className="grid grid-cols-2 gap-3">
+          <ActionButton
+            title="Log IV / IO"
+            tone="standard"
+            icon={<Droplet size={16} />}
+            height="h-12"
+            fontSize="text-sm"
+            onClick={handleIVIO}
+          />
+          <ActionButton
+            title={traumaInterventionCount > 0 ? `Trauma (${traumaInterventionCount})` : "Trauma..."}
+            tone={traumaInterventionCount > 0 ? "primary" : "standard"}
+            icon={traumaInterventionCount > 0 ? <CheckCircle2 size={16} /> : <Bandage size={16} />}
+            height="h-12"
+            fontSize="text-sm"
+            onClick={props.onShowTrauma}
+          />
+        </div>
       </div>
 
       {/* Patient Status */}
@@ -5517,7 +5424,7 @@ const ActionGridView: React.FC<{
           />
           <ActionButton
             title="TOR"
-            tone="danger"
+            tone="dangerTint"
             icon={<XSquare size={16} />}
             height="h-12"
             fontSize="text-sm"
@@ -5706,7 +5613,8 @@ const ChecklistView: React.FC<{
 );
 
 const EventLogView: React.FC<{ events: Event[] }> = ({ events }) => {
-  const sortedEvents = useMemo(() => [...events].sort((a, b) => a.timestamp - b.timestamp), [events]);
+  // Reversed first, so entries logged in the same second keep the order they were logged in.
+  const sortedEvents = useMemo(() => [...events].reverse().sort((a, b) => a.timestamp - b.timestamp), [events]);
 
   return (
     <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
@@ -5748,57 +5656,27 @@ const BottomControlsView: React.FC<{
   onShowSummary: () => void;
   onShowReset: () => void;
 }> = ({ onShowSummary, onShowReset }) => {
-  const { undo, canUndo, isTimerPaused, pauseArrest, resumeArrest } = useArrest();
+  const { undo, canUndo, isTimerPaused, pauseArrest, resumeArrest, arrestState } = useArrest();
+  // The tab bar is hidden during an arrest, so the bar sits on the home indicator instead.
+  const tabBarHidden = arrestState === ArrestState.Active || arrestState === ArrestState.Rosc;
 
+  // Tinted rather than solid, so they don't compete with Analyse Rhythm or Deliver Shock above.
   return (
-    <div className="fixed bottom-0 left-0 right-0 p-3 pb-[72px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10">
+    <div
+      className={`fixed bottom-0 left-0 right-0 p-3 ${tabBarHidden ? "pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "pb-[72px]"} bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10`}
+    >
       <div className="flex space-x-3">
         {isTimerPaused ? (
           <>
-            <ActionButton
-              title="Resume"
-              tone="primary"
-              icon={<Heart size={18} />}
-              height="h-12"
-              onClick={resumeArrest}
-            />
-            <ActionButton
-              title="Summary"
-              tone="primary"
-              height="h-12"
-              onClick={onShowSummary}
-            />
-            <ActionButton
-              title="Reset"
-              tone="danger"
-              icon={<RotateCw size={18} />}
-              height="h-12"
-              onClick={onShowReset}
-            />
+            <ActionButton title="Resume" tone="primary" icon={<Play size={18} />} height="h-12" onClick={resumeArrest} />
+            <ActionButton title="Summary" tone="standard" height="h-12" onClick={onShowSummary} />
+            <ActionButton title="Reset" tone="dangerTint" icon={<RotateCw size={18} />} height="h-12" onClick={onShowReset} />
           </>
         ) : (
           <>
-            <ActionButton
-              title="Undo"
-              tone="primary"
-              icon={<Undo size={18} />}
-              height="h-12"
-              onClick={undo}
-              disabled={!canUndo}
-            />
-            <ActionButton
-              title="Summary"
-              tone="primary"
-              height="h-12"
-              onClick={onShowSummary}
-            />
-            <ActionButton
-              title="Stop"
-              tone="danger"
-              icon={<Square size={18} />}
-              height="h-12"
-              onClick={pauseArrest}
-            />
+            <ActionButton title="Undo" tone="standard" icon={<Undo size={18} />} height="h-12" onClick={undo} disabled={!canUndo} />
+            <ActionButton title="Summary" tone="standard" height="h-12" onClick={onShowSummary} />
+            <ActionButton title="Stop" tone="dangerTint" icon={<Square size={18} />} height="h-12" onClick={pauseArrest} />
           </>
         )}
       </div>
@@ -5856,6 +5734,8 @@ const ArrestView: React.FC<{
   const [showAirwayAdjunctModal, setShowAirwayAdjunctModal] = useState(false);
   const [showVascularAccessModal, setShowVascularAccessModal] = useState(false);
   const [showTORModal, setShowTORModal] = useState(false);
+  const [showTraumaModal, setShowTraumaModal] = useState(false);
+  const [otherDrugsFocus, setOtherDrugsFocus] = useState<DrugGroupKind | null>(null);
   const [drugToLog, setDrugToLog] = useState<DrugToLog | null>(null);
   const [drugConfirmation, setDrugConfirmation] = useState<{ drug: DrugToLog; dose: string } | null>(null);
 
@@ -5909,9 +5789,14 @@ const ArrestView: React.FC<{
     setDrugConfirmation(null);
   };
 
-  const handleSelectOtherDrug = (drug: DrugToLog) => {
+  const handleSelectOtherDrug = (name: string) => {
     setShowOtherDrugsModal(false);
-    handleLogDrug(drug);
+    handleLogDrug({ type: "other", name });
+  };
+
+  const openDrugs = (focus: DrugGroupKind | null) => {
+    setOtherDrugsFocus(focus);
+    setShowOtherDrugsModal(true);
   };
 
   // Voice commands
@@ -6147,7 +6032,8 @@ const ArrestView: React.FC<{
       }
       case "etco2": {
         const unit = action.unit ?? etco2Unit;
-        const [min, max] = unit === "kPa" ? [0.1, 20] : [1, 150];
+        // Below 5 mmHg is far more likely a kPa reading said out of habit.
+        const [min, max] = unit === "kPa" ? [0.1, 20] : [5, 150];
         if (action.value < min || action.value > max) {
           return { failure: `ETCO2 ${formatNumber(action.value)} ${unit} is outside the expected range; not logged.` };
         }
@@ -6157,21 +6043,22 @@ const ArrestView: React.FC<{
     }
   };
 
-  // A gentle check, not a block: logs what was said but flags a dose that differs from the usual adult dose.
+  // A gentle check, not a block: logs what was said but flags a dose that differs from the expected one.
+  // Checked before the dose is logged, so the counts are of doses already given.
   const doseNote = (drug: string, dose: string | null): string | null => {
-    if (!dose || !dose.endsWith(" mg")) return null;
-    if (viewModel.patientAgeCategory && viewModel.patientAgeCategory !== PatientAgeCategory.Adult) return null;
+    const age = viewModel.patientAgeCategory ?? PatientAgeCategory.Adult;
+    const isAdult = age === PatientAgeCategory.Adult;
     const expected =
       drug === "adrenaline"
-        ? "1 mg"
+        ? DosageCalculator.calculateAdrenalineDose(age)
         : drug === "amiodarone"
-          ? viewModel.amiodaroneCount <= 1
-            ? "300 mg"
-            : "150 mg"
-          : viewModel.lidocaineCount <= 1
-            ? "100 mg"
-            : "50 mg";
-    return dose === expected ? null : `Check the ${drug} dose: usual adult dose is ${expected}.`;
+          ? DosageCalculator.calculateAmiodaroneDose(age, viewModel.amiodaroneCount + 1)
+          : drug === "lidocaine" && isAdult
+            ? viewModel.lidocaineCount === 0
+              ? "100mg"
+              : "50mg"
+            : null;
+    return checkDose(drug, dose, expected, isAdult);
   };
 
   const clockText = (total: number) =>
@@ -6212,11 +6099,12 @@ const ArrestView: React.FC<{
             onLogAmiodarone={() => handleLogDrug({ type: "amiodarone" })}
             onLogLidocaine={() => handleLogDrug({ type: "lidocaine" })}
             onShowTOR={() => setShowTORModal(true)}
+            onShowTrauma={() => setShowTraumaModal(true)}
             onVoiceTranscript={handleVoiceTranscript}
           />
         )}
         {viewModel.arrestState === ArrestState.Rosc && (
-          <RoscView onShowPdf={onShowPdf} onShowOtherDrugs={() => setShowOtherDrugsModal(true)} />
+          <RoscView onShowPdf={onShowPdf} onOpenDrugs={openDrugs} onShowEtco2={() => setShowEtco2Modal(true)} />
         )}
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
       </div>
@@ -6250,7 +6138,12 @@ const ArrestView: React.FC<{
       )}
 
       {/* Modals */}
-      <SummaryView isOpen={showSummaryModal} onClose={() => setShowSummaryModal(false)} />
+      <SummaryView
+        isOpen={showSummaryModal}
+        onClose={() => setShowSummaryModal(false)}
+        typeColour={(type) => getEventTypeColor(type as EventType)}
+        {...viewModel.summaryInput()}
+      />
       <ResetModalView isOpen={showResetModal} onClose={() => setShowResetModal(false)} />
       <HypothermiaModal isOpen={showHypothermiaModal} onClose={() => setShowHypothermiaModal(false)} />
       <Etco2ModalView isOpen={showEtco2Modal} onClose={() => setShowEtco2Modal(false)} />
@@ -6261,10 +6154,24 @@ const ArrestView: React.FC<{
         onClose={() => setShowTORModal(false)}
         onConfirmTOR={viewModel.confirmTOR}
       />
-      <OtherDrugsModal
+      <OtherDrugsSheet
         isOpen={showOtherDrugsModal}
-        onClose={() => setShowOtherDrugsModal(false)}
-        onSelectDrug={handleSelectOtherDrug}
+        onClose={() => {
+          setShowOtherDrugsModal(false);
+          setOtherDrugsFocus(null);
+        }}
+        focus={otherDrugsFocus}
+        recent={recentOtherDrugs(viewModel.events)}
+        onSelect={handleSelectOtherDrug}
+      />
+      <TraumaSheet
+        isOpen={showTraumaModal}
+        onClose={() => setShowTraumaModal(false)}
+        isTrauma={viewModel.isTraumaArrest}
+        onSetTrauma={viewModel.setTraumaArrest}
+        onLogProcedure={viewModel.logTraumaProcedure}
+        onDrug={handleSelectOtherDrug}
+        onFluids={() => openDrugs("fluids")}
       />
       {drugToLog && <DosageEntryModal isOpen={!!drugToLog} onClose={() => setDrugToLog(null)} drug={drugToLog} />}
 
@@ -6346,7 +6253,8 @@ const LogbookView: React.FC = () => {
       const eventsCollectionPath = `/artifacts/${appId}/users/${userId}/logs/${log.id}/events`;
       const eventsSnapshot = await getDocs(collection(db, eventsCollectionPath));
       const fetchedEvents: Event[] = eventsSnapshot.docs.map((d) => d.data() as Event);
-      fetchedEvents.sort((a, b) => a.timestamp - b.timestamp);
+      // Newest first, like a live log.
+      fetchedEvents.sort((a, b) => b.timestamp - a.timestamp);
       setSelectedLogEvents(fetchedEvents);
     } catch (e) {
       console.error("Error fetching log events: ", e);
@@ -6374,9 +6282,6 @@ const LogbookView: React.FC = () => {
     if (log.patientGender && log.patientGender !== "Unknown") parts.push(log.patientGender);
     return parts.join(" ");
   };
-
-  // Dynamic lidocaine count from events
-  const getDynamicLidocaineCount = (logEvents: Event[]): number => lidocaineDosesIn(logEvents);
 
   return (
     <div className="flex flex-col h-full">
@@ -6471,158 +6376,21 @@ const LogbookView: React.FC = () => {
         ))}
       </div>
 
-      {/* Log Detail Modal */}
       {selectedLog && (
-        <Modal isOpen={!!selectedLog} onClose={() => setSelectedLog(null)} title="Log Summary">
-          <div className="flex flex-col space-y-4">
-            {/* Date and demographics */}
-            <div>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-                {selectedLog.startTime
-                  .toDate()
-                  .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
-              </h3>
-              {hasPatientInfo(selectedLog) && (
-                <p className="text-blue-600 dark:text-blue-400 font-semibold flex items-center space-x-2">
-                  <UserIcon size={14} />
-                  <span>{getPatientInfoText(selectedLog)}</span>
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-1 text-sm">
-              <p className="text-gray-700 dark:text-gray-300">
-                Start Time:{" "}
-                {selectedLog.startTime.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </p>
-              {selectedLog.roscTime != null && (
-                <p className="text-green-600 dark:text-green-400 font-semibold">ROSC achieved</p>
-              )}
-              {selectedLog.torTime != null && (
-                <p className="text-red-500 font-semibold">
-                  TOR at{" "}
-                  {selectedLog.startTime
-                    ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.torTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : TimeFormatter.format(selectedLog.torTime)}
-                </p>
-              )}
-              {selectedLog.vodTime != null && (
-                <p className="text-red-500 font-semibold">
-                  VOD at{" "}
-                  {selectedLog.startTime
-                    ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.vodTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : TimeFormatter.format(selectedLog.vodTime)}
-                </p>
-              )}
-              <p className="text-gray-700 dark:text-gray-300">
-                Total Duration: {TimeFormatter.format(selectedLog.totalDuration)}
-              </p>
-            </div>
-
-            {/* Critical Interventions */}
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-1 text-sm">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                Critical Interventions
-              </h4>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Initial Rhythm:</span>
-                <span className="font-bold text-gray-900 dark:text-white">{selectedLog.initialRhythm || "None"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">First IV / IO:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractFirstEventTime(
-                    selectedLogEvents,
-                    ["vascular access", "iv access", "io access"],
-                    selectedLog.startTime?.toDate(),
-                  ) || "None"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">First Airway:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractFirstEventTime(selectedLogEvents, ["advanced airway"], selectedLog.startTime?.toDate()) ||
-                    "None"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Last Adrenaline:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractLastEventTime(selectedLogEvents, ["adrenaline"], selectedLog.startTime?.toDate()) || "None"}
-                </span>
-              </div>
-            </div>
-
-            {/* Stats */}
-            <div className="flex justify-around py-2">
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">{selectedLog.shockCount ?? 0}</span>
-                <p className="text-xs text-gray-500">Shocks</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {selectedLog.adrenalineCount ?? 0}
-                </span>
-                <p className="text-xs text-gray-500">Adrenaline</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {selectedLog.amiodaroneCount ?? 0}
-                </span>
-                <p className="text-xs text-gray-500">Amiodarone</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}
-                </span>
-                <p className="text-xs text-gray-500">Lidocaine</p>
-              </div>
-            </div>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
-              {selectedLogEvents.map((event, index) => (
-                <div key={index} className="flex">
-                  <span className={`font-bold w-16 flex-shrink-0 ${getEventTypeColor(event.type)}`}>
-                    [{TimeFormatter.format(event.timestamp)}]
-                  </span>
-                  <span className="ml-2 text-gray-800 dark:text-gray-200">{event.message}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex space-x-2">
-              <button
-                onClick={() => {
-                  const startText = selectedLog.startTime
-                    ? selectedLog.startTime.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : "Unknown";
-                  const dateText = selectedLog.startTime
-                    ? selectedLog.startTime
-                        .toDate()
-                        .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-                    : "Unknown";
-                  const patientInfo = hasPatientInfo(selectedLog) ? getPatientInfoText(selectedLog) : "";
-                  const evtsSorted = selectedLogEvents.sort((a, b) => a.timestamp - b.timestamp);
-                  const text = `eResus - Arrest Summary\nDate: ${dateText}\n${patientInfo ? `Patient: ${patientInfo}\n` : ""}Start Time: ${startText}\nInitial Rhythm: ${selectedLog.initialRhythm || "None"}\n${selectedLog.torTime != null ? `TOR: ${selectedLog.startTime ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.torTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.torTime)}\n` : ""}${selectedLog.vodTime != null ? `VOD: ${selectedLog.startTime ? clockTimeOf(selectedLog.startTime.toDate(), selectedLogEvents, selectedLog.vodTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.vodTime)}\n` : ""}Total Duration: ${TimeFormatter.format(selectedLog.totalDuration)}\n\nShocks: ${selectedLog.shockCount ?? 0}  |  Adrenaline: ${selectedLog.adrenalineCount ?? 0}  |  Amiodarone: ${selectedLog.amiodaroneCount ?? 0}  |  Lidocaine: ${Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}\n\n--- Event Log ---\n${evtsSorted.map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`).join("\n")}`;
-                  navigator.clipboard.writeText(text.trim()).catch(console.error);
-                  if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
-                }}
-                className="flex-1 py-3 rounded-xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform"
-              >
-                <Clipboard size={18} />
-                <span>Copy</span>
-              </button>
-              <div className="flex-1">
-                <ActionButton
-                  title="Close"
-                  backgroundColor="bg-blue-600"
-                  foregroundColor="text-white"
-                  onClick={() => setSelectedLog(null)}
-                />
-              </div>
-            </div>
-          </div>
-        </Modal>
+        <SummaryView
+          isOpen
+          onClose={() => setSelectedLog(null)}
+          events={selectedLogEvents}
+          totalTime={selectedLog.totalDuration}
+          startTime={selectedLog.startTime?.toDate() ?? null}
+          shockCount={selectedLog.shockCount ?? 0}
+          adrenalineCount={selectedLog.adrenalineCount ?? 0}
+          amiodaroneCount={selectedLog.amiodaroneCount ?? 0}
+          lidocaineCount={Math.max(selectedLog.lidocaineCount ?? 0, lidocaineDosesIn(selectedLogEvents))}
+          patientAge={selectedLog.patientAge && selectedLog.patientAge !== "Unknown" ? selectedLog.patientAge : null}
+          patientGender={selectedLog.patientGender && selectedLog.patientGender !== "Unknown" ? selectedLog.patientGender : null}
+          typeColour={(type) => getEventTypeColor(type as EventType)}
+        />
       )}
 
       {editingLog && (
@@ -7532,6 +7300,11 @@ const AppContent: React.FC = () => {
     arrestViewModel.startArrest(convertedEvents, data.timeOffset, data.startTime);
   };
 
+  const hideTabBar =
+    currentTab === "arrest" &&
+    !showNewborn &&
+    (arrestViewModel.arrestState === ArrestState.Active || arrestViewModel.arrestState === ArrestState.Rosc);
+
   const renderTab = () => {
     switch (currentTab) {
       case "arrest":
@@ -7568,6 +7341,8 @@ const AppContent: React.FC = () => {
       <div className="h-screen w-screen flex flex-col font-sans bg-background">
         <main className="flex-grow overflow-hidden">{renderTab()}</main>
 
+        {/* Logbook and Settings aren't needed mid-arrest; hiding the tab bar brings the drugs above the fold. */}
+        {!hideTabBar && (
         <nav className="flex justify-around p-2 bg-card border-t border-border z-20">
           <TabButton
             label="Arrest"
@@ -7588,6 +7363,7 @@ const AppContent: React.FC = () => {
             onClick={() => setCurrentTab("settings")}
           />
         </nav>
+        )}
 
         {pdfToShow && <PDFView pdf={pdfToShow} onClose={() => setPdfToShow(null)} />}
         <InstallInstructionsModal isOpen={showInstallModal} onClose={handleCloseInstallModal} />

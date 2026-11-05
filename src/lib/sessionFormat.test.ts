@@ -74,6 +74,27 @@ describe("session format", () => {
     expect(wire.reversibleCauses[0].id).toMatch(uuid);
   });
 
+  it("carries each entry's clock time both ways (iOS EventCodable.clock)", () => {
+    const original = decodeSession(parseStateData(fixture("session-v2")), CYCLE);
+    const clock = 1_793_000_000.5;
+    const wire = JSON.parse(
+      encodeSession({
+        ...original,
+        events: [
+          { timestamp: 20, message: "Pelvic binder", type: "airway", clock },
+          { timestamp: 10, message: "Arrest Started at 10:00", type: "status" },
+        ],
+      }),
+    );
+    const events = JSON.parse(Buffer.from(wire.eventsData, "base64").toString("utf8"));
+    expect(events[0].clock).toBe(clock);
+    expect("clock" in events[1]).toBe(false);
+
+    const again = decodeSession(wire, CYCLE);
+    expect(again.events[0].clock).toBe(clock);
+    expect(again.events[1].clock).toBeUndefined();
+  });
+
   it("accepts base64 stateData from older PWA builds", () => {
     const base64 = Buffer.from(fixture("session-ios-v1"), "utf8").toString("base64");
     expect(decodeSession(parseStateData(base64), CYCLE).shockCount).toBe(2);

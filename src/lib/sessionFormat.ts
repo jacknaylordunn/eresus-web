@@ -15,6 +15,8 @@ export interface SessionEvent {
   timestamp: number;
   message: string;
   type: string;
+  // Seconds since 1970 when the entry happened (iOS EventCodable.clock). Missing from older builds.
+  clock?: number;
 }
 
 export interface SessionChecklistItem {
@@ -108,6 +110,7 @@ const toWireEvents = (events: SessionEvent[]): SessionEvent[] =>
     timestamp: event.timestamp ?? 0,
     message: event.message ?? "",
     type: IOS_EVENT_TYPES.has(event.type) ? event.type : "status",
+    ...(typeof event.clock === "number" ? { clock: event.clock } : {}),
   }));
 
 const toAppleDate = (date: Date | null): number | null =>
@@ -211,6 +214,7 @@ export const decodeSession = (wire: any, cycleDuration: number): DecodedSession 
       timestamp: event.timestamp ?? 0,
       message: event.message ?? "",
       type: event.type ?? "status",
+      ...(typeof event.clock === "number" ? { clock: event.clock } : {}),
     })),
     shockCount: wire.shockCount ?? 0,
     stackedShockExtra: wire.stackedShockExtra ?? 0,

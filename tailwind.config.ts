@@ -85,6 +85,7 @@ export default {
           "on-alert": "rgb(var(--tone-on-alert) / <alpha-value>)",
           danger: "rgb(var(--tone-danger) / <alpha-value>)",
           "on-danger": "rgb(var(--tone-on-danger) / <alpha-value>)",
+          "danger-solid": "rgb(var(--tone-danger-solid) / <alpha-value>)",
           "danger-tint": "rgb(var(--tone-danger-tint) / <alpha-value>)",
           "on-danger-tint": "rgb(var(--tone-on-danger-tint) / <alpha-value>)",
           positive: "rgb(var(--tone-positive) / <alpha-value>)",

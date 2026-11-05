@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { TONE_CLASSES, type ButtonTone } from '@/lib/tones';
 import { voicePromptPlayer } from '@/utils/voicePrompts';
 import VoicePromptButton from './VoicePromptButton';
+import { OtherDrugsSheet } from './ClinicalSheets';
 import {
   Heart,
   Wind,
@@ -1064,7 +1065,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                   onClick={() => setShowOtherDrugsModal(true)}
                   height="h-12" fontSize="text-sm" />
               </div>
-              <NLSActionButton color="bg-red-600" icon={<XSquare size={16} />} label="End Resus" onClick={endResuscitation} height="h-12" fontSize="text-sm" />
+              <NLSActionButton tone="dangerTint" icon={<XSquare size={16} />} label="End Resus" onClick={endResuscitation} height="h-12" fontSize="text-sm" />
             </div>
 
             {/* ===== SpO₂ Table (matches iOS - 3 rows + footer) ===== */}
@@ -1250,16 +1251,16 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
       </NLSModal>
 
       {/* Other Drugs Modal */}
-      <NLSModal isOpen={showOtherDrugsModal} onClose={() => setShowOtherDrugsModal(false)} title="Log Other Medication">
-        <div className="flex flex-col space-y-2">
-          {['Adenosine','Adrenaline 1:1000','Adrenaline 1:10,000','Amiodarone (Further Dose)','Atropine','Calcium chloride','Glucose','Hartmann\'s solution','Magnesium sulphate','Midazolam','Naloxone','Potassium chloride','Sodium bicarbonate','Sodium chloride','Tranexamic acid','Volume 10ml/kg 0.9% NaCl'].sort().map(drug => (
-            <button key={drug} onClick={() => { saveUndo(); logEvent(`${drug} Given`, "drug"); setShowOtherDrugsModal(false); }}
-              className="w-full text-left p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white">
-              {drug}
-            </button>
-          ))}
-        </div>
-      </NLSModal>
+      <OtherDrugsSheet
+        isOpen={showOtherDrugsModal}
+        onClose={() => setShowOtherDrugsModal(false)}
+        newborn
+        onSelect={(drug) => {
+          saveUndo();
+          logEvent(`${drug} Given`, "drug");
+          setShowOtherDrugsModal(false);
+        }}
+      />
     </div>
   );
 };

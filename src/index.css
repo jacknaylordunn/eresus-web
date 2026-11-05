@@ -15,6 +15,8 @@
     --tone-on-alert: 58 36 0;
     --tone-danger: 198 54 44;
     --tone-on-danger: 255 255 255;
+    /* Full-width red behind white text (rhythm check due): the light red in both modes for AA contrast. */
+    --tone-danger-solid: 198 54 44;
     --tone-danger-tint: 249 227 224;
     --tone-on-danger-tint: 156 39 31;
     --tone-positive: 27 127 69;
@@ -80,6 +82,7 @@
     --tone-on-alert: 58 36 0;
     --tone-danger: 216 70 59;
     --tone-on-danger: 255 255 255;
+    --tone-danger-solid: 198 54 44;
     --tone-danger-tint: 59 31 28;
     --tone-on-danger-tint: 243 167 158;
     --tone-positive: 36 137 79;

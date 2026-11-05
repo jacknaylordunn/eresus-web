@@ -100,6 +100,8 @@ Required means iOS 1.2 cannot decode the session without it.
 
 `type` is one of `status`, `cpr`, `shock`, `analysis`, `rhythm`, `drug`, `airway`, `etco2`, `cause`. Writers map anything else (such as the PWA's `vascularAccess`) to `status`.
 
+`clock` (optional, *v2*): when the entry happened, as **seconds since 1 January 1970 UTC** (Unix time, unlike the Apple dates above), e.g. `"clock": 1793887200.5`. The arrest clock stops while paused, so real times can't be worked out from `timestamp` afterwards; summaries use `clock` when present and otherwise derive the time from `startTime`. Writers include it for every entry that has one; entries from older builds have none. Back-dated entries carry the real time they refer to.
+
 A message containing `(estimated)` was logged after the fact: back-dated by voice, or given before eResus was started (those sit at the moment of Start, `timestamp` = `timeOffset`, and say "times unknown"). The text is the record, so there is no separate field; research uploads add `estimated` derived from it.
 
 When `timeOffset` > 0 there is one `status` event at 0 starting "Cardiac arrest confirmed ~" (newborn: "Born ~"), giving the estimate in whole minutes. Writers replace it rather than adding another when the estimate changes, and move every other timestamp by the same amount.
