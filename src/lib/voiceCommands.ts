@@ -191,6 +191,8 @@ const PHRASES: [string, Kind][] = [
   ...observation(["12 lead", "12 lead ecg", "stemi", "nstemi", "st elevation", "st elevations"], "ecg"),
 ].map(([p, k]) => [p.replace(/'s$/, " is"), k]);
 
+// Words that make a phrase a suggestion rather than a record (matches iOS suggestionWords).
+const SUGGESTION_WORDS = new Set(["consider", "considering", "suggest", "suggested", "recommend", "recommended"]);
 const QUESTION_STARTS = new Set(["is", "are", "should", "do", "does", "did", "can", "could", "what", "why", "when", "how", "who", "shall", "has"]);
 
 // Words near a mention that mean it hasn't happened (yet).
@@ -502,6 +504,9 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   const all = normalise(transcript);
   if (all.length === 0) return nothing("nothing");
   if (QUESTION_STARTS.has(all[0])) return nothing("question");
+  // The app's own spoken prompts ("Consider adrenaline", "Consider second dose of amiodarone") can be picked
+  // up by hands-free listening; a suggestion is never a record that something was given.
+  if (all.some((w) => SUGGESTION_WORDS.has(w))) return nothing("notGiven");
 
   if (findPhrase(all, DOWNTIME_PHRASES)) return nothing("downtime");
 

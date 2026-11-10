@@ -2636,5 +2636,37 @@
    "time": null,
    "reason": null
   }
+ },
+ {
+  "heard": "Consider adrenaline.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Consider second dose of amiodarone.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Consider second dose of lidocaine.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Adrenaline due.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
  }
 ]

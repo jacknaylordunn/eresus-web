@@ -102,6 +102,7 @@ import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
 import { adrenalineDismissal, drugPrompts } from "@/lib/drugPrompts";
+import { loggedAt, repeatCheck, repeatMessage, voiceRepeatRefusal } from "@/lib/repeatCheck";
 import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
 import {
   checkVoiceCommandAvailability,
@@ -119,6 +120,7 @@ import {
   ObservationButton,
   ObservationSheet,
   OtherDrugsSheet,
+  RepeatPromptModal,
   SomaticCriteriaSection,
   TraumaSheet,
 } from "./ClinicalSheets";
@@ -3878,8 +3880,12 @@ const DosageEntryModal: React.FC<{
   const [age, setAge] = useState<PatientAgeCategory>(patientAgeCategory || PatientAgeCategory.Adult);
   const [manualAmount, setManualAmount] = useState("");
   const [manualUnit, setManualUnit] = useState("mg");
+  // A second tap while the dialog is closing would log the dose twice.
+  const didConfirmRef = useRef(false);
 
   const onConfirm = (dosage: string, ageVal: PatientAgeCategory | null) => {
+    if (didConfirmRef.current) return;
+    didConfirmRef.current = true;
     if (ageVal) {
       setPatientAgeCategory(ageVal);
       // Two-way sync: update demographic age from drug calculator
@@ -4061,6 +4067,9 @@ interface ActionButtonProps {
   onNotNow?: () => void;
 }
 
+// The four drug buttons share one height, tall enough for a detail line, so the grid never jumps as lines come and go.
+const DRUG_BUTTON_HEIGHT = "h-16 py-1";
+
 const ActionButton: React.FC<ActionButtonProps> = ({
   title,
   icon,
@@ -4101,11 +4110,12 @@ const ActionButton: React.FC<ActionButtonProps> = ({
       {icon}
       {detail ? (
         <span className="flex flex-col items-start leading-tight">
-          <span>{title}</span>
+          <span className="line-clamp-2">{title}</span>
           <span className={`text-xs font-bold tabular-nums ${highlight ? "" : "opacity-80"}`}>{detail}</span>
         </span>
       ) : (
-        <span>{title}</span>
+        // Centred in the button's height, at most two lines.
+        <span className="line-clamp-2 text-center leading-tight">{title}</span>
       )}
     </button>
   );
@@ -5398,7 +5408,7 @@ const ActionGridView: React.FC<{
             detail={adrenalineButtonDetail}
             onNotNow={isAdrenalineHighlighted ? dismissAdrenalinePrompt : undefined}
             icon={<Syringe size={16} />}
-            height="min-h-16 py-1"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogAdrenaline}
             disabled={!isAdrenalineAvailable}
@@ -5410,7 +5420,7 @@ const ActionGridView: React.FC<{
             detail={amiodaroneButtonDetail}
             onNotNow={isAmiodaroneHighlighted ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            height="min-h-16 py-1"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogAmiodarone}
             disabled={!isAmiodaroneAvailable}
@@ -5422,7 +5432,7 @@ const ActionGridView: React.FC<{
             detail={lidocaineButtonDetail}
             onNotNow={shouldShowLidocaineReminder ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            height="min-h-12 py-1"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogLidocaine}
             disabled={!isLidocaineAvailable}
@@ -5431,7 +5441,7 @@ const ActionGridView: React.FC<{
             title="Other Meds..."
             tone="standard"
             icon={<Pill size={16} />}
-            height="h-12"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onShowOtherDrugs}
           />
@@ -5699,7 +5709,22 @@ const ArrestView: React.FC<{
   const [drugToLog, setDrugToLog] = useState<DrugToLog | null>(null);
   const [drugConfirmation, setDrugConfirmation] = useState<{ drug: DrugToLog; dose: string } | null>(null);
 
+  // A double tap is dropped; a repeat within a minute (or a second TXA) is asked about first (matches iOS checkRepeat).
+  const [repeatPrompt, setRepeatPrompt] = useState<{ message: string; proceed: () => void } | null>(null);
+  const checkRepeat = (name: string, proceed: () => void) => {
+    const check = repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime);
+    if (check.kind === "new") proceed();
+    else if (check.kind === "confirm") {
+      HapticManager.notification("warning");
+      setRepeatPrompt({ message: repeatMessage(name, check.ago, check.at), proceed });
+    }
+  };
+
   const handleLogDrug = (drug: DrugToLog) => {
+    checkRepeat(getDrugLogTitle(drug), () => proceedLogDrug(drug));
+  };
+
+  const proceedLogDrug = (drug: DrugToLog) => {
     if (showDosagePrompts) {
       if (viewModel.patientAgeCategory && (drug.type === "adrenaline" || drug.type === "amiodarone")) {
         let dose: string | null = null;
@@ -5881,6 +5906,10 @@ const ArrestView: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceRun]);
 
+  // Live (not back-dated) voice entries of something just logged are refused, so closed-loop calls aren't two doses.
+  const voiceRefusal = (name: string, time: number | null) =>
+    voiceRepeatRefusal(viewModel.events, name, time, Date.now() / 1000, viewModel.totalArrestTime);
+
   // Each action only applies when a tap would make sense at this point in the algorithm (matches iOS).
   // "continue" means it has done the first half and wants the next render to finish.
   const performVoiceAction = (
@@ -5950,6 +5979,8 @@ const ArrestView: React.FC<{
       }
       case "drug": {
         const { drug, dose } = action;
+        const refusal = voiceRefusal(drug.charAt(0).toUpperCase() + drug.slice(1), time);
+        if (refusal) return { failure: refusal };
         if (drug === "adrenaline") {
           if (!vm.isAdrenalineAvailable) return { failure: "Adrenaline is withheld (severe hypothermia)." };
           vm.performFromVoice(time, () => vm.logAdrenaline(dose, true));
@@ -5965,12 +5996,16 @@ const ArrestView: React.FC<{
       }
       case "otherDrug": {
         const { drug, dose } = action;
+        const refusal = voiceRefusal(drug, time);
+        if (refusal) return { failure: refusal };
         vm.performFromVoice(time, () => vm.logOtherDrug(drug, dose, true));
         return { summary: dose ? `${drug} ${dose}` : drug };
       }
       case "procedure": {
         // Chest procedures need a side; guessing one would put the wrong side on the record.
         if (!isTraumaProcedureName(action.procedure)) return { failure: `${action.procedure}: say left, right or both.` };
+        const refusal = voiceRefusal(action.procedure, time);
+        if (refusal) return { failure: refusal };
         const wasTrauma = vm.isTraumaArrest;
         vm.performFromVoice(time, () => vm.logTraumaProcedure(action.procedure));
         return {
@@ -6164,6 +6199,7 @@ const ArrestView: React.FC<{
         }}
         focus={otherDrugsFocus}
         recent={recentOtherDrugs(viewModel.events)}
+        lastGiven={(drug) => loggedAt(viewModel.events, drug)}
         onSelect={handleSelectOtherDrug}
       />
       <TraumaSheet
@@ -6172,10 +6208,24 @@ const ArrestView: React.FC<{
         isTrauma={viewModel.isTraumaArrest}
         onSetTrauma={viewModel.setTraumaArrest}
         onLogProcedure={viewModel.logTraumaProcedure}
+        repeatCheckFor={(name) => repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime)}
+        loggedAt={(name) => loggedAt(viewModel.events, name)}
         onDrug={handleSelectOtherDrug}
         onFluids={() => openDrugs("fluids")}
       />
       {drugToLog && <DosageEntryModal isOpen={!!drugToLog} onClose={() => setDrugToLog(null)} drug={drugToLog} />}
+
+      {repeatPrompt && (
+        <RepeatPromptModal
+          message={repeatPrompt.message}
+          onCancel={() => setRepeatPrompt(null)}
+          onConfirm={() => {
+            const { proceed } = repeatPrompt;
+            setRepeatPrompt(null);
+            proceed();
+          }}
+        />
+      )}
 
       {/* Drug Confirmation Alert */}
       {drugConfirmation && (

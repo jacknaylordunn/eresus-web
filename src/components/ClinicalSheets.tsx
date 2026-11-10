@@ -1,13 +1,14 @@
 // Sheets for logging drugs, traumatic arrest interventions and post-ROSC observations (matches iOS
 // ClinicalSheets.swift).
 import React, { useEffect, useMemo, useState } from "react";
-import { Bandage, CheckCircle2, ChevronDown, Search } from "lucide-react";
+import { Bandage, Check, CheckCircle2, ChevronDown, Search } from "lucide-react";
 import Modal from "./Modal";
 import {
   bpEntry,
   destinations,
   drugGroupsFor,
   ECG_RESULTS,
+  hhmm,
   observationPlaceholder,
   observationValue,
   ROSC_OBSERVATIONS,
@@ -16,6 +17,7 @@ import {
   type DrugGroupKind,
   type ROSCObservation,
 } from "@/lib/arrestRecord";
+import { repeatMessage, type RepeatCheck } from "@/lib/repeatCheck";
 
 const ROW =
   "w-full text-left px-3 py-2 min-h-11 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white";
@@ -60,6 +62,59 @@ const FreeText: React.FC<{ placeholder: string; onLog: (text: string) => void }>
   );
 };
 
+// A list row that says when it was last logged, e.g. "Tranexamic acid ... ✓ 14:32" (matches iOS LoggedRowLabel).
+const LoggedRowLabel: React.FC<{ title: string; loggedAt: Date | null }> = ({ title, loggedAt }) => (
+  <span className="flex items-center justify-between gap-2">
+    <span>{title}</span>
+    {loggedAt && (
+      <span
+        className="flex items-center gap-1 text-sm tabular-nums text-gray-500 dark:text-gray-400"
+        aria-label={`Logged at ${hhmm(loggedAt)}`}
+      >
+        <Check size={14} aria-hidden="true" />
+        {hhmm(loggedAt)}
+      </span>
+    )}
+  </span>
+);
+
+// Something logged again soon after the last one is asked about, so a slip doesn't become a dose.
+export const RepeatPromptModal: React.FC<{ message: string; onCancel: () => void; onConfirm: () => void }> = ({
+  message,
+  onCancel,
+  onConfirm,
+}) => (
+  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="repeat-prompt-title"
+      aria-describedby="repeat-prompt-message"
+      className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm p-5 space-y-4 text-center"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <h2 id="repeat-prompt-title" className="text-lg font-semibold text-gray-900 dark:text-white">
+        Log again?
+      </h2>
+      <p id="repeat-prompt-message" className="text-gray-700 dark:text-gray-300">
+        {message}
+      </p>
+      <div className="flex gap-3">
+        <button
+          autoFocus
+          onClick={onCancel}
+          className="flex-1 min-h-11 rounded-xl font-semibold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+        >
+          Cancel
+        </button>
+        <button onClick={onConfirm} className="flex-1 min-h-11 rounded-xl font-semibold bg-tone-accent text-tone-on-accent">
+          Log again
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
 // MARK: Other medications
 
 export const OtherDrugsSheet: React.FC<{
@@ -70,8 +125,10 @@ export const OtherDrugsSheet: React.FC<{
   focus?: DrugGroupKind | null;
   // Drugs already given this arrest, most recent first.
   recent?: string[];
+  // When a drug was last logged this arrest, shown as "✓ HH:mm".
+  lastGiven?: (drug: string) => Date | null;
   onSelect: (drug: string) => void;
-}> = ({ isOpen, onClose, newborn = false, focus = null, recent = [], onSelect }) => {
+}> = ({ isOpen, onClose, newborn = false, focus = null, recent = [], lastGiven = () => null, onSelect }) => {
   const [search, setSearch] = useState("");
   useEffect(() => {
     if (!isOpen) setSearch("");
@@ -85,7 +142,7 @@ export const OtherDrugsSheet: React.FC<{
 
   const row = (drug: string) => (
     <button key={drug} onClick={() => onSelect(drug)} className={ROW}>
-      {drug}
+      <LoggedRowLabel title={drug} loggedAt={lastGiven(drug)} />
     </button>
   );
 
@@ -169,13 +226,26 @@ export const TraumaSheet: React.FC<{
   isTrauma: boolean;
   onSetTrauma: (isTrauma: boolean) => void;
   onLogProcedure: (procedure: string) => void;
+  // Whether logging this now would be a double tap or a repeat to ask about.
+  repeatCheckFor: (name: string) => RepeatCheck;
+  loggedAt: (name: string) => Date | null;
   // Drugs go through the usual dose prompt, so they're handed back to the arrest screen.
   onDrug: (drug: string) => void;
   onFluids: () => void;
-}> = ({ isOpen, onClose, isTrauma, onSetTrauma, onLogProcedure, onDrug, onFluids }) => {
+}> = ({ isOpen, onClose, isTrauma, onSetTrauma, onLogProcedure, repeatCheckFor, loggedAt, onDrug, onFluids }) => {
+  const [repeatPrompt, setRepeatPrompt] = useState<{ message: string; proceed: () => void } | null>(null);
+  useEffect(() => {
+    if (!isOpen) setRepeatPrompt(null);
+  }, [isOpen]);
+  // A double tap is dropped and a repeat within a minute is asked about, as on the drug buttons.
   const log = (procedure: string) => {
-    onLogProcedure(procedure);
-    onClose();
+    const proceed = () => {
+      onLogProcedure(procedure);
+      onClose();
+    };
+    const check = repeatCheckFor(procedure);
+    if (check.kind === "new") proceed();
+    else if (check.kind === "confirm") setRepeatPrompt({ message: repeatMessage(procedure, check.ago, check.at), proceed });
   };
   // Turned on first, so the drug is logged as part of a traumatic arrest.
   const pick = (action: () => void) => {
@@ -185,43 +255,56 @@ export const TraumaSheet: React.FC<{
   };
   const row = (procedure: string) => (
     <button key={procedure} onClick={() => log(procedure)} className={ROW}>
-      {procedure}
+      <LoggedRowLabel title={procedure} loggedAt={loggedAt(procedure)} />
     </button>
   );
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Trauma">
-      <div className="space-y-4">
-        <HOTTCard />
-        <Section footer="Quietens the drug prompts so HOTT comes first; drug buttons still work. Logging any intervention below turns this on. If the cause is medical (with injuries), switch it off and follow ALS.">
-          <label className="flex items-center justify-between min-h-11 px-3 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
-            <span>Traumatic cardiac arrest</span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={isTrauma}
-              onChange={(e) => onSetTrauma(e.target.checked)}
-              className="w-5 h-5 accent-[rgb(var(--tone-accent))]"
-            />
-          </label>
-        </Section>
-        <Section title="Early actions">
-          {TRAUMA_EARLY_ACTIONS.map(row)}
-          <button onClick={() => pick(() => onDrug("Tranexamic acid"))} className={ROW}>
-            Tranexamic acid
-          </button>
-          <button onClick={() => pick(onFluids)} className={ROW}>
-            Fluids & blood…
-          </button>
-        </Section>
-        {TRAUMA_GROUPS.map((group) => (
-          <Section key={group.title} title={group.title}>
-            {group.procedures.map(row)}
+    <>
+      <Modal isOpen={isOpen} onClose={onClose} title="Trauma">
+        <div className="space-y-4">
+          <HOTTCard />
+          <Section footer="Quietens the drug prompts so HOTT comes first; drug buttons still work. Logging any intervention below turns this on. If the cause is medical (with injuries), switch it off and follow ALS.">
+            <label className="flex items-center justify-between min-h-11 px-3 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
+              <span>Traumatic cardiac arrest</span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={isTrauma}
+                onChange={(e) => onSetTrauma(e.target.checked)}
+                className="w-5 h-5 accent-[rgb(var(--tone-accent))]"
+              />
+            </label>
           </Section>
-        ))}
-        <FreeText placeholder="Other intervention" onLog={log} />
-      </div>
-    </Modal>
+          <Section title="Early actions">
+            {TRAUMA_EARLY_ACTIONS.map(row)}
+            <button onClick={() => pick(() => onDrug("Tranexamic acid"))} className={ROW}>
+              <LoggedRowLabel title="Tranexamic acid" loggedAt={loggedAt("Tranexamic acid")} />
+            </button>
+            <button onClick={() => pick(onFluids)} className={ROW}>
+              Fluids & blood…
+            </button>
+          </Section>
+          {TRAUMA_GROUPS.map((group) => (
+            <Section key={group.title} title={group.title}>
+              {group.procedures.map(row)}
+            </Section>
+          ))}
+          <FreeText placeholder="Other intervention" onLog={log} />
+        </div>
+      </Modal>
+      {isOpen && repeatPrompt && (
+        <RepeatPromptModal
+          message={repeatPrompt.message}
+          onCancel={() => setRepeatPrompt(null)}
+          onConfirm={() => {
+            const { proceed } = repeatPrompt;
+            setRepeatPrompt(null);
+            proceed();
+          }}
+        />
+      )}
+    </>
   );
 };
 
