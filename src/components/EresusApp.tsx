@@ -71,7 +71,7 @@ import {
   Circle,
   CheckCircle2,
   Bolt,
-  Timer,
+  BellOff,
   Volume2,
   VolumeX,
   AlertTriangle,
@@ -101,6 +101,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
+import { adrenalineDismissal, drugPrompts } from "@/lib/drugPrompts";
 import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
 import {
   checkVoiceCommandAvailability,
@@ -305,6 +306,7 @@ export interface UndoState {
   patientAgeCategory: PatientAgeCategory | null;
   hideAdrenalinePrompt?: boolean;
   hideAmiodaronePrompt?: boolean;
+  hideAdrenalineDueWarning?: boolean;
   lastRhythmNonShockable?: boolean;
   airwayAdjunct?: AirwayAdjunctType | null;
   roscTime?: number | null;
@@ -1226,6 +1228,7 @@ const useArrestViewModel = () => {
 
   const [hideAdrenalinePrompt, setHideAdrenalinePrompt] = useState(false);
   const [hideAmiodaronePrompt, setHideAmiodaronePrompt] = useState(false);
+  const [hideAdrenalineDueWarning, setHideAdrenalineDueWarning] = useState(false);
   const [lastRhythmNonShockable, setLastRhythmNonShockable] = useState(false);
   const [roscTime, setRoscTime] = useState<number | null>(s?.roscTime ?? null);
   const [airwayAdjunct, setAirwayAdjunct] = useState<AirwayAdjunctType | null>(null);
@@ -1267,56 +1270,42 @@ const useArrestViewModel = () => {
   const isTraumaArrest = useMemo(() => traumaFromLog(events), [events]);
   const traumaInterventionCount = useMemo(() => traumaCountIn(events), [events]);
 
-  const shouldShowAmiodaroneReminder = useMemo(() => {
-    const shockCountDose1 = shockCountForAmiodarone1Ref.current;
-    if (shockCountDose1 === null || isTraumaArrest) return false;
-    return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt && isAdrenalineAvailable;
-  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt, isAdrenalineAvailable, isTraumaArrest]);
-
-  // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
-  const shouldShowLidocaineReminder =
-    !isTraumaArrest &&
-    antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine &&
-    lidocaineCount === 1 &&
-    drugTimingShockCount >= 5 &&
-    !hideAmiodaronePrompt &&
-    isAdrenalineAvailable;
-
-  const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
-    // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia (matches iOS).
-    return (
-      !isTraumaArrest &&
-      drugTimingShockCount >= 3 &&
-      amiodaroneCount === 0 &&
-      !hideAmiodaronePrompt &&
-      antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine &&
-      isAdrenalineAvailable
-    );
-  }, [drugTimingShockCount, amiodaroneCount, hideAmiodaronePrompt, antiarrhythmicGiven, isAdrenalineAvailable, isTraumaArrest]);
-
-  const shouldShowAdrenalinePrompt = useMemo(() => {
-    if (!isAdrenalineAvailable || hideAdrenalinePrompt || isTraumaArrest) return false;
-    if (timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) return false;
-    if (adrenalineCount === 0) {
-      if (drugTimingShockCount >= 3) return true;
-      if (lastRhythmNonShockable) return true;
-    }
-    return false;
-  }, [
-    drugTimingShockCount,
-    adrenalineCount,
+  // Which drug buttons are lit and the line under each title (src/lib/drugPrompts.ts; matches iOS).
+  const {
+    shouldShowAdrenalinePrompt,
+    isAdrenalineDue,
+    isAdrenalineHighlighted,
+    shouldShowAmiodaroneFirstDosePrompt,
+    shouldShowAmiodaroneReminder,
+    isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+  } = drugPrompts({
     isAdrenalineAvailable,
-    hideAdrenalinePrompt,
-    timeUntilAdrenaline,
-    lastRhythmNonShockable,
     isTraumaArrest,
-  ]);
+    hideAdrenalinePrompt,
+    hideAdrenalineDueWarning,
+    hideAmiodaronePrompt,
+    timeUntilAdrenaline,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount,
+    shockCount,
+    drugTimingShockCount,
+    shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
+    lastRhythmNonShockable,
+    antiarrhythmicGiven,
+  });
 
-  // Buttons light up while their reminder is showing, so the thing to press is the thing that's lit.
+  // "Not now" on a lit Adrenaline button.
+  const dismissAdrenalinePrompt = () => {
+    if (adrenalineDismissal({ shouldShowAdrenalinePrompt }) === "prompt") setHideAdrenalinePrompt(true);
+    else setHideAdrenalineDueWarning(true);
+  };
+
   const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
-  const isAdrenalineDue = isAdrenalineAvailable && !isTraumaArrest && timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0;
-  const isAdrenalineHighlighted = shouldShowAdrenalinePrompt || isAdrenalineDue;
-  const isAmiodaroneHighlighted = shouldShowAmiodaroneFirstDosePrompt || shouldShowAmiodaroneReminder;
 
   // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
   const activePromptsRef = useRef<Set<VoicePrompt>>(new Set());
@@ -1418,6 +1407,7 @@ const useArrestViewModel = () => {
       isTimerPaused,
       pauseStartTime: pauseStartTimeRef.current?.toISOString() ?? null,
       hideAmiodaronePrompt,
+      hideAdrenalineDueWarning,
       lastRhythmNonShockable,
     };
     try {
@@ -1451,6 +1441,7 @@ const useArrestViewModel = () => {
     vodConfirmed,
     isTimerPaused,
     hideAmiodaronePrompt,
+    hideAdrenalineDueWarning,
     lastRhythmNonShockable,
   ]);
 
@@ -1484,6 +1475,7 @@ const useArrestViewModel = () => {
     setVodConfirmed(s.vodConfirmed ?? false);
 
     setHideAmiodaronePrompt(s.hideAmiodaronePrompt ?? false);
+    setHideAdrenalineDueWarning(s.hideAdrenalineDueWarning ?? false);
     setLastRhythmNonShockable(s.lastRhythmNonShockable ?? false);
     if (s.startTime) {
       startTimeRef.current = new Date(s.startTime);
@@ -1634,6 +1626,7 @@ const useArrestViewModel = () => {
       patientAgeCategory,
       hideAdrenalinePrompt,
       hideAmiodaronePrompt,
+      hideAdrenalineDueWarning,
       lastRhythmNonShockable,
       airwayAdjunct,
       roscTime,
@@ -1687,6 +1680,7 @@ const useArrestViewModel = () => {
     setPatientAgeCategory(lastState.patientAgeCategory);
     setHideAdrenalinePrompt(lastState.hideAdrenalinePrompt ?? false);
     setHideAmiodaronePrompt(lastState.hideAmiodaronePrompt ?? false);
+    setHideAdrenalineDueWarning(lastState.hideAdrenalineDueWarning ?? false);
     setLastRhythmNonShockable(lastState.lastRhythmNonShockable ?? false);
     setAirwayAdjunct(lastState.airwayAdjunct ?? null);
     setRoscTime(lastState.roscTime ?? null);
@@ -1884,6 +1878,7 @@ const useArrestViewModel = () => {
     lastAdrenalineTimeRef.current = Math.max(lastAdrenalineTimeRef.current ?? actionTime(), actionTime());
     setLastRhythmNonShockable(false);
     setHideAdrenalinePrompt(false);
+    setHideAdrenalineDueWarning(false);
     const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
     logEvent(`Adrenaline${dosageText} Given – Dose ${adrenalineCount + 1}`, EventType.Drug);
   };
@@ -2388,6 +2383,7 @@ const useArrestViewModel = () => {
     setPostMortemTasks(AppConstants.postMortemTasksTemplate());
     setHideAdrenalinePrompt(false);
     setHideAmiodaronePrompt(false);
+    setHideAdrenalineDueWarning(false);
     setLastRhythmNonShockable(false);
     setAirwayAdjunct(null);
     setRoscTime(null);
@@ -2690,6 +2686,7 @@ const useArrestViewModel = () => {
       setUiState(session.uiState as UIState);
       setHideAdrenalinePrompt(session.hideAdrenalinePrompt);
       setHideAmiodaronePrompt(session.hideAmiodaronePrompt);
+      setHideAdrenalineDueWarning(false);
       setLastRhythmNonShockable(session.lastRhythmNonShockable);
       setAirwayAdjunct(session.airwayAdjunct as AirwayAdjunctType | null);
       setRoscTime(session.roscTime);
@@ -2788,6 +2785,10 @@ const useArrestViewModel = () => {
     shouldShowAmiodaroneReminder,
     shouldShowAdrenalinePrompt,
     shouldShowAmiodaroneFirstDosePrompt,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+    dismissAdrenalinePrompt,
     isTraumaArrest,
     traumaInterventionCount,
     summaryInput,
@@ -4054,6 +4055,10 @@ interface ActionButtonProps {
   onClick: () => void;
   disabled?: boolean;
   className?: string;
+  /** A second line under the title, such as a drug countdown or which dose is due. */
+  detail?: string | null;
+  /** Offers a small "Not now" bell-slash button that quietens the button's reminder. */
+  onNotNow?: () => void;
 }
 
 const ActionButton: React.FC<ActionButtonProps> = ({
@@ -4067,12 +4072,15 @@ const ActionButton: React.FC<ActionButtonProps> = ({
   onClick,
   disabled = false,
   className = "",
+  detail,
+  onNotNow,
 }) => {
   const [flash, setFlash] = useState(false);
   const colours = highlight ? HIGHLIGHT_CLASSES[highlight] : TONE_CLASSES[tone ?? toneFromLegacyColour(backgroundColor)];
 
-  return (
+  const button = (
     <button
+      aria-label={detail ? `${title}, ${detail}` : undefined}
       onClick={() => {
         onClick();
         // A brief ring on release confirms the tap even when nothing else on screen changes.
@@ -4091,8 +4099,31 @@ const ActionButton: React.FC<ActionButtonProps> = ({
       `}
     >
       {icon}
-      <span>{title}</span>
+      {detail ? (
+        <span className="flex flex-col items-start leading-tight">
+          <span>{title}</span>
+          <span className={`text-xs font-bold tabular-nums ${highlight ? "" : "opacity-80"}`}>{detail}</span>
+        </span>
+      ) : (
+        <span>{title}</span>
+      )}
     </button>
+  );
+
+  if (!onNotNow) return button;
+  // "Not now" replaces the old banners' dismiss buttons: a small bell-slash in the corner, offered only while lit.
+  return (
+    <div className="relative">
+      {button}
+      <button
+        onClick={onNotNow}
+        aria-label={`Not now: ${title}`}
+        title="Not now"
+        className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900 shadow flex items-center justify-center active:scale-95 transition-transform"
+      >
+        <BellOff size={14} aria-hidden="true" />
+      </button>
+    </div>
   );
 };
 
@@ -4896,16 +4927,10 @@ const ActiveArrestContentView: React.FC<{
     setTraumaArrest,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
-    timeUntilAdrenaline,
-    shouldShowAdrenalinePrompt,
-    shouldShowAmiodaroneFirstDosePrompt,
-    shouldShowAmiodaroneReminder,
     shouldShowLidocaineReminder,
     events,
     reversibleCauses,
     isTimerPaused,
-    setHideAdrenalinePrompt,
-    setHideAmiodaronePrompt,
     isLastAdrenalineTimeUnknown,
     setLastAdrenaline,
     totalArrestTime,
@@ -4963,24 +4988,6 @@ const ActiveArrestContentView: React.FC<{
       {isTraumaArrest && <HOTTCard compact onOpen={props.onShowTrauma} onNotTrauma={() => setTraumaArrest(false)} />}
 
       {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
-      {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
-        <AdrenalineTimerView timeRemaining={timeUntilAdrenaline} />
-      )}
-      {timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0 && (
-        <AdrenalineDueWarning onClick={props.onLogAdrenaline} />
-      )}
-      {shouldShowAdrenalinePrompt && (
-        <AdrenalinePromptView onClick={props.onLogAdrenaline} onDismiss={() => setHideAdrenalinePrompt(true)} />
-      )}
-      {shouldShowAmiodaroneFirstDosePrompt && (
-        <AmiodaronePromptView onClick={props.onLogAmiodarone} onDismiss={() => setHideAmiodaronePrompt(true)} />
-      )}
-      {shouldShowAmiodaroneReminder && (
-        <AmiodaroneReminderView onClick={props.onLogAmiodarone} onDismiss={() => setHideAmiodaronePrompt(true)} />
-      )}
-      {shouldShowLidocaineReminder && (
-        <LidocaineReminderView onClick={props.onLogLidocaine} onDismiss={() => setHideAmiodaronePrompt(true)} />
-      )}
 
       <ActionGridView {...props} />
 
@@ -5287,6 +5294,11 @@ const ActionGridView: React.FC<{
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
     shouldShowLidocaineReminder,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+    dismissAdrenalinePrompt,
+    setHideAmiodaronePrompt,
   } = useArrest();
 
   // Green success flash states
@@ -5383,8 +5395,10 @@ const ActionGridView: React.FC<{
             title="Adrenaline"
             tone="standard"
             highlight={isAdrenalineHighlighted ? "drugDue" : undefined}
+            detail={adrenalineButtonDetail}
+            onNotNow={isAdrenalineHighlighted ? dismissAdrenalinePrompt : undefined}
             icon={<Syringe size={16} />}
-            height="h-12"
+            height="min-h-16 py-1"
             fontSize="text-sm"
             onClick={props.onLogAdrenaline}
             disabled={!isAdrenalineAvailable}
@@ -5393,8 +5407,10 @@ const ActionGridView: React.FC<{
             title="Amiodarone"
             tone="standard"
             highlight={isAmiodaroneHighlighted ? "drugDue" : undefined}
+            detail={amiodaroneButtonDetail}
+            onNotNow={isAmiodaroneHighlighted ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            height="h-12"
+            height="min-h-16 py-1"
             fontSize="text-sm"
             onClick={props.onLogAmiodarone}
             disabled={!isAmiodaroneAvailable}
@@ -5403,8 +5419,10 @@ const ActionGridView: React.FC<{
             title="Lidocaine"
             tone="standard"
             highlight={shouldShowLidocaineReminder ? "drugDue" : undefined}
+            detail={lidocaineButtonDetail}
+            onNotNow={shouldShowLidocaineReminder ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            height="h-12"
+            height="min-h-12 py-1"
             fontSize="text-sm"
             onClick={props.onLogLidocaine}
             disabled={!isLidocaineAvailable}
@@ -5487,13 +5505,6 @@ const ActionGridView: React.FC<{
   );
 };
 
-const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemaining }) => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-semibold">
-    <Timer size={20} />
-    <span>Adrenaline due in: {TimeFormatter.format(timeRemaining)}</span>
-  </div>
-);
-
 // Adrenaline was given before eResus at an unknown time. Choosing roughly when starts the usual timer;
 // "Don't know" makes it due now. Left alone, the next rhythm check does the same (matches iOS).
 // totalTime: the arrest clock now; a choice earlier than 00:00 isn't offered.
@@ -5519,108 +5530,6 @@ const AdrenalineTimeUnknownView: React.FC<{ totalTime: number; onSelect: (minute
         </button>
       ))}
     </div>
-  </div>
-);
-
-const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
-  <button
-    onClick={onClick}
-    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
-  >
-    <AlertTriangle size={20} />
-    <span>Adrenaline Due - Tap to Log</span>
-  </button>
-);
-
-const AmiodaroneReminderView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider 2nd Amiodarone - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-);
-
-const LidocaineReminderView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider 2nd Lidocaine - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-);
-
-const AdrenalinePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider Adrenaline - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-);
-
-const AmiodaronePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-tone-alert text-tone-on-alert font-bold halo-alert w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider Amiodarone - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
   </div>
 );
 
