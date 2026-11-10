@@ -2381,5 +2381,260 @@
    "time": null,
    "reason": null
   }
+ },
+ {
+  "heard": "10% glucose 50 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Glucose 10%",
+     "dose": "50 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "glucose 10% 100 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Glucose 10%",
+     "dose": "100 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle thoracostomy left",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (left)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "thoracotomy",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "clamshell",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracotomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO left humerus, needle decompression right",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Left humerus"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "aim for sats 94 to 98",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "sats 94 to 98",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "query STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "Possible STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "12 lead shows ST elevation",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "no ST elevation on the 12 lead",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "No STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "nor adrenaline started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Noradrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "systolic of 80",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "80 systolic"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BP 80",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "MAP 65",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "MAP 65"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pelvic sling on",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Pelvic binder"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 5 minutes ago, thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 300
+     }
+    },
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO left humerus, needle decompression",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Left humerus"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "right sided thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
  }
 ]

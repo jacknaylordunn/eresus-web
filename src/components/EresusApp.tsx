@@ -135,6 +135,7 @@ import {
   recentOtherDrugs,
   ROSC_OBSERVATION_ORDER,
   ROSC_OBSERVATIONS,
+  TRAUMA_EARLY_ACTIONS,
   TRAUMA_OFF_ENTRY,
   TRAUMA_ON_ENTRY,
   traumaEntryText,
@@ -1916,7 +1917,10 @@ const useArrestViewModel = () => {
   // The first trauma procedure marks the arrest as traumatic; it can be switched off again.
   const logTraumaProcedure = (procedure: string) => {
     saveUndoState();
-    if (!isTraumaArrest) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    // Requesting critical care happens in medical arrests too, and after ROSC nothing should quieten prompts.
+    if (!isTraumaArrest && arrestState === ArrestState.Active && !TRAUMA_EARLY_ACTIONS.includes(procedure)) {
+      logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    }
     logEvent(traumaEntryText(procedure), EventType.Airway);
   };
 
@@ -2127,7 +2131,7 @@ const useArrestViewModel = () => {
     if (arrestState !== ArrestState.Active) return false;
     saveUndoState();
     const isProcedure = isTraumaProcedureName(name);
-    if (isProcedure && !isTraumaArrest) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    if (isProcedure && !isTraumaArrest && !TRAUMA_EARLY_ACTIONS.includes(name)) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
     logAtStart(`${name} before eResus, time unknown (estimated)`, isProcedure ? EventType.Airway : EventType.Drug);
     return true;
   };

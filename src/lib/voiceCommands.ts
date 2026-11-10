@@ -26,6 +26,7 @@ export type VoiceAction =
 // shock, adrenaline, amiodarone, lidocaine, or an Other Meds drug or trauma intervention by name.
 export type GivenItem = string;
 export type ObservationKind = "spo2" | "bp" | "glucose" | "temperature" | "ecg";
+type SaidReading = ObservationKind | "map";
 type Rhythm = "VF" | "VT" | "PEA" | "Asystole" | "Shockable" | "Non-shockable";
 
 // twelveHour: said without am/pm and could be either (e.g. "at 2:52"); the app picks the most recent.
@@ -74,11 +75,11 @@ type Kind =
   | { type: "otherDrug"; drug: string }
   | { type: "procedure"; procedure: string }
   | { type: "trauma" }
-  | { type: "observation"; kind: ObservationKind };
+  | { type: "observation"; kind: SaidReading };
 
 const otherDrug = (phrases: string[], drug: string): [string, Kind][] => phrases.map((p) => [p, { type: "otherDrug", drug }]);
 const procedure = (phrases: string[], name: string): [string, Kind][] => phrases.map((p) => [p, { type: "procedure", procedure: name }]);
-const observation = (phrases: string[], kind: ObservationKind): [string, Kind][] => phrases.map((p) => [p, { type: "observation", kind }]);
+const observation = (phrases: string[], kind: SaidReading): [string, Kind][] => phrases.map((p) => [p, { type: "observation", kind }]);
 
 const PHRASES: [string, Kind][] = [
   ...["adrenaline", "adrenalin", "epinephrine", "epi", "adrenalines"].map((p): [string, Kind] => [p, { type: "drug", drug: "adrenaline" }]),
@@ -124,9 +125,9 @@ const PHRASES: [string, Kind][] = [
   ...otherDrug(["calcium gluconate"], "Calcium gluconate 10%"),
   ...otherDrug(["magnesium", "magnesium sulphate", "magnesium sulfate", "mag sulphate", "mag sulph"], "Magnesium sulphate"),
   ...otherDrug(["bicarb", "bicarbonate", "sodium bicarbonate", "sodium bicarb"], "Sodium bicarbonate 8.4%"),
-  ...otherDrug(["adrenaline infusion", "adrenaline infusion started", "epinephrine infusion"], "Adrenaline infusion"),
+  ...otherDrug(["adrenaline infusion", "adrenaline infusion started", "epinephrine infusion", "adrenaline drip", "adrenaline running"], "Adrenaline infusion"),
   ...otherDrug(["push dose adrenaline", "push dose epi", "push dose of adrenaline", "push dose epinephrine"], "Adrenaline push-dose"),
-  ...otherDrug(["noradrenaline", "norad", "norepinephrine"], "Noradrenaline infusion"),
+  ...otherDrug(["noradrenaline", "norad", "norepinephrine", "nor adrenaline", "nora adrenaline", "noradrenaline infusion"], "Noradrenaline infusion"),
   ...otherDrug(["naloxone", "narcan"], "Naloxone"),
   ...otherDrug(["glucagon"], "Glucagon"),
   ...otherDrug(["intralipid", "lipid emulsion", "lipid"], "Lipid emulsion 20%"),
@@ -157,32 +158,37 @@ const PHRASES: [string, Kind][] = [
   ...otherDrug(["ondansetron"], "Ondansetron"),
 
   // Trauma interventions. Chest procedures take their side from nearby words.
-  ...procedure(["pelvic binder", "binder", "pelvic splint", "sam pelvic sling"], "Pelvic binder"),
-  ...procedure(["tourniquet", "tourniquets"], "Tourniquet"),
+  ...procedure(["pelvic binder", "binder", "pelvic splint", "sam pelvic sling", "pelvic sling", "sam sling", "t pod", "prometheus"], "Pelvic binder"),
+  ...procedure(["tourniquet", "tourniquets", "cat tourniquet", "tq"], "Tourniquet"),
   ...procedure(["traction splint", "kendrick", "kts"], "Traction splint"),
   ...procedure(
-    ["wound packing", "packed the wound", "haemostatic", "hemostatic", "haemostatic dressing", "hemostatic dressing", "celox"],
+    ["wound packing", "packed the wound", "haemostatic", "hemostatic", "haemostatic dressing", "hemostatic dressing", "celox",
+     "quikclot", "quick clot", "chitogauze", "packed it"],
     "Haemostatic dressing / packing",
   ),
   ...procedure(
-    ["needle decompression", "needle decompressed", "needle thoracocentesis", "needled", "needle decompress"],
+    ["needle decompression", "needle decompressed", "needle thoracocentesis", "needled", "needle decompress",
+     "needle thoracostomy", "needle thoracostomies", "decompressed the chest", "chest decompression", "needled the chest"],
     "Needle decompression",
   ),
   ...procedure(["thoracostomy", "thoracostomies", "finger thoracostomy", "simple thoracostomy", "finger thoracostomies"], "Thoracostomy"),
-  ...procedure(["thoracotomy", "clamshell", "clam shell"], "Thoracotomy"),
+  // Never bare "thoracotomy": it's too close to "thoracostomy" for speech recognition.
+  ...procedure(["clamshell", "clam shell", "resuscitative thoracotomy", "clamshell thoracotomy"], "Thoracotomy"),
   ...procedure(["reboa"], "REBOA"),
   ...procedure(
-    ["critical care requested", "hems requested", "hems activated", "enhanced care requested", "critical care activated", "air ambulance requested"],
+    ["critical care requested", "hems requested", "hems activated", "enhanced care requested", "critical care activated", "air ambulance requested",
+     "doctor requested", "ccp requested", "critical care paramedic requested", "aircrew requested", "merit requested", "basics doctor requested"],
     "Enhanced / critical care requested",
   ),
-  ...["trauma arrest", "traumatic arrest", "traumatic cardiac arrest", "trauma cardiac arrest"].map((p): [string, Kind] => [p, { type: "trauma" }]),
+  ...["trauma arrest", "traumatic arrest", "traumatic cardiac arrest", "trauma cardiac arrest", "arrest due to trauma"].map((p): [string, Kind] => [p, { type: "trauma" }]),
 
   // Readings, mostly after ROSC.
   ...observation(["sats", "sat", "spo2", "sp o2", "saturations", "saturating", "o2 sats", "oxygen sats", "oxygen saturation"], "spo2"),
-  ...observation(["bp", "b p", "blood pressure", "pressure"], "bp"),
+  ...observation(["bp", "b p", "blood pressure", "pressure", "systolic", "systolic of"], "bp"),
+  ...observation(["map", "mean arterial pressure"], "map"),
   ...observation(["bm", "b m", "cbg", "blood sugar", "blood glucose", "sugar", "sugars", "glucose", "blood sugars"], "glucose"),
-  ...observation(["temp", "temperature", "temp is"], "temperature"),
-  ...observation(["12 lead", "12 lead ecg", "stemi", "nstemi"], "ecg"),
+  ...observation(["temp", "temperature", "temp is", "tympanic temp", "tympanic temperature"], "temperature"),
+  ...observation(["12 lead", "12 lead ecg", "stemi", "nstemi", "st elevation", "st elevations"], "ecg"),
 ].map(([p, k]) => [p.replace(/'s$/, " is"), k]);
 
 const QUESTION_STARTS = new Set(["is", "are", "should", "do", "does", "did", "can", "could", "what", "why", "when", "how", "who", "shall", "has"]);
@@ -232,11 +238,16 @@ const UNIT_FOR: Record<string, Kind["type"]> = {
   mg: "drug", mcg: "drug", g: "drug", ml: "drug", mmol: "drug", units: "drug", J: "shock", kPa: "etco2", mmHg: "etco2", G: "access",
 };
 
+const TARGET_WORDS = new Set(["target", "targets", "aim", "aiming", "keep", "titrate", "titrating", "goal", "above", "below", "between", "range", "over"]);
+const UNSURE_WORDS = new Set(["query", "possible", "possibly", "suspected", "likely", "maybe", "probable", "questionable"]);
+const GLUCOSE_DRUG_WORDS = new Set(["ml", "mls", "millilitres", "g", "grams", "percent", "give", "giving", "bolus"]);
+
 const SITES: [string, string][] = [
   ["antecubital", "AC"], ["ac", "AC"], ["hand", "hand"], ["wrist", "wrist"], ["forearm", "forearm"], ["foot", "foot"],
   ["ankle", "ankle"], ["external jugular", "EJ"], ["jugular", "EJ"], ["ej", "EJ"], ["humerus", "humerus"],
   ["humeral", "humerus"], ["tibia", "tibia"], ["tibial", "tibia"], ["sternum", "sternum"], ["sternal", "sternum"],
 ];
+const SITE_WORDS = new Set(SITES.flatMap(([phrase]) => phrase.split(" ")));
 
 // ---------------------------------------------------------------------------------------------
 // Normalising
@@ -252,6 +263,8 @@ export const formatNumber = (n: number): string => String(Math.round(n * 100) / 
 export const normalise = (text: string): string[] => {
   let s = text.toLowerCase().replace(/[’‘]/g, "'");
   s = s.replace(/n't\b/g, " not").replace(/'ve\b/g, " have").replace(/'re\b/g, " are").replace(/'ll\b/g, " will").replace(/'s\b/g, " is");
+  // "10%" stays a percentage, so "10% glucose" is the drug rather than a BM of 10.
+  s = s.replace(/%/g, " percent ");
   // Dots go unless they're a decimal point: "v.f." -> "vf", "4.2" stays.
   s = s.replace(/(?<!\d)\.|\.(?!\d)/g, "");
   // Keep "14:52"; anything else that isn't a letter, digit or decimal point is a space.
@@ -754,19 +767,30 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         const base = kind.procedure;
         let names = [base];
         if (base === "Thoracostomy" || base === "Needle decompression") {
-          const window = new Set(tokens.slice(Math.max(0, m.start - 3), m.end + 3));
+          // Only words belonging to this mention: "IO left humerus, needle right" is one needle, on the right.
+          const index = Math.max(0, kept.indexOf(m));
+          const from = Math.max(index > 0 ? kept[index - 1].end : 0, m.start - 3);
+          const to = Math.min(index + 1 < kept.length ? kept[index + 1].start : tokens.length, m.end + 3);
+          const after = tokens.slice(m.end, Math.max(m.end, to));
+          // Before it, only "left needle", "right sided thoracostomy": never a side that belongs to a site.
+          const near = tokens.slice(Math.max(from, m.start - 2), Math.max(from, m.start));
+          const before = near.some((t) => SITE_WORDS.has(t)) ? [] : near;
+          const isSide = (t: string) => t === "left" || t === "right";
+          const hasBothSides = (words: string[]) => words.includes("left") && words.includes("right");
           const both =
-            window.has("bilateral") || window.has("both") || window.has("thoracostomies") || (window.has("left") && window.has("right"));
+            [...before, ...after].some((t) => ["bilateral", "both", "thoracostomies"].includes(t)) || hasBothSides(after) || hasBothSides(before);
+          // The side said after it wins: in "IO left humerus, needle right" the "left" is the IO's.
+          const side = after.find(isSide) ?? [...before].reverse().find(isSide);
           if (both) {
             names = base === "Thoracostomy" ? ["Thoracostomy (bilateral)"] : ["Needle decompression (left)", "Needle decompression (right)"];
-          } else if (window.has("left")) {
-            names = [`${base} (left)`];
-          } else if (window.has("right")) {
-            names = [`${base} (right)`];
+          } else if (side) {
+            names = [`${base} (${side})`];
           }
         }
+        // A chest procedure without a side goes through as said, and is refused with a request for the side.
+        const needsSide = names.length === 1 && (names[0] === "Thoracostomy" || names[0] === "Needle decompression");
         for (const name of names) {
-          if (isHandover || hasHistoryMarker) {
+          if ((isHandover || hasHistoryMarker) && !needsSide) {
             if (!addGiven(name, 1)) return nothing("conflict");
           } else if (!actions.some((a) => a.type === "procedure" && a.procedure === name)) {
             actions.push({ type: "procedure", procedure: name });
@@ -782,14 +806,22 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         if (isHandover) break;
         const value = reading(kind.kind, tokens, m);
         if (value === null) break;
-        const prior = actions.find((a) => a.type === "observation" && a.kind === kind.kind) as
+        // A MAP is logged with the blood pressures; one said alongside a full BP adds nothing.
+        const said = kind.kind;
+        const observed: ObservationKind = said === "map" ? "bp" : said;
+        const prior = actions.find((a) => a.type === "observation" && a.kind === observed) as
           | Extract<VoiceAction, { type: "observation" }>
           | undefined;
         if (prior) {
+          if (said === "map") break;
+          if (prior.value.startsWith("MAP")) {
+            prior.value = value;
+            break;
+          }
           if (prior.value !== value) return nothing("conflict");
           break;
         }
-        actions.push({ type: "observation", kind: kind.kind, value });
+        actions.push({ type: "observation", kind: observed, value });
         break;
       }
       default: {
@@ -828,7 +860,7 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
 
 // The value said after a reading ("sats 96", "BP 110 over 70", "BM 6.2", "temp 36.4", "12 lead, no STEMI"),
 // formatted as it's logged. Null when there's no believable number, so nothing is logged.
-const reading = (kind: ObservationKind, tokens: string[], span: { start: number; end: number }): string | null => {
+const reading = (kind: SaidReading, tokens: string[], span: { start: number; end: number }): string | null => {
   const number = (start: number, skipping: Set<string>): { value: number; at: number } | null => {
     for (let i = start, skipped = 0; i < tokens.length && skipped <= 2; i++, skipped++) {
       if (isNumber(tokens[i])) return { value: Number(tokens[i]), at: i };
@@ -837,26 +869,45 @@ const reading = (kind: ObservationKind, tokens: string[], span: { start: number;
     return null;
   };
   const within = (v: number, lo: number, hi: number) => v >= lo && v <= hi;
+  // A target isn't a reading: "aim for sats 94 to 98", "keep the MAP above 65".
+  const lead = tokens.slice(Math.max(0, span.start - 3), span.start);
+  if (lead.some((t) => TARGET_WORDS.has(t) && (kind !== "bp" || t !== "over"))) return null;
   switch (kind) {
     case "ecg": {
-      const window = tokens.slice(Math.max(0, span.start - 4), span.end + 4);
-      const index = window.findIndex((t) => t === "stemi" || t === "nstemi");
+      // One 12-lead per phrase, read from the whole of it ("no ST elevation on the 12 lead").
+      const window = tokens;
+      const index = window.findIndex(
+        (t, i) => t === "stemi" || t === "nstemi" || ((t === "elevation" || t === "elevations") && i > 0 && window[i - 1] === "st"),
+      );
       if (index < 0) return "Recorded, not yet interpreted";
       if (window[index] === "nstemi") return "No STEMI";
-      const before = window.slice(Math.max(0, index - 2), index);
-      return before.includes("no") || before.includes("not") || before.includes("non") ? "No STEMI" : "STEMI";
+      const before = window.slice(Math.max(0, index - 3), index);
+      if (before.includes("no") || before.includes("not") || before.includes("non")) return "No STEMI";
+      return before.some((t) => UNSURE_WORDS.has(t)) ? "Possible STEMI" : "STEMI";
     }
     case "bp": {
-      const systolic = number(span.end, new Set());
+      const systolic = number(span.end, new Set(["of"]));
       if (!systolic || !within(systolic.value, 40, 300)) return null;
       const diastolic = number(systolic.at + 1, new Set(["over", "on", "by"]));
-      if (!diastolic || !within(diastolic.value, 20, 200) || diastolic.value >= systolic.value) return null;
-      const map = Math.round((systolic.value + 2 * diastolic.value) / 3);
-      return `${Math.trunc(systolic.value)}/${Math.trunc(diastolic.value)} (MAP ${map})`;
+      if (diastolic && within(diastolic.value, 20, 200) && diastolic.value < systolic.value) {
+        const map = Math.round((systolic.value + 2 * diastolic.value) / 3);
+        return `${Math.trunc(systolic.value)}/${Math.trunc(diastolic.value)} (MAP ${map})`;
+      }
+      // Post-ROSC crews often have a systolic only; it must be called that, never a lone number.
+      const near = tokens.slice(Math.max(0, span.start - 1), systolic.at + 2);
+      return near.includes("systolic") ? `${Math.trunc(systolic.value)} systolic` : null;
+    }
+    case "map": {
+      const found = number(span.end, new Set(["of"]));
+      return found && within(found.value, 20, 200) ? `MAP ${Math.trunc(found.value)}` : null;
     }
     default: {
       const found = number(span.end, new Set(["of", "are", "percent", "degrees", "mmol"]));
       if (!found) return null;
+      // "Sats 94 to 98" is a range, so a target.
+      if (tokens[found.at + 1] === "to" && found.at + 2 < tokens.length && isNumber(tokens[found.at + 2])) return null;
+      // Glucose near a drug unit or an instruction is the drug, not a BM ("glucose 10 percent 100 ml").
+      if (kind === "glucose" && tokens.slice(Math.max(0, span.start - 3), found.at + 4).some((t) => GLUCOSE_DRUG_WORDS.has(t))) return null;
       const v = found.value;
       if (kind === "spo2") return within(v, 50, 100) ? `${Math.trunc(v)}%` : null;
       if (kind === "glucose") return within(v, 0.5, 50) ? `${formatNumber(v)} mmol/L` : null;
