@@ -204,29 +204,29 @@ export const HOTTCard: React.FC<{
       </p>
     )}
     {(onOpen || onRestorePrompts || onNotTrauma) && (
-      <div className="flex items-center gap-4 pt-1">
-        {onOpen ? (
-          <button onClick={onOpen} className="min-h-11 text-sm font-bold underline-offset-2 hover:underline">
+      // Wraps as whole buttons (never mid-label): on a phone the interventions button gets its own line.
+      <div className="flex flex-wrap items-center gap-x-4 pt-1">
+        {onOpen && (
+          <button onClick={onOpen} className="min-h-11 whitespace-nowrap text-sm font-bold underline-offset-2 hover:underline">
             Trauma interventions
           </button>
-        ) : (
-          <span />
         )}
-        <span className="flex-1" />
-        {onRestorePrompts && (
-          <button
-            onClick={onRestorePrompts}
-            aria-description="HOTT addressed: restores drug prompts, still recorded as a traumatic arrest"
-            className="min-h-11 text-sm font-bold"
-          >
-            Prompts on
-          </button>
-        )}
-        {onNotTrauma && (
-          <button onClick={onNotTrauma} aria-description="Restores drug prompts" className="min-h-11 text-sm">
-            Not trauma
-          </button>
-        )}
+        <span className="flex gap-4">
+          {onRestorePrompts && (
+            <button
+              onClick={onRestorePrompts}
+              aria-description="HOTT addressed: restores drug prompts, still recorded as a traumatic arrest"
+              className="min-h-11 whitespace-nowrap text-sm font-bold"
+            >
+              Prompts on
+            </button>
+          )}
+          {onNotTrauma && (
+            <button onClick={onNotTrauma} aria-description="Restores drug prompts" className="min-h-11 whitespace-nowrap text-sm">
+              Not trauma
+            </button>
+          )}
+        </span>
       </div>
     )}
   </div>
