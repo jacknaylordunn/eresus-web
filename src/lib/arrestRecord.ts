@@ -301,17 +301,17 @@ export const doseNote = (drug: string, dose: string | null, expected: string | n
 // MARK: Patient and ToR
 
 /**
- * Whether the patient is a child (under 18), from the age recorded. Null when no age has been recorded, so the
+ * Whether the patient is a child (under 13; in CPR terms 13 and over is adult, separate from drug dosing), from the age recorded. Null when no age has been recorded, so the
  * ToR sheet can ask then rather than guess adult (matches iOS isPaediatric).
  * @param isAdultCategory whether the drug-calculator age category is adult; null when none is set
  */
 export const isPaediatric = (isAdultCategory: boolean | null, ageStr: string, isNewborn = false): boolean | null => {
   if (isNewborn) return true;
-  // A typed age first: the dosing category "≥12 years / Adult" also covers 12 to 17-year-olds, who are
+  // A typed age first: the dosing category "≥12 years / Adult" also covers 12-year-olds, who are
   // children for ToR.
   const age = ageStr.trim().toLowerCase();
   if (age.includes("month") || age.includes("newborn")) return true;
-  if (/^[+-]?\d+$/.test(age)) return Number(age) < 18;
+  if (/^[+-]?\d+$/.test(age)) return Number(age) < 13;
   if (isAdultCategory !== null) return isAdultCategory ? null : true;
   return null;
 };

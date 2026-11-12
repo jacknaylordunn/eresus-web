@@ -3508,7 +3508,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
           >
             {[
               { label: "Adult", value: false },
-              { label: "Child (under 18)", value: true },
+              { label: "Child (under 13)", value: true },
             ].map(({ label, value }) => (
               <button
                 key={label}
