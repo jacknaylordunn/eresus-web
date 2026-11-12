@@ -22,7 +22,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden flex flex-col max-h-[85dvh] pb-[env(safe-area-inset-bottom)] motion-safe:animate-in motion-safe:slide-in-from-bottom-8 motion-safe:duration-200"
+        className="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden flex flex-col max-h-[85vh] max-h-[85dvh] pb-[env(safe-area-inset-bottom)] motion-safe:animate-in motion-safe:slide-in-from-bottom-8 motion-safe:duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-gray-300 dark:bg-gray-600 sm:hidden" aria-hidden="true" />

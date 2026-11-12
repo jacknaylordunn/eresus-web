@@ -261,7 +261,7 @@ export const TraumaSheet: React.FC<{
         <div className="space-y-4">
           {/* Compact, so the interventions are near the top of the sheet. */}
           <HOTTCard compact />
-          <Section footer="Pauses drug reminders so HOTT comes first; the drug buttons still work. Switches on by itself when a tourniquet, pelvic binder, chest procedure, thoracotomy or REBOA is logged. Switch it off once HOTT is dealt with, or if the cause is medical.">
+          <Section footer="Pauses drug reminders so HOTT comes first; the drug buttons still work. Switches on by itself when a tourniquet, pelvic binder, chest procedure, thoracotomy or REBOA is logged. Switch it off once HOTT is dealt with to bring drug reminders back, or if the cause is medical. Interventions stay on the record, and the trauma centre is still offered after ROSC.">
             <label className="flex items-center justify-between min-h-11 px-3 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
               <span>Traumatic cardiac arrest</span>
               <input

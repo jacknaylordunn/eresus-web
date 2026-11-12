@@ -35,6 +35,21 @@ describe("session format", () => {
     expect(session.lastAdrenalineTime).toBe(650);
   });
 
+  it("keeps an overdue rhythm check overdue across a transfer", () => {
+    const original = decodeSession(parseStateData(fixture("session-v2")), CYCLE);
+    // As iOS sends it: the cycle start has moved on a cycle, and dueAt says when the check fell due.
+    const fromIOS = decodeSession(
+      { ...JSON.parse(encodeSession(original)), isRhythmCheckDue: true, rhythmCheckDueAt: 750, cprCycleStartTime: 750 },
+      CYCLE,
+    );
+    expect(fromIOS.isRhythmCheckDue).toBe(true);
+    expect(fromIOS.cprCycleStartTime).toBe(750 - CYCLE);
+
+    const wire = JSON.parse(encodeSession({ ...fromIOS, rhythmCheckDueAt: 750 }));
+    expect(wire.isRhythmCheckDue).toBe(true);
+    expect(wire.rhythmCheckDueAt).toBe(750);
+  });
+
   it("round-trips through the iOS-compatible encoding", () => {
     const original = decodeSession(parseStateData(fixture("session-v2")), CYCLE);
     const wire = JSON.parse(encodeSession({ ...original, torTime: 900, vodTime: 1200, vodConfirmed: true }));

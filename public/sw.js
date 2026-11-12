@@ -1,4 +1,4 @@
-const CACHE_NAME = 'eresus-react-v9';
+const CACHE_NAME = 'eresus-react-v10';
 const PDF_CACHE_NAME = 'eresus-pdfs-v2';
 
 const STATIC_URLS = [
@@ -224,7 +224,8 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
           return response;
         })
-        .catch(() => caches.match('/index.html'))
+        // The page last fetched online first: it points at the assets cached with it.
+        .catch(async () => (await caches.match(event.request)) || (await caches.match('/')) || caches.match('/index.html'))
     );
     return;
   }

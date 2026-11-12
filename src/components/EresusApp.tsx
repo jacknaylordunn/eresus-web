@@ -114,7 +114,7 @@ import {
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
-import WhatsNewView, { hasSeenWhatsNew } from "./WhatsNewView";
+import WhatsNewView, { hasSeenWhatsNew, markWhatsNewSeen } from "./WhatsNewView";
 import Modal from "./Modal";
 import SummaryView from "./SummaryView";
 import {
@@ -144,6 +144,8 @@ import {
   doseNote as checkDose,
   hhmm,
   isTraumaArrest as traumaFromLog,
+  hasTraumaContext as traumaContextFromLog,
+  traumaModeWasSwitchedOff,
   isTraumaProcedureName,
   latestObservation as latestObservationIn,
   observationEntry,
@@ -1238,6 +1240,7 @@ const useArrestViewModel = () => {
   // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet. Read from the log, so it survives
   // a reload, an undo and a transfer (matches iOS).
   const isTraumaArrest = useMemo(() => traumaFromLog(events), [events]);
+  const hasTraumaContext = useMemo(() => traumaContextFromLog(events), [events]);
   // Drug reminders are quiet from the trauma entry until HOTT is marked as addressed or it's not trauma.
   const areDrugPromptsQuietened = useMemo(() => promptsQuietenedFromLog(events), [events]);
   const traumaInterventionCount = useMemo(() => traumaCountIn(events), [events]);
@@ -1686,13 +1689,16 @@ const useArrestViewModel = () => {
   const resumeArrest = () => {
     saveUndoState();
     setIsTimerPaused(false);
+    let pausedText = "";
     if (pauseStartTimeRef.current && startTimeRef.current) {
       const pausedDuration = Date.now() - pauseStartTimeRef.current.getTime();
       startTimeRef.current = new Date(startTimeRef.current.getTime() + pausedDuration);
+      // The pause isn't in the arrest time, so the record says how long it was (matches iOS).
+      pausedText = ` (paused ${TimeFormatter.format(pausedDuration / 1000)}; not counted in arrest, cycle or drug times)`;
     }
     pauseStartTimeRef.current = null;
     startTimer();
-    logEvent("Arrest Timer Resumed", EventType.Status);
+    logEvent(`Arrest Timer Resumed${pausedText}`, EventType.Status);
   };
 
   // Keep the screen on for the whole case; an auto-lock mid-arrest hides the cycle timer and prompts.
@@ -1744,18 +1750,15 @@ const useArrestViewModel = () => {
       const elapsed = totalArrestTime - cprCycleStartTimeRef.current;
       const due = elapsed >= cprCycleDuration;
       const newCprTime = due ? cprCycleDuration - (elapsed % cprCycleDuration) : cprCycleDuration - elapsed;
-      setRhythmCheckOverdue((prev) => {
-        if (due && prev === null) HapticManager.notification("warning");
-        return due ? elapsed - cprCycleDuration : null;
-      });
-      setCprTime(() => {
-        if (!due && newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
-        return newCprTime;
-      });
+      if (due && rhythmCheckOverdue === null) HapticManager.notification("warning");
+      if (!due && newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
+      setRhythmCheckOverdue(due ? elapsed - cprCycleDuration : null);
+      setCprTime(newCprTime);
     } else if (uiState !== UIState.Default) {
       setRhythmCheckOverdue(null);
     }
-  }, [totalArrestTime, arrestState, uiState, cprCycleDuration]);
+    // events: an undo restores the cycle start (a ref), so the overdue time is worked out again even while paused.
+  }, [totalArrestTime, arrestState, uiState, cprCycleDuration, events, rhythmCheckOverdue]);
 
   useEffect(() => {
     setCprTime(cprCycleDuration);
@@ -1898,7 +1901,12 @@ const useArrestViewModel = () => {
   const logTraumaProcedure = (procedure: string) => {
     saveUndoState();
     // Requesting critical care happens in medical arrests too, and after ROSC nothing should quieten prompts.
-    if (!isTraumaArrest && arrestState === ArrestState.Active && TRAUMA_MARKS_ARREST.has(procedure)) {
+    if (
+      !isTraumaArrest &&
+      !traumaModeWasSwitchedOff(events) &&
+      arrestState === ArrestState.Active &&
+      TRAUMA_MARKS_ARREST.has(procedure)
+    ) {
       logEvent(TRAUMA_ON_ENTRY, EventType.Status);
     }
     logEvent(traumaEntryText(procedure), EventType.Airway);
@@ -2112,7 +2120,9 @@ const useArrestViewModel = () => {
     if (arrestState !== ArrestState.Active) return false;
     saveUndoState();
     const isProcedure = isTraumaProcedureName(name);
-    if (!isTraumaArrest && TRAUMA_MARKS_ARREST.has(name)) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    if (!isTraumaArrest && !traumaModeWasSwitchedOff(events) && TRAUMA_MARKS_ARREST.has(name)) {
+      logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    }
     logAtStart(`${name} before eResus, time unknown (estimated)`, isProcedure ? EventType.Airway : EventType.Drug);
     return true;
   };
@@ -2780,6 +2790,7 @@ const useArrestViewModel = () => {
     lidocaineButtonDetail,
     dismissAdrenalinePrompt,
     isTraumaArrest,
+    hasTraumaContext,
     areDrugPromptsQuietened,
     isPaediatric: isPaediatricFrom(
       patientAgeCategory === null ? null : patientAgeCategory === PatientAgeCategory.Adult,
@@ -3458,7 +3469,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   onClose,
   onConfirmTOR,
 }) => {
-  const { resuscitationTime, timeOffset, initialRhythm, isTraumaArrest, isPaediatric: recordedPaediatric, currentRhythm, torCaution } =
+  const { resuscitationTime, timeOffset, initialRhythm, hasTraumaContext, isPaediatric: recordedPaediatric, currentRhythm, torCaution } =
     useArrest();
   // Null when nobody has recorded an age: then both sets of guidance show until Adult or Child is picked here.
   const [chosenPaediatric, setChosenPaediatric] = useState<boolean | null>(null);
@@ -3607,7 +3618,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         )}
 
         {/* The same ToR rules apply to traumatic arrest (JRCALC); the somatic criteria are met more often. */}
-        {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={isTraumaArrest} />}
+        {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={hasTraumaContext} />}
 
         <ActionButton
           title="Confirm TOR (Stop CPR)"
@@ -4614,6 +4625,13 @@ const usePushToTalk = (onVoiceTranscript: ((transcript: string) => void) | undef
   const [isHolding, setIsHolding] = useState(false);
   const [micFailed, setMicFailed] = useState(false);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // If the ring goes mid-hold, the timer mustn't start the microphone afterwards.
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    },
+    [],
+  );
   const startTalking = (e: React.PointerEvent) => {
     e.preventDefault();
     setIsPressed(true);
@@ -4699,22 +4717,43 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
           transform="rotate(-90 60 60)"
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span
-          className={`font-mono font-bold text-5xl ${
-            isPausedForCheck ? "text-gray-500 dark:text-gray-400" : isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"
-          }`}
-        >
-          {TimeFormatter.format(Math.max(0, cprTime))}
-        </span>
-        <span
-          className={`text-xs font-semibold uppercase tabular-nums ${isDue ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"}`}
-        >
-          {isDue ? `Check due +${TimeFormatter.format(rhythmCheckOverdue ?? 0)}` : isPausedForCheck ? "Paused" : "CPR Cycle"}
-        </span>
+      <div
+        className="absolute inset-0 flex flex-col items-center justify-center"
+        aria-label={
+          isDue
+            ? `Rhythm check overdue by ${spokenDuration(rhythmCheckOverdue ?? 0)}`
+            : isPausedForCheck
+              ? "CPR cycle paused for rhythm check"
+              : `${spokenDuration(Math.max(0, cprTime))} left in CPR cycle`
+        }
+      >
+        {isDue ? (
+          // Overdue: how late the check is comes first; the next cycle stays visible, smaller (matches iOS).
+          <>
+            <span className="text-xs font-bold uppercase text-tone-danger">Check due</span>
+            <span className="font-mono font-bold text-4xl text-tone-danger">+{TimeFormatter.format(rhythmCheckOverdue ?? 0)}</span>
+            <span className="text-xs font-semibold tabular-nums text-gray-500 dark:text-gray-400">
+              next {TimeFormatter.format(Math.max(0, cprTime))}
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={`font-mono font-bold text-5xl ${
+                isPausedForCheck ? "text-gray-500 dark:text-gray-400" : isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"
+              }`}
+            >
+              {TimeFormatter.format(Math.max(0, cprTime))}
+            </span>
+            {/* "Analysing", not "Paused", so it can't be mistaken for the arrest clock being paused. */}
+            <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
+              {isPausedForCheck ? "Analysing" : "CPR Cycle"}
+            </span>
+          </>
+        )}
       </div>
       {voiceAvailable && (isHolding || listener.isPushToTalkActive) && (
-        <PushToTalkRing transcript={listener.transcript} failed={micFailed && !listener.isPushToTalkActive} />
+        <PushToTalkRing transcript={listener.transcript} failed={(micFailed || isHolding) && !listener.isPushToTalkActive} />
       )}
     </div>
   );
@@ -5098,7 +5137,7 @@ const RoscView: React.FC<{
     logObservation,
     logDestination,
     totalArrestTime,
-    isTraumaArrest,
+    hasTraumaContext,
   } = useArrest();
   const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
   const [showDestination, setShowDestination] = useState(false);
@@ -5166,7 +5205,7 @@ const RoscView: React.FC<{
         </div>
       </div>
 
-      {isTraumaArrest && <HOTTCard compact />}
+      {hasTraumaContext && <HOTTCard compact />}
 
       <ChecklistView title="Post-ROSC Care" items={postROSCTasks} onToggle={toggleChecklistItemCompletion} />
 
@@ -5190,7 +5229,7 @@ const RoscView: React.FC<{
       <DestinationSheet
         isOpen={showDestination}
         onClose={() => setShowDestination(false)}
-        traumatic={isTraumaArrest}
+        traumatic={hasTraumaContext}
         onConfirm={logDestination}
       />
     </div>
@@ -5962,6 +6001,9 @@ const ArrestView: React.FC<{
       const result = performVoiceAction(action, voiceRun.time);
       if (result === "continue") {
         setVoiceRun({ ...voiceRun });
+      } else if ("skipped" in result) {
+        // Already on the record: left out, and the rest of the phrase still counts (matches iOS).
+        setVoiceRun({ ...voiceRun, index: voiceRun.index + 1, notes: [...voiceRun.notes, result.skipped] });
       } else if ("failure" in result) {
         setVoiceRun({ ...voiceRun, stoppedBecause: result.failure });
       } else {
@@ -6000,7 +6042,7 @@ const ArrestView: React.FC<{
   const performVoiceAction = (
     action: VoiceAction,
     time: number | null,
-  ): { summary: string; note?: string } | { failure: string } | "continue" => {
+  ): { summary: string; note?: string } | { failure: string } | { skipped: string } | "continue" => {
     const vm = viewModel;
     if (action.type === "undo") {
       if (!vm.canUndo) return { failure: "Nothing to undo." };
@@ -6090,7 +6132,7 @@ const ArrestView: React.FC<{
         // Chest procedures need a side; guessing one would put the wrong side on the record.
         if (!isTraumaProcedureName(action.procedure)) return { failure: `${action.procedure}: say left, right or both.` };
         const refusal = voiceRefusal(action.procedure, time);
-        if (refusal) return { failure: refusal };
+        if (refusal) return { skipped: refusal };
         // Only a definitive TCA intervention during the arrest marks it as traumatic (as logTraumaProcedure decides).
         const marksTrauma =
           !vm.isTraumaArrest && vm.arrestState === ArrestState.Active && TRAUMA_MARKS_ARREST.has(action.procedure);
@@ -7394,9 +7436,16 @@ const AppContent: React.FC = () => {
   ]);
 
   // After an update, a short tour, once. Never over a running or recovered arrest.
-  const [showWhatsNewOnLaunch, setShowWhatsNewOnLaunch] = useState(
-    () => !hasSeenWhatsNew() && arrestViewModel.arrestState === ArrestState.Pending,
-  );
+  // A fresh install gets the setup prompts instead; the tour is for people updating.
+  const [showWhatsNewOnLaunch, setShowWhatsNewOnLaunch] = useState(() => {
+    if (hasSeenWhatsNew()) return false;
+    const isExistingUser = !!localStorage.getItem("eResusSeenInstallInstructions") || !!localStorage.getItem("eResusSeenAccountPrompt") || hasRespondedToResearchTerms;
+    if (!isExistingUser) {
+      markWhatsNewSeen();
+      return false;
+    }
+    return arrestViewModel.arrestState === ArrestState.Pending;
+  });
 
   const previousArrestStateRef = useRef(arrestViewModel.arrestState);
   useEffect(() => {

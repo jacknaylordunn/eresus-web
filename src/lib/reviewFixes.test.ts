@@ -7,6 +7,8 @@ import {
   currentRhythm,
   currentRhythmLine,
   isPaediatric,
+  hasTraumaContext,
+  traumaModeWasSwitchedOff,
   isTraumaArrest,
   meetsTarget,
   torCaution,
@@ -175,5 +177,22 @@ describe("review fixes", () => {
     expect(checklistToggleEntry("Hypoxia", false, true)).toBe("Reversible cause Hypoxia: unticked");
     expect(checklistToggleEntry("**12-Lead ECG**", true, false)).toBe("12-Lead ECG: ticked");
     expect(checklistToggleEntry("12-Lead ECG", false, false)).toBe("12-Lead ECG: unticked");
+  });
+  it("keeps trauma off once switched off, and keeps the trauma context", () => {
+    const events = [
+      { timestamp: 40, message: "Pelvic binder", type: "airway" },
+      { timestamp: 30, message: TRAUMA_OFF_ENTRY, type: "status" },
+      { timestamp: 20, message: "Thoracostomy (bilateral)", type: "airway" },
+      { timestamp: 20, message: TRAUMA_ON_ENTRY, type: "status" },
+    ];
+    expect(isTraumaArrest(events)).toBe(false);
+    expect(traumaModeWasSwitchedOff(events)).toBe(true);
+    expect(hasTraumaContext(events)).toBe(true);
+  });
+
+  it("reads typed ages with units", () => {
+    expect(isPaediatric(null, "12y")).toBe(true);
+    expect(isPaediatric(null, "6 weeks")).toBe(true);
+    expect(isPaediatric(null, "45 years")).toBe(false);
   });
 });

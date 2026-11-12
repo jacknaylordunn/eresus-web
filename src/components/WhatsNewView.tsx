@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { BriefcaseMedical, Hand, Smartphone, Syringe, Timer } from "lucide-react";
 
 // Bump when the pages change, so the tour shows once more after an update (matches iOS WhatsNewView).
@@ -13,7 +13,7 @@ export const hasSeenWhatsNew = (): boolean => {
   }
 };
 
-const markSeen = () => {
+export const markWhatsNewSeen = () => {
   try {
     localStorage.setItem(WHATS_NEW_KEY, WHATS_NEW_VERSION);
   } catch {
@@ -35,6 +35,19 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
   voiceCommandsEnabled = false,
 }) => {
   const [page, setPage] = useState(0);
+  // Escape skips, like the Skip button.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        markWhatsNewSeen();
+        setPage(0);
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
   if (!isOpen) return null;
 
   const pages: Page[] = [
@@ -87,7 +100,7 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
   ];
 
   const finish = () => {
-    markSeen();
+    markWhatsNewSeen();
     setPage(0);
     onClose();
   };
@@ -99,7 +112,7 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
       <div className="flex items-center justify-between px-4 pt-4">
         <span className="font-semibold text-muted-foreground">What's New</span>
         {/* Big enough to find without looking, for anyone who opens the app mid-job. */}
-        <button onClick={finish} className="min-h-11 px-5 rounded-full bg-tone-tint text-tone-on-tint font-semibold">
+        <button autoFocus onClick={finish} className="min-h-11 px-5 rounded-full bg-tone-tint text-tone-on-tint font-semibold">
           Skip
         </button>
       </div>

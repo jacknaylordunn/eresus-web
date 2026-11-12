@@ -14,10 +14,10 @@ export interface LoggedEvent {
 // HOTT comes before drugs, so drug reminders stay quiet. The buttons still work.
 // Plain wording: the log may be read back long afterwards, by people who never saw the app.
 export const TRAUMA_ON_ENTRY = "Traumatic cardiac arrest mode selected";
-export const TRAUMA_OFF_ENTRY = "Traumatic cardiac arrest mode switched off";
+export const TRAUMA_OFF_ENTRY = "Traumatic cardiac arrest mode switched off: drug reminders back on";
 // Earlier wording, still read from older logs, restored sessions and transfers.
 const LEGACY_TRAUMA_ON = ["Traumatic cardiac arrest: HOTT first"];
-const LEGACY_TRAUMA_OFF = ["Not a traumatic arrest"];
+const LEGACY_TRAUMA_OFF = ["Not a traumatic arrest", "Traumatic cardiac arrest mode switched off"];
 // Older builds could turn drug prompts back on while staying a traumatic arrest.
 const LEGACY_PROMPTS_RESTORED = "HOTT addressed";
 
@@ -64,6 +64,16 @@ export const isTraumaArrest = (events: { message: string }[]): boolean => {
   }
   return false;
 };
+
+// Whether trauma was part of this arrest at any point: the mode was on, or a definitive TCA intervention was
+// logged. Switching the mode off to bring drug reminders back doesn't take away the trauma centre after ROSC or
+// the somatic criteria for ToR (matches iOS hasTraumaContext).
+export const hasTraumaContext = (events: { message: string }[]): boolean =>
+  events.some((e) => isTraumaOn(e.message) || TRAUMA_MARKS_ARREST.has(e.message));
+
+// Once the crew has switched the mode off, another intervention doesn't switch it back on.
+export const traumaModeWasSwitchedOff = (events: { message: string }[]): boolean =>
+  events.some((e) => isTraumaOff(e.message));
 
 // Drug reminders are quiet while traumatic arrest mode is on. Events are newest first.
 export const areDrugPromptsQuietened = (events: { message: string }[]): boolean => {
@@ -317,8 +327,10 @@ export const isPaediatric = (isAdultCategory: boolean | null, ageStr: string, is
   // A typed age first: the dosing category "≥12 years / Adult" also covers 12-year-olds, who are
   // children for ToR.
   const age = ageStr.trim().toLowerCase();
-  if (age.includes("month") || age.includes("newborn")) return true;
-  if (/^[+-]?\d+$/.test(age)) return Number(age) < 13;
+  if (["month", "week", "day", "newborn"].some((unit) => age.includes(unit))) return true;
+  // "12", "12y", "12 years": the leading number is the age in years.
+  const years = age.match(/^\d+/);
+  if (years) return Number(years[0]) < 13;
   if (isAdultCategory !== null) return isAdultCategory ? null : true;
   return null;
 };
