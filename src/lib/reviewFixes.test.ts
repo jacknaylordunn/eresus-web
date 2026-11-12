@@ -40,7 +40,8 @@ describe("review fixes", () => {
   it("takes paediatric from the age recorded", () => {
     expect(isPaediatric(null, "")).toBeNull();
     expect(isPaediatric(false, "")).toBe(true); // 12 months
-    expect(isPaediatric(true, "")).toBe(false); // adult
+    expect(isPaediatric(true, "")).toBeNull(); // adult dosing category starts at 12
+    expect(isPaediatric(true, "15")).toBe(true);
     expect(isPaediatric(null, "6 months")).toBe(true);
     expect(isPaediatric(null, "Newborn")).toBe(true);
     expect(isPaediatric(null, "17")).toBe(true);

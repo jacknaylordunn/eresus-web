@@ -307,10 +307,12 @@ export const doseNote = (drug: string, dose: string | null, expected: string | n
  */
 export const isPaediatric = (isAdultCategory: boolean | null, ageStr: string, isNewborn = false): boolean | null => {
   if (isNewborn) return true;
-  if (isAdultCategory !== null) return !isAdultCategory;
+  // A typed age first: the dosing category "≥12 years / Adult" also covers 12 to 17-year-olds, who are
+  // children for ToR.
   const age = ageStr.trim().toLowerCase();
   if (age.includes("month") || age.includes("newborn")) return true;
   if (/^[+-]?\d+$/.test(age)) return Number(age) < 18;
+  if (isAdultCategory !== null) return isAdultCategory ? null : true;
   return null;
 };
 
