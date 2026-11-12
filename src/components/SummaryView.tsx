@@ -95,7 +95,7 @@ const SummaryView: React.FC<
             />
           )}
           {s.vod && <Row label="Death verified" value={s.time(s.vod)} />}
-          <Row label="Time from arrest confirmed" value={s.format(input.totalTime)} />
+          <Row label={`Time from ${s.timedFrom}`} value={s.format(input.totalTime)} />
         </div>
 
         <div className={`${CARD} flex`}>

@@ -98,13 +98,15 @@ const PHRASES: [string, Kind][] = [
   ...["non shockable", "nonshockable", "not shockable", "unshockable", "no shock advised", "shock not advised"].map(
     (p): [string, Kind] => [p, { type: "rhythm", rhythm: "Non-shockable" }],
   ),
-  ...["shock", "shocks", "shocked", "shocking", "shock delivered", "shock given", "delivered shock", "defib", "defibbed", "defibrillated"].map(
+  // Not "shocking" (said before the shock, while standing clear) or bare "defib" ("defib pads on").
+  ...["shock", "shocks", "shocked", "shock delivered", "shock given", "delivered shock", "defibbed", "defibrillated"].map(
     (p): [string, Kind] => [p, { type: "shock" }],
   ),
-  ...[
-    "rosc", "r o s c", "rosk", "return of spontaneous circulation", "return of circulation", "got a pulse",
-    "got pulse", "pulse is back", "pulse back", "we have a pulse", "pulse present",
-  ].map((p): [string, Kind] => [p, { type: "rosc" }]),
+  // Only unmistakable ROSC wording: pulse phrases are as often a question or a check in progress
+  // ("have we got a pulse", "pulse present?"), and ROSC changes the whole screen.
+  ...["rosc", "r o s c", "rosk", "return of spontaneous circulation", "return of circulation"].map(
+    (p): [string, Kind] => [p, { type: "rosc" }],
+  ),
   ...["undo", "scratch that", "cancel that", "delete that", "remove that", "ignore that", "that is wrong"].map(
     (p): [string, Kind] => [p, { type: "undo" }],
   ),
@@ -193,7 +195,14 @@ const PHRASES: [string, Kind][] = [
 
 // Words that make a phrase a suggestion rather than a record (matches iOS suggestionWords).
 const SUGGESTION_WORDS = new Set(["consider", "considering", "suggest", "suggested", "recommend", "recommended"]);
-const QUESTION_STARTS = new Set(["is", "are", "should", "do", "does", "did", "can", "could", "what", "why", "when", "how", "who", "shall", "has"]);
+const QUESTION_STARTS = new Set([
+  "is", "are", "should", "do", "does", "did", "can", "could", "what", "why", "when", "how", "who", "shall", "has", "have",
+  "any", "anyone", "anybody",
+]);
+// A question that starts later ("okay, is that VF?").
+const QUESTION_PAIRS: [string, string][] = [
+  ["is", "that"], ["is", "it"], ["is", "this"], ["is", "there"], ["have", "we"], ["do", "we"], ["did", "we"], ["are", "we"],
+];
 
 // Words near a mention that mean it hasn't happened (yet).
 const NOT_GIVEN_BEFORE = new Set([
@@ -207,14 +216,15 @@ const INSTRUCTION_AFTER = new Set(["please"]);
 // Small words that can sit between an action and its number ("ETCO2 is 3.8", "adrenaline given 1 mg").
 const FILLERS = new Set(["is", "of", "was", "now", "about", "around", "reading", "given", "at"]);
 
-// When the arrest was confirmed. Kept narrow: "on scene" can mean arrival before the arrest, which would
-// wrongly lengthen the ToR clock. "CPR started" is accepted because crews say it, but never alongside
-// bystander or family wording, and the banner reads back what it was taken to mean.
+// When the arrest was confirmed by the first ambulance resource. Kept narrow: "on scene" can mean arrival
+// before the arrest, and "CPR started" or "been going" often means bystander CPR, either of which would wrongly
+// lengthen the ToR clock. The banner reads back what it was taken to mean.
 const STARTED_ANCHORS = [
-  "cpr started", "started cpr", "compressions started", "started compressions",
   "arrest confirmed", "confirmed arrest", "confirmed the arrest", "confirmed cardiac arrest", "cardiac arrest confirmed",
   "resus started", "started resus", "started the resus", "resuscitation started", "started resuscitation",
-  "been going",
+  // CPR started by a crew or CFR is the first ambulance resource confirming the arrest; bare "CPR started" isn't.
+  "crew started cpr", "cfr started cpr", "we started cpr", "crew started compressions", "cfr started compressions",
+  "we started compressions",
 ];
 // Words that make a count history rather than something just done ("2 shocks before we arrived").
 const HISTORY_MARKERS = ["before", "already", "earlier", "previously", "prior", "so far", "last"];
@@ -223,6 +233,7 @@ const DOWNTIME_PHRASES = ["downtime", "down time", "down for", "no flow", "noflo
 const DOWNTIME_WITH_STARTED = ["family", "public", "found", "999", "call", "called"];
 const COUNT_WORDS: Record<string, number> = { once: 1, twice: 2, thrice: 3 };
 
+const ACCESS_WORDS = new Set(["access", "cannula", "cannulated", "sited", "placed", "inserted", "established", "line"]);
 const ACCESS_FAILURE = new Set(["failed", "fail", "unsuccessful", "missed", "tissued", "blown", "lost"]);
 
 const UNITS: [string, string][] = [
@@ -504,6 +515,10 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
   const all = normalise(transcript);
   if (all.length === 0) return nothing("nothing");
   if (QUESTION_STARTS.has(all[0])) return nothing("question");
+  const opening = all.slice(0, 4);
+  if (opening.some((w, i) => i + 1 < opening.length && QUESTION_PAIRS.some(([a, b]) => a === w && b === opening[i + 1]))) {
+    return nothing("question");
+  }
   // The app's own spoken prompts ("Consider adrenaline", "Consider second dose of amiodarone") can be picked
   // up by hands-free listening; a suggestion is never a record that something was given.
   if (all.some((w) => SUGGESTION_WORDS.has(w))) return nothing("notGiven");
@@ -731,6 +746,14 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
         const window = tokens.slice(Math.max(0, m.start - 3), m.end + 3);
         const successful = !window.some((w) => ACCESS_FAILURE.has(w)) && tokens[m.start - 1] !== "no";
         const gaugeQuantity = m.quantities.find((q) => q.unit === "G");
+        // "Adrenaline 1 mg IV", "IV fluids": the route a drug went by, not new access. Access is only
+        // logged beside a drug when it's said outright ("IO in", "IV access", a gauge).
+        const besideDrug =
+          kept.some((o) => (o.kind.type === "drug" || o.kind.type === "otherDrug") && gapBetween(tokens, o, m) <= 3) ||
+          window.some((w) => w.startsWith("fluid"));
+        const after = tokens.slice(m.end, Math.min(tokens.length, m.end + 2));
+        const saysAccess = window.some((w) => ACCESS_WORDS.has(w)) || after.includes("in") || gaugeQuantity !== undefined;
+        if (besideDrug && !saysAccess) break;
         actions.push({
           type: "access",
           route: kind.route,
@@ -914,9 +937,9 @@ const reading = (kind: SaidReading, tokens: string[], span: { start: number; end
       // Glucose near a drug unit or an instruction is the drug, not a BM ("glucose 10 percent 100 ml").
       if (kind === "glucose" && tokens.slice(Math.max(0, span.start - 3), found.at + 4).some((t) => GLUCOSE_DRUG_WORDS.has(t))) return null;
       const v = found.value;
-      if (kind === "spo2") return within(v, 50, 100) ? `${Math.trunc(v)}%` : null;
+      if (kind === "spo2") return within(v, 1, 100) ? `${Math.trunc(v)}%` : null;
       if (kind === "glucose") return within(v, 0.5, 50) ? `${formatNumber(v)} mmol/L` : null;
-      return within(v, 25, 43) ? `${formatNumber(v)} °C` : null;
+      return within(v, 13, 45) ? `${formatNumber(v)} °C` : null;
     }
   }
 };

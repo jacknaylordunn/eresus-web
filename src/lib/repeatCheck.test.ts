@@ -1,7 +1,7 @@
 // Mirrors RepeatEntryTests in eResusTests/TraumaAndROSCTests.swift (iOS).
 import { describe, expect, it } from "vitest";
 import { traumaEntryText } from "./arrestRecord";
-import { lastEntry, loggedAt, repeatCheck, repeatMessage, voiceRepeatRefusal, type LoggedEntry } from "./repeatCheck";
+import { FLUIDS_AND_BLOOD, lastEntry, loggedAt, repeatCheck, voiceRepeatRefusal, type LoggedEntry } from "./repeatCheck";
 
 const NOW = 1_800_000_000; // wall-clock seconds
 // Newest first, as the view model keeps them; logged "now" unless a clock is given.
@@ -9,6 +9,10 @@ const log = (events: LoggedEntry[], message: string, clock = NOW, timestamp = 0)
   { timestamp, message, clock },
   ...events,
 ];
+const hhmmAt = (seconds: number) => {
+  const at = new Date(seconds * 1000);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+};
 
 describe("repeat entries", () => {
   it("catches a double tap and asks about a repeat", () => {
@@ -16,22 +20,25 @@ describe("repeat entries", () => {
     expect(repeatCheck(events, "Adrenaline", NOW)).toEqual({ kind: "new" });
     events = log(events, "Adrenaline (1mg) Given – Dose 1");
     expect(repeatCheck(events, "Adrenaline", NOW).kind).toBe("doubleTap");
-    const later = repeatCheck(events, "Adrenaline", NOW + 20);
-    expect(later.kind).toBe("confirm");
-    if (later.kind === "confirm") {
-      expect(later.ago).toBeCloseTo(20, 0);
-      expect(repeatMessage("Adrenaline", later.ago, later.at)).toBe("Adrenaline was logged 20 seconds ago.");
-    }
+    expect(repeatCheck(events, "Adrenaline", NOW + 20)).toEqual({
+      kind: "confirm",
+      message: "Adrenaline was logged 20 seconds ago.",
+    });
+    // Arrest drugs are checked for two minutes, other things for one.
+    expect(repeatCheck(events, "Adrenaline", NOW + 100).kind).toBe("confirm");
     expect(repeatCheck(events, "Adrenaline", NOW + 200)).toEqual({ kind: "new" });
     // Other drugs and amiodarone are tracked on their own.
     expect(repeatCheck(events, "Amiodarone", NOW)).toEqual({ kind: "new" });
+    events = log(events, "Atropine Given");
+    expect(repeatCheck(events, "Atropine", NOW + 100)).toEqual({ kind: "new" });
   });
 
   it("falls back to the arrest clock for entries without a wall-clock time", () => {
     const events: LoggedEntry[] = [{ timestamp: 100, message: "Lidocaine Given – Dose 1" }];
     expect(repeatCheck(events, "Lidocaine", NOW, 101).kind).toBe("doubleTap");
     expect(repeatCheck(events, "Lidocaine", NOW, 130).kind).toBe("confirm");
-    expect(repeatCheck(events, "Lidocaine", NOW, 200).kind).toBe("new");
+    expect(repeatCheck(events, "Lidocaine", NOW, 200).kind).toBe("confirm");
+    expect(repeatCheck(events, "Lidocaine", NOW, 230).kind).toBe("new");
   });
 
   it("doesn't count similar names", () => {
@@ -42,15 +49,43 @@ describe("repeat entries", () => {
 
   it("always asks about a second TXA, with the time it was given", () => {
     const events = log([], "Tranexamic acid (1g) Given");
-    const check = repeatCheck(events, "Tranexamic acid", NOW + 900);
-    expect(check.kind).toBe("confirm");
-    if (check.kind !== "confirm") return;
-    expect(check.at).not.toBeNull();
-    const message = repeatMessage("Tranexamic acid", 900, check.at);
-    expect(message).toMatch(/^Tranexamic acid was logged at \d{2}:\d{2}\.$/);
-    const at = new Date(NOW * 1000);
-    const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-    expect(message).toBe(`Tranexamic acid was logged at ${hhmm}.`);
+    expect(repeatCheck(events, "Tranexamic acid", NOW + 900)).toEqual({
+      kind: "confirm",
+      message: `Tranexamic acid was logged at ${hhmmAt(NOW)}.`,
+    });
+  });
+
+  it("treats thrombolytics as single-dose", () => {
+    const events = log([], "Tenecteplase Given");
+    expect(repeatCheck(events, "Tenecteplase", NOW + 900).kind).toBe("confirm");
+  });
+
+  it("counts TXA recorded before eResus", () => {
+    const events = log([], "Tranexamic acid before eResus, time unknown (estimated)", NOW, 0);
+    expect(repeatCheck(events, "Tranexamic acid", NOW + 30)).toEqual({
+      kind: "confirm",
+      message: "Tranexamic acid was recorded as given before eResus.",
+    });
+  });
+
+  it("never silently drops fluids or blood", () => {
+    const events = log([], "Whole blood Given");
+    expect(repeatCheck(events, "Whole blood", NOW).kind).toBe("confirm");
+    expect(FLUIDS_AND_BLOOD.has("O-negative blood")).toBe(true);
+    expect(FLUIDS_AND_BLOOD.has("Tranexamic acid")).toBe(false);
+  });
+
+  it("asks about a third antiarrhythmic", () => {
+    let events = log([], "Amiodarone (300mg) Given – Dose 1", NOW - 600);
+    events = log(events, "Amiodarone (150mg) Given – Dose 2", NOW - 300);
+    expect(repeatCheck(events, "Amiodarone", NOW + 600, 0, { amiodarone: 2 })).toEqual({
+      kind: "confirm",
+      message: `Amiodarone has already been given twice (at ${hhmmAt(NOW - 600)} and ${hhmmAt(NOW - 300)}). A third dose is outside the usual 2-dose course.`,
+    });
+    // Without the count, it's just an old entry.
+    expect(repeatCheck(events, "Amiodarone", NOW + 600)).toEqual({ kind: "new" });
+    const lidocaine = log(log([], "Lidocaine Given – Dose 1"), "Lidocaine Given – Dose 2");
+    expect(repeatCheck(lidocaine, "Lidocaine", NOW + 900, 0, { lidocaine: 2 }).kind).toBe("confirm");
   });
 
   it("tracks trauma procedures, including voice and custom entries", () => {
@@ -71,7 +106,7 @@ describe("voice repeat refusal", () => {
       "Adrenaline was just logged, so it wasn't logged twice.",
     );
     expect(voiceRepeatRefusal(events, "Adrenaline", null, NOW + 10)).toBe(
-      "Adrenaline was logged 10 seconds ago. Not logged twice: if this is another, log it by hand.",
+      "Adrenaline was logged 10 seconds ago. Not logged: if this is another, log it by hand.",
     );
     expect(voiceRepeatRefusal(events, "Adrenaline", null, NOW + 300)).toBeNull();
     expect(voiceRepeatRefusal(events, "Amiodarone", null, NOW + 1)).toBeNull();

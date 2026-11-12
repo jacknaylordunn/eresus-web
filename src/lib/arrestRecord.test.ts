@@ -105,7 +105,11 @@ describe("post-ROSC observations", () => {
     expect(observationValue("spo2", "96")).toEqual({ value: "96%" });
     expect(observationValue("temperature", "36,4")).toEqual({ value: "36.4 °C" });
     expect(observationValue("glucose", "5.2")).toEqual({ value: "5.2 mmol/L" });
-    expect(observationValue("spo2", "120")).toEqual({ error: "Enter a value between 50 and 100." });
+    expect(observationValue("spo2", "120")).toEqual({ error: "Enter a value between 1 and 100." });
+    // Very low sats and deep hypothermia are real readings.
+    expect(observationValue("spo2", "40")).toEqual({ value: "40%" });
+    expect(observationValue("temperature", "18")).toEqual({ value: "18 °C" });
+    expect(observationValue("temperature", "12")).toEqual({ error: "Enter a value between 13 and 45." });
     expect(observationValue("spo2", "")).toBeNull();
   });
 });

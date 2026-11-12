@@ -14,6 +14,8 @@ export interface LoggedEvent {
 // HOTT comes before drugs, so drug reminders stay quiet. The buttons still work.
 export const TRAUMA_ON_ENTRY = "Traumatic cardiac arrest: HOTT first, drug prompts quietened";
 export const TRAUMA_OFF_ENTRY = "Not a traumatic arrest: drug prompts restored";
+// Still a traumatic arrest, but HOTT has been dealt with and the crew moves on to standard ALS drugs.
+export const TRAUMA_PROMPTS_RESTORED_ENTRY = "HOTT addressed: drug prompts restored";
 
 export const TRAUMA_EARLY_ACTIONS = ["Enhanced / critical care requested"];
 
@@ -34,11 +36,32 @@ export const TRAUMA_GROUPS: { title: string; procedures: string[] }[] = [
 
 const TRAUMA_NAMES = new Set([...TRAUMA_EARLY_ACTIONS, ...TRAUMA_GROUPS.flatMap((g) => g.procedures)]);
 
+// Interventions that only make sense in a traumatic arrest, so logging one marks it as such. Packing a scalp
+// wound or splinting a leg happens in medical arrests after a fall too, so they don't.
+export const TRAUMA_MARKS_ARREST = new Set([
+  ...(TRAUMA_GROUPS.find((g) => g.title === "Chest")?.procedures ?? []),
+  "Thoracotomy",
+  "REBOA",
+  "Pelvic binder",
+  "Tourniquet",
+]);
+
 export const isTraumaProcedureName = (name: string): boolean => TRAUMA_NAMES.has(name);
 
 // Read from the log (newest first), so it survives a reload, an undo and a transfer without extra state.
 export const isTraumaArrest = (events: { message: string }[]): boolean => {
   for (const event of events) {
+    if (event.message.startsWith(TRAUMA_ON_ENTRY)) return true;
+    if (event.message.startsWith(TRAUMA_OFF_ENTRY)) return false;
+  }
+  return false;
+};
+
+// Drug reminders are quiet from the trauma entry until HOTT is marked as addressed or it's not trauma.
+// Events are newest first.
+export const areDrugPromptsQuietened = (events: { message: string }[]): boolean => {
+  for (const event of events) {
+    if (event.message.startsWith(TRAUMA_PROMPTS_RESTORED_ENTRY)) return false;
     if (event.message.startsWith(TRAUMA_ON_ENTRY)) return true;
     if (event.message.startsWith(TRAUMA_OFF_ENTRY)) return false;
   }
@@ -183,12 +206,29 @@ export const latestObservation = (
 export const completeTask = <T extends { name: string; isCompleted: boolean }>(tasks: T[], name: string): T[] =>
   tasks.map((task) => (task.name === name ? { ...task, isCompleted: true } : task));
 
+// Whether a reading meets the post-ROSC target its checklist row names. Readings without a target count as done.
+export const meetsTarget = (observation: ROSCObservation, value: string): boolean => {
+  const numbers = value
+    .split(/[^0-9.]+/)
+    .filter((part) => part !== "")
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  switch (observation) {
+    case "bp":
+      return numbers.length > 0 && numbers[0] > 100;
+    case "spo2":
+      return numbers.length > 0 && numbers[0] >= 94 && numbers[0] <= 98;
+    default:
+      return true;
+  }
+};
+
 export const ECG_RESULTS = ["STEMI", "No STEMI", "Recorded, not yet interpreted"];
 
 const OBSERVATION_RANGES: Partial<Record<ROSCObservation, [number, number]>> = {
-  spo2: [50, 100],
+  spo2: [1, 100],
   glucose: [0.5, 50],
-  temperature: [25, 43],
+  temperature: [13, 45],
 };
 
 const parseNumber = (text: string): number | null => {
@@ -256,4 +296,65 @@ export const doseNote = (drug: string, dose: string | null, expected: string | n
     text.toLowerCase().replace(/ /g, "").replace(/micrograms/g, "mcg").replace(/milligrams/g, "mg");
   if (normalise(dose) === normalise(expected)) return null;
   return `Check the ${drug} dose: ${isAdult ? "usual adult dose" : "calculated dose for this age"} is ${expected}.`;
+};
+
+// MARK: Patient and ToR
+
+/**
+ * Whether the patient is a child (under 18), from the age recorded. Null when no age has been recorded, so the
+ * ToR sheet can ask then rather than guess adult (matches iOS isPaediatric).
+ * @param isAdultCategory whether the drug-calculator age category is adult; null when none is set
+ */
+export const isPaediatric = (isAdultCategory: boolean | null, ageStr: string, isNewborn = false): boolean | null => {
+  if (isNewborn) return true;
+  if (isAdultCategory !== null) return !isAdultCategory;
+  const age = ageStr.trim().toLowerCase();
+  if (age.includes("month") || age.includes("newborn")) return true;
+  if (/^[+-]?\d+$/.test(age)) return Number(age) < 18;
+  return null;
+};
+
+const TOR_RHYTHMS = ["Asystole", "PEA", "VF", "VT"];
+
+// The last rhythm named, as one of the ToR card names. Null if none has been named yet. Events are newest first.
+export const currentRhythm = (events: { message: string; type: string }[]): string | null => {
+  for (const event of events) {
+    if (event.type !== "rhythm") continue;
+    const name = TOR_RHYTHMS.find((r) => event.message.includes(r));
+    if (name) return name;
+  }
+  return null;
+};
+
+export const currentRhythmLine = (current: string | null, initial: string | null): string =>
+  `Current rhythm: ${current ?? "not named yet"}${initial ? `; initial rhythm: ${initial}` : ""}.`;
+
+export const HYPOTHERMIA_TOR_CAUTION =
+  "Hypothermia recorded: continue resuscitation and convey for rewarming unless senior advice says otherwise.";
+
+// Shown at the top of the ToR sheet when something recorded argues for continuing.
+export const torCaution = (causes: { name: string; hypothermiaStatus?: string }[]): string | null => {
+  const status = causes.find((c) => c.name === "Hypothermia")?.hypothermiaStatus;
+  return status === "moderate" || status === "severe" ? HYPOTHERMIA_TOR_CAUTION : null;
+};
+
+export const TOR_ADULT_EXCLUSIONS =
+  "Continue resuscitation in hypothermia, suspected overdose or poisoning, and pregnancy, unless senior advice says otherwise.";
+
+// What the dose dialog's age category records as the patient's age: years as a bare number ("6"), months kept
+// as months ("6 months"), so an infant isn't recorded as 6 years old. Null records nothing (adult, at birth).
+export const ageTextForCategory = (category: string, isAdult: boolean): string | null => {
+  if (isAdult) return null;
+  if (category.endsWith(" years")) return category.replace(/\D/g, "");
+  if (category.endsWith(" months") || category.endsWith(" month")) return category;
+  return null;
+};
+
+// MARK: Checklist wording
+
+// Plain words for the record: "checked" could be read as "excluded" or "target achieved".
+export const checklistToggleEntry = (name: string, isCompleted: boolean, isCause: boolean): string => {
+  const plain = name.split("**").join("");
+  const status = isCompleted ? (isCause ? "considered" : "ticked") : "unticked";
+  return `${isCause ? "Reversible cause " : ""}${plain}: ${status}`;
 };

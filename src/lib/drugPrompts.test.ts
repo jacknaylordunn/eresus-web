@@ -1,11 +1,11 @@
 // Mirrors DrugButtonDetailTests in eResusTests/TraumaAndROSCTests.swift (iOS).
 import { describe, expect, it } from "vitest";
-import { adrenalineDismissal, drugPrompts, type DrugPromptInput } from "./drugPrompts";
+import { adrenalineDismissal, drugPrompts, promptHidesAfterAnalysis, type DrugPromptInput } from "./drugPrompts";
 
 // A started arrest with nothing given yet.
 const started = (): DrugPromptInput => ({
   isAdrenalineAvailable: true,
-  isTraumaArrest: false,
+  areDrugPromptsQuietened: false,
   hideAdrenalinePrompt: false,
   hideAdrenalineDueWarning: false,
   hideAmiodaronePrompt: false,
@@ -49,11 +49,11 @@ const repeat = (s: DrugPromptInput, n: number, f: (s: DrugPromptInput) => DrugPr
   Array.from({ length: n }).reduce<DrugPromptInput>((acc) => f(acc), s);
 
 describe("drug button detail", () => {
-  it("adrenaline shows Give now, then the countdown, then Due now", () => {
+  it("adrenaline shows 1st dose due, then the countdown, then Due now", () => {
     let s = started();
     expect(drugPrompts(s).adrenalineButtonDetail).toBeNull();
     s = nonShockable(s);
-    expect(drugPrompts(s).adrenalineButtonDetail).toBe("Give now");
+    expect(drugPrompts(s).adrenalineButtonDetail).toBe("1st dose due");
     expect(drugPrompts(s).isAdrenalineHighlighted).toBe(true);
     s = giveAdrenaline(s);
     expect(drugPrompts(s).adrenalineButtonDetail).toBe("Next in 04:00");
@@ -79,12 +79,22 @@ describe("drug button detail", () => {
     expect(drugPrompts(s).adrenalineButtonDetail).toBe("Next in 04:00");
   });
 
-  it("Not now on Give now hides the prompt rather than the due warning", () => {
+  it("Not now on 1st dose due hides the prompt rather than the due warning", () => {
     let s = nonShockable(started());
     expect(adrenalineDismissal(drugPrompts(s))).toBe("prompt");
     s = { ...s, hideAdrenalinePrompt: true };
     expect(drugPrompts(s).adrenalineButtonDetail).toBeNull();
     expect(drugPrompts(s).isAdrenalineHighlighted).toBe(false);
+  });
+
+  // Mirrors RepeatEntryTests.notNowLastsUntilTheNextRhythmCheck (iOS).
+  it("Not now on a due adrenaline lasts until the next rhythm check", () => {
+    let s: DrugPromptInput = { ...giveAdrenaline(started()), timeUntilAdrenaline: 0 };
+    expect(adrenalineDismissal(drugPrompts(s))).toBe("dueWarning");
+    s = { ...s, hideAdrenalineDueWarning: true };
+    expect(drugPrompts(s).isAdrenalineHighlighted).toBe(false);
+    s = { ...s, ...promptHidesAfterAnalysis() };
+    expect(drugPrompts(s).isAdrenalineDue).toBe(true);
   });
 
   it("amiodarone shows which dose is due", () => {
@@ -109,7 +119,7 @@ describe("drug button detail", () => {
   });
 
   it("trauma quietens the buttons", () => {
-    let s: DrugPromptInput = { ...started(), isTraumaArrest: true };
+    let s: DrugPromptInput = { ...started(), areDrugPromptsQuietened: true };
     s = nonShockable(s);
     expect(drugPrompts(s).adrenalineButtonDetail).toBeNull();
     s = repeat(s, 3, shock);

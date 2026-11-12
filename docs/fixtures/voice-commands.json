@@ -810,13 +810,9 @@
  {
   "heard": "got a pulse",
   "expected": {
-   "actions": [
-    {
-     "type": "rosc"
-    }
-   ],
+   "actions": [],
    "time": null,
-   "reason": null
+   "reason": "nothing"
   }
  },
  {
@@ -1390,6 +1386,14 @@
  {
   "heard": "CPR started 10 minutes ago, 2 shocks, adrenaline 4 minutes ago",
   "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "Arrest confirmed 10 minutes ago, 2 shocks, adrenaline 4 minutes ago",
+  "expected": {
    "actions": [
     {
      "type": "started",
@@ -1657,7 +1661,7 @@
   "expected": {
    "actions": [],
    "time": null,
-   "reason": "downtime"
+   "reason": "nothing"
   }
  },
  {
@@ -2360,6 +2364,14 @@
  {
   "heard": "CPR started 10 minutes ago, 2 shocks, TXA given",
   "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "Arrest confirmed 10 minutes ago, 2 shocks, TXA given",
+  "expected": {
    "actions": [
     {
      "type": "started",
@@ -2667,6 +2679,58 @@
    "actions": [],
    "time": null,
    "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "have we got a pulse",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "okay is that VF",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "stand clear shocking",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "adrenaline 1 mg IV",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "amiodarone 300 IO",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
   }
  }
 ]

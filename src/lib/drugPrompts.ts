@@ -4,7 +4,8 @@ import { TimeFormatter } from "@/utils/time";
 
 export interface DrugPromptInput {
   isAdrenalineAvailable: boolean;
-  isTraumaArrest: boolean;
+  /** Traumatic arrest with HOTT not yet addressed. */
+  areDrugPromptsQuietened: boolean;
   hideAdrenalinePrompt: boolean;
   hideAdrenalineDueWarning: boolean;
   hideAmiodaronePrompt: boolean;
@@ -35,11 +36,11 @@ export interface DrugPrompts {
 }
 
 export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
-  // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet.
+  // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet until HOTT is addressed.
   const shouldShowAdrenalinePrompt =
     s.isAdrenalineAvailable &&
     !s.hideAdrenalinePrompt &&
-    !s.isTraumaArrest &&
+    !s.areDrugPromptsQuietened &&
     !(s.timeUntilAdrenaline !== null && s.timeUntilAdrenaline <= 0) &&
     s.adrenalineCount === 0 &&
     (s.drugTimingShockCount >= 3 || s.lastRhythmNonShockable);
@@ -47,13 +48,13 @@ export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
   const isAdrenalineDue =
     s.isAdrenalineAvailable &&
     !s.hideAdrenalineDueWarning &&
-    !s.isTraumaArrest &&
+    !s.areDrugPromptsQuietened &&
     s.timeUntilAdrenaline !== null &&
     s.timeUntilAdrenaline <= 0;
 
   // Not once lidocaine has been chosen, and not while drugs are withheld for severe hypothermia.
   const shouldShowAmiodaroneFirstDosePrompt =
-    !s.isTraumaArrest &&
+    !s.areDrugPromptsQuietened &&
     s.drugTimingShockCount >= 3 &&
     s.amiodaroneCount === 0 &&
     !s.hideAmiodaronePrompt &&
@@ -61,7 +62,7 @@ export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
     s.isAdrenalineAvailable;
 
   const shouldShowAmiodaroneReminder =
-    !s.isTraumaArrest &&
+    !s.areDrugPromptsQuietened &&
     s.shockCountForAmiodarone1 !== null &&
     s.amiodaroneCount === 1 &&
     s.shockCount >= s.shockCountForAmiodarone1 + 2 &&
@@ -70,7 +71,7 @@ export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
 
   // RCUK 2025: if lidocaine is used instead of amiodarone, a further 50 mg after five defibrillation attempts.
   const shouldShowLidocaineReminder =
-    !s.isTraumaArrest &&
+    !s.areDrugPromptsQuietened &&
     s.antiarrhythmicGiven === "lidocaine" &&
     s.lidocaineCount === 1 &&
     s.drugTimingShockCount >= 5 &&
@@ -80,7 +81,7 @@ export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
   // The line under the Adrenaline button: the countdown, or why it's lit.
   let adrenalineButtonDetail: string | null = null;
   if (s.isAdrenalineAvailable) {
-    if (shouldShowAdrenalinePrompt) adrenalineButtonDetail = "Give now";
+    if (shouldShowAdrenalinePrompt) adrenalineButtonDetail = "1st dose due";
     else if (isAdrenalineDue) adrenalineButtonDetail = "Due now";
     else if (s.timeUntilAdrenaline !== null && s.timeUntilAdrenaline > 0)
       adrenalineButtonDetail = `Next in ${TimeFormatter.format(s.timeUntilAdrenaline)}`;
@@ -107,3 +108,6 @@ export const drugPrompts = (s: DrugPromptInput): DrugPrompts => {
 /** "Not now" on a lit Adrenaline button: hides the prompt if it's showing, otherwise the due warning. */
 export const adrenalineDismissal = (prompts: Pick<DrugPrompts, "shouldShowAdrenalinePrompt">) =>
   prompts.shouldShowAdrenalinePrompt ? ("prompt" as const) : ("dueWarning" as const);
+
+/** What a rhythm analysis clears: "Not now" lasts until the next rhythm check, not the rest of the arrest. */
+export const promptHidesAfterAnalysis = () => ({ hideAdrenalinePrompt: false, hideAdrenalineDueWarning: false });

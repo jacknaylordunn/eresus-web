@@ -17,7 +17,7 @@ import {
   type DrugGroupKind,
   type ROSCObservation,
 } from "@/lib/arrestRecord";
-import { repeatMessage, type RepeatCheck } from "@/lib/repeatCheck";
+import { type RepeatCheck } from "@/lib/repeatCheck";
 
 const ROW =
   "w-full text-left px-3 py-2 min-h-11 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white";
@@ -184,11 +184,13 @@ export const OtherDrugsSheet: React.FC<{
 
 // JRCALC: in traumatic cardiac arrest, treat hypovolaemia, oxygenation, tension pneumothorax and tamponade by
 // clinical priority (not in order) before chest compressions and ALS drugs.
-export const HOTTCard: React.FC<{ compact?: boolean; onOpen?: () => void; onNotTrauma?: () => void }> = ({
-  compact = false,
-  onOpen,
-  onNotTrauma,
-}) => (
+export const HOTTCard: React.FC<{
+  compact?: boolean;
+  onOpen?: () => void;
+  // Still traumatic, but HOTT is dealt with: back to standard ALS drug prompts without recording "not trauma".
+  onRestorePrompts?: () => void;
+  onNotTrauma?: () => void;
+}> = ({ compact = false, onOpen, onRestorePrompts, onNotTrauma }) => (
   <div className="p-4 rounded-xl bg-tone-tint text-tone-on-tint space-y-2">
     <div className="flex items-center gap-2 font-bold">
       <Bandage size={18} aria-hidden="true" />
@@ -201,14 +203,24 @@ export const HOTTCard: React.FC<{ compact?: boolean; onOpen?: () => void; onNotT
         rapidly and do interventions en route.
       </p>
     )}
-    {(onOpen || onNotTrauma) && (
-      <div className="flex items-center justify-between pt-1">
+    {(onOpen || onRestorePrompts || onNotTrauma) && (
+      <div className="flex items-center gap-4 pt-1">
         {onOpen ? (
           <button onClick={onOpen} className="min-h-11 text-sm font-bold underline-offset-2 hover:underline">
             Trauma interventions
           </button>
         ) : (
           <span />
+        )}
+        <span className="flex-1" />
+        {onRestorePrompts && (
+          <button
+            onClick={onRestorePrompts}
+            aria-description="HOTT addressed: restores drug prompts, still recorded as a traumatic arrest"
+            className="min-h-11 text-sm font-bold"
+          >
+            Prompts on
+          </button>
         )}
         {onNotTrauma && (
           <button onClick={onNotTrauma} aria-description="Restores drug prompts" className="min-h-11 text-sm">
@@ -239,13 +251,14 @@ export const TraumaSheet: React.FC<{
   }, [isOpen]);
   // A double tap is dropped and a repeat within a minute is asked about, as on the drug buttons.
   const log = (procedure: string) => {
+    // The sheet stays open, so several interventions can be logged in one visit; each row shows its time.
     const proceed = () => {
       onLogProcedure(procedure);
-      onClose();
+      navigator.vibrate?.([10, 50, 10]);
     };
     const check = repeatCheckFor(procedure);
     if (check.kind === "new") proceed();
-    else if (check.kind === "confirm") setRepeatPrompt({ message: repeatMessage(procedure, check.ago, check.at), proceed });
+    else if (check.kind === "confirm") setRepeatPrompt({ message: check.message, proceed });
   };
   // Turned on first, so the drug is logged as part of a traumatic arrest.
   const pick = (action: () => void) => {
@@ -263,8 +276,9 @@ export const TraumaSheet: React.FC<{
     <>
       <Modal isOpen={isOpen} onClose={onClose} title="Trauma">
         <div className="space-y-4">
-          <HOTTCard />
-          <Section footer="Quietens the drug prompts so HOTT comes first; drug buttons still work. Logging any intervention below turns this on. If the cause is medical (with injuries), switch it off and follow ALS.">
+          {/* Compact, so the interventions are near the top of the sheet. */}
+          <HOTTCard compact />
+          <Section footer="Quietens the drug prompts so HOTT comes first; drug buttons still work. A tourniquet, pelvic binder, chest procedure, thoracotomy or REBOA turns this on. If the cause is medical (with injuries), switch it off and follow ALS.">
             <label className="flex items-center justify-between min-h-11 px-3 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
               <span>Traumatic cardiac arrest</span>
               <input
@@ -291,6 +305,12 @@ export const TraumaSheet: React.FC<{
             </Section>
           ))}
           <FreeText placeholder="Other intervention" onLog={log} />
+          <button
+            onClick={onClose}
+            className="w-full min-h-11 rounded-xl font-semibold bg-tone-accent text-tone-on-accent"
+          >
+            Done
+          </button>
         </div>
       </Modal>
       {isOpen && repeatPrompt && (

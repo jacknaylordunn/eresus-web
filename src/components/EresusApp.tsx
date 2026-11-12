@@ -101,8 +101,8 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
-import { adrenalineDismissal, drugPrompts } from "@/lib/drugPrompts";
-import { loggedAt, repeatCheck, repeatMessage, voiceRepeatRefusal } from "@/lib/repeatCheck";
+import { adrenalineDismissal, drugPrompts, promptHidesAfterAnalysis } from "@/lib/drugPrompts";
+import { loggedAt, repeatCheck, voiceRepeatRefusal } from "@/lib/repeatCheck";
 import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
 import {
   checkVoiceCommandAvailability,
@@ -125,8 +125,19 @@ import {
   TraumaSheet,
 } from "./ClinicalSheets";
 import {
+  ageTextForCategory,
+  areDrugPromptsQuietened as promptsQuietenedFromLog,
+  checklistToggleEntry,
   clockFor,
   completeTask,
+  currentRhythm as currentRhythmFrom,
+  currentRhythmLine,
+  isPaediatric as isPaediatricFrom,
+  meetsTarget,
+  TOR_ADULT_EXCLUSIONS,
+  torCaution as torCautionFrom,
+  TRAUMA_MARKS_ARREST,
+  TRAUMA_PROMPTS_RESTORED_ENTRY,
   DESTINATION_TASK,
   doseNote as checkDose,
   hhmm,
@@ -138,7 +149,6 @@ import {
   recentOtherDrugs,
   ROSC_OBSERVATION_ORDER,
   ROSC_OBSERVATIONS,
-  TRAUMA_EARLY_ACTIONS,
   TRAUMA_OFF_ENTRY,
   TRAUMA_ON_ENTRY,
   traumaEntryText,
@@ -508,8 +518,13 @@ const useSettings = () => useContext(AppSettingsContext)!;
 
 // Age conversion helpers (two-way sync between demographics and drug calculator)
 const ageStringToCategory = (ageStr: string): PatientAgeCategory | null => {
-  const age = parseInt(ageStr);
-  if (isNaN(age) || age < 0) return null;
+  const trimmed = ageStr.trim();
+  // "6 months" from the dose dialog is that category, not 6 years.
+  const exact = allPatientAgeCategories.find((cat) => cat === trimmed);
+  if (exact) return exact;
+  // Only a bare number is years (as iOS Int(ageStr)); other text isn't guessed at.
+  if (!/^\d+$/.test(trimmed)) return null;
+  const age = Number(trimmed);
   if (age >= 12) return PatientAgeCategory.Adult;
   if (age === 11) return PatientAgeCategory.ElevenYears;
   if (age === 10) return PatientAgeCategory.TenYears;
@@ -523,57 +538,6 @@ const ageStringToCategory = (ageStr: string): PatientAgeCategory | null => {
   if (age === 2) return PatientAgeCategory.TwoYears;
   if (age === 1) return PatientAgeCategory.TwelveMonths;
   return PatientAgeCategory.PostBirthToOneMonth;
-};
-
-const categoryToAgeString = (cat: PatientAgeCategory): string => {
-  switch (cat) {
-    case PatientAgeCategory.Adult:
-      return "";
-    case PatientAgeCategory.ElevenYears:
-      return "11";
-    case PatientAgeCategory.TenYears:
-      return "10";
-    case PatientAgeCategory.NineYears:
-      return "9";
-    case PatientAgeCategory.EightYears:
-      return "8";
-    case PatientAgeCategory.SevenYears:
-      return "7";
-    case PatientAgeCategory.SixYears:
-      return "6";
-    case PatientAgeCategory.FiveYears:
-      return "5";
-    case PatientAgeCategory.FourYears:
-      return "4";
-    case PatientAgeCategory.ThreeYears:
-      return "3";
-    case PatientAgeCategory.TwoYears:
-      return "2";
-    case PatientAgeCategory.EighteenMonths:
-      return "1";
-    case PatientAgeCategory.TwelveMonths:
-      return "1";
-    case PatientAgeCategory.NineMonths:
-      return "0";
-    case PatientAgeCategory.SixMonths:
-      return "0";
-    case PatientAgeCategory.ThreeMonths:
-      return "0";
-    case PatientAgeCategory.OneMonth:
-      return "0";
-    case PatientAgeCategory.PostBirthToOneMonth:
-      return "0";
-    case PatientAgeCategory.AtBirth:
-      return "0";
-    default:
-      return "";
-  }
-};
-
-const isPatientPaediatric = (ageStr: string, ageCategory: PatientAgeCategory | null): boolean => {
-  if (ageCategory && ageCategory !== PatientAgeCategory.Adult) return true;
-  const age = parseInt(ageStr);
-  return !isNaN(age) && age < 16;
 };
 
 const AppConstants = {
@@ -1270,6 +1234,8 @@ const useArrestViewModel = () => {
   // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet. Read from the log, so it survives
   // a reload, an undo and a transfer (matches iOS).
   const isTraumaArrest = useMemo(() => traumaFromLog(events), [events]);
+  // Drug reminders are quiet from the trauma entry until HOTT is marked as addressed or it's not trauma.
+  const areDrugPromptsQuietened = useMemo(() => promptsQuietenedFromLog(events), [events]);
   const traumaInterventionCount = useMemo(() => traumaCountIn(events), [events]);
 
   // Which drug buttons are lit and the line under each title (src/lib/drugPrompts.ts; matches iOS).
@@ -1286,7 +1252,7 @@ const useArrestViewModel = () => {
     lidocaineButtonDetail,
   } = drugPrompts({
     isAdrenalineAvailable,
-    isTraumaArrest,
+    areDrugPromptsQuietened,
     hideAdrenalinePrompt,
     hideAdrenalineDueWarning,
     hideAmiodaronePrompt,
@@ -1818,7 +1784,10 @@ const useArrestViewModel = () => {
 
   const analyseRhythm = () => {
     saveUndoState();
-    setHideAdrenalinePrompt(false);
+    // "Not now" lasts until the next rhythm check, not the rest of the arrest.
+    const hides = promptHidesAfterAnalysis();
+    setHideAdrenalinePrompt(hides.hideAdrenalinePrompt);
+    setHideAdrenalineDueWarning(hides.hideAdrenalineDueWarning);
     setLastRhythmNonShockable(false);
     setUiState(UIState.Analyzing);
     logEvent("Rhythm analysis. Pausing CPR.", EventType.Analysis);
@@ -1915,7 +1884,7 @@ const useArrestViewModel = () => {
   const logTraumaProcedure = (procedure: string) => {
     saveUndoState();
     // Requesting critical care happens in medical arrests too, and after ROSC nothing should quieten prompts.
-    if (!isTraumaArrest && arrestState === ArrestState.Active && !TRAUMA_EARLY_ACTIONS.includes(procedure)) {
+    if (!isTraumaArrest && arrestState === ArrestState.Active && TRAUMA_MARKS_ARREST.has(procedure)) {
       logEvent(TRAUMA_ON_ENTRY, EventType.Status);
     }
     logEvent(traumaEntryText(procedure), EventType.Airway);
@@ -1927,6 +1896,13 @@ const useArrestViewModel = () => {
     logEvent(isTrauma ? TRAUMA_ON_ENTRY : TRAUMA_OFF_ENTRY, EventType.Status);
   };
 
+  // Still traumatic, but HOTT is dealt with: back to standard ALS drug prompts without recording "not trauma".
+  const restoreDrugPrompts = () => {
+    if (!areDrugPromptsQuietened) return;
+    saveUndoState();
+    logEvent(TRAUMA_PROMPTS_RESTORED_ENTRY, EventType.Status);
+  };
+
   const completePostROSCTask = (name: string) => {
     if (arrestState === ArrestState.Rosc) setPostROSCTasks((tasks) => completeTask(tasks, name));
   };
@@ -1934,7 +1910,8 @@ const useArrestViewModel = () => {
   const logObservation = (observation: ROSCObservation, value: string) => {
     saveUndoState();
     logEvent(observationEntry(observation, value), observation === "etco2" ? EventType.Etco2 : EventType.Status);
-    completePostROSCTask(ROSC_OBSERVATIONS[observation].checklistItem);
+    // A reading off target leaves the target unticked: a tick must mean it's achieved, not just measured.
+    if (meetsTarget(observation, value)) completePostROSCTask(ROSC_OBSERVATIONS[observation].checklistItem);
   };
 
   const logDestination = (text: string) => {
@@ -2128,7 +2105,7 @@ const useArrestViewModel = () => {
     if (arrestState !== ArrestState.Active) return false;
     saveUndoState();
     const isProcedure = isTraumaProcedureName(name);
-    if (isProcedure && !isTraumaArrest && !TRAUMA_EARLY_ACTIONS.includes(name)) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    if (!isTraumaArrest && TRAUMA_MARKS_ARREST.has(name)) logEvent(TRAUMA_ON_ENTRY, EventType.Status);
     logAtStart(`${name} before eResus, time unknown (estimated)`, isProcedure ? EventType.Airway : EventType.Drug);
     return true;
   };
@@ -2172,8 +2149,9 @@ const useArrestViewModel = () => {
     setPostROSCTasks(updateList);
     setPostMortemTasks(updateList);
 
-    const status = !item.isCompleted ? "checked" : "unchecked";
-    logEvent(`${item.name} ${status}`, EventType.Cause);
+    // Plain words for the record: "checked" could be read as "excluded" or "target achieved".
+    const isCause = reversibleCauses.some((cause) => cause.name === item.name);
+    logEvent(checklistToggleEntry(item.name, !item.isCompleted, isCause), EventType.Cause);
   };
 
   const setHypothermiaStatus = (status: HypothermiaStatus) => {
@@ -2792,6 +2770,14 @@ const useArrestViewModel = () => {
     lidocaineButtonDetail,
     dismissAdrenalinePrompt,
     isTraumaArrest,
+    areDrugPromptsQuietened,
+    restoreDrugPrompts,
+    isPaediatric: isPaediatricFrom(
+      patientAgeCategory === null ? null : patientAgeCategory === PatientAgeCategory.Adult,
+      patientAgeStr,
+    ),
+    currentRhythm: currentRhythmFrom(events),
+    torCaution: torCautionFrom(reversibleCauses),
     traumaInterventionCount,
     summaryInput,
 
@@ -3463,10 +3449,34 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   onClose,
   onConfirmTOR,
 }) => {
-  const { resuscitationTime, timeOffset, patientAgeStr, patientAgeCategory, initialRhythm, isTraumaArrest } = useArrest();
-
-  const isPaediatric = isPatientPaediatric(patientAgeStr, patientAgeCategory);
+  const { resuscitationTime, timeOffset, initialRhythm, isTraumaArrest, isPaediatric: recordedPaediatric, currentRhythm, torCaution } =
+    useArrest();
+  // Null when nobody has recorded an age: then both sets of guidance show until Adult or Child is picked here.
+  const [chosenPaediatric, setChosenPaediatric] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isOpen) setChosenPaediatric(null);
+  }, [isOpen]);
+  const knownPaediatric = recordedPaediatric ?? chosenPaediatric;
+  const isPaediatric = knownPaediatric ?? false;
   const thresholdTime = isPaediatric ? 3600 : 2700; // 60 mins vs 45 mins
+
+  // JRCALC ToR rests on the rhythm now, persisting despite ALS, not the first one seen.
+  const rhythmCard = (title: string, matches: string[], text: string, titleClass = "") => {
+    const highlighted = currentRhythm !== null && matches.includes(currentRhythm);
+    return (
+      <div className={highlighted ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}>
+        <p className={`font-bold ${titleClass}`}>
+          {title}
+          {highlighted && (
+            <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
+              Current rhythm
+            </span>
+          )}
+        </p>
+        <p className="mt-1">{text}</p>
+      </div>
+    );
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Clinical Guidance">
@@ -3489,12 +3499,46 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
           </p>
         </div>
 
-        <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-            JRCALC Guidelines ({isPaediatric ? "Paediatric" : "Adult"})
-          </h4>
+        {recordedPaediatric === null && (
+          <div
+            role="radiogroup"
+            aria-label="Patient"
+            aria-description="No age recorded. Shows the guidance for the patient."
+            className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-700"
+          >
+            {[
+              { label: "Adult", value: false },
+              { label: "Child (under 18)", value: true },
+            ].map(({ label, value }) => (
+              <button
+                key={label}
+                role="radio"
+                aria-checked={chosenPaediatric === value}
+                onClick={() => setChosenPaediatric(value)}
+                className={`min-h-11 rounded-lg text-sm font-semibold ${
+                  chosenPaediatric === value
+                    ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow"
+                    : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
-          {isPaediatric ? (
+        {torCaution && (
+          <div className="flex items-start gap-2 p-4 rounded-xl bg-tone-alert text-tone-on-alert text-sm font-semibold">
+            <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>{torCaution}</span>
+          </div>
+        )}
+
+        {knownPaediatric !== false && (
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              JRCALC Guidelines (Paediatric)
+            </h4>
             <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200">
               <p className="font-semibold">Paediatric / Infant Arrest</p>
               <p>
@@ -3506,59 +3550,32 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
               </p>
               <p>Contact paediatric specialist for advice early.</p>
             </div>
-          ) : (
+          </div>
+        )}
+
+        {knownPaediatric !== true && (
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              JRCALC Guidelines (Adult)
+            </h4>
             <div className="space-y-4 text-sm text-gray-800 dark:text-gray-200">
-              {/* Asystole guidance */}
-              <div
-                className={`${initialRhythm === "Asystole" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold">
-                  Asystole
-                  {initialRhythm === "Asystole" && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  Discontinue at any point if inappropriate. At 45 mins, cessation is appropriate unless there is a
-                  compelling reason to continue.
-                </p>
-              </div>
-
-              {/* PEA guidance */}
-              <div
-                className={`${initialRhythm === "PEA" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold">
-                  PEA
-                  {initialRhythm === "PEA" && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  At 45 mins, consider cessation if rate &lt;40 bpm and QRS width &gt;120msecs. Otherwise, seek advice.
-                </p>
-              </div>
-
-              {/* VF/VT guidance */}
-              <div
-                className={`${initialRhythm === "VF" || initialRhythm === "VT" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold text-blue-600 dark:text-blue-400">
-                  VF / VT
-                  {(initialRhythm === "VF" || initialRhythm === "VT") && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  Follow local pathway for refractory arrest. Seek advice at 45 mins. Cessation may be appropriate.
-                </p>
-              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{currentRhythmLine(currentRhythm, initialRhythm)}</p>
+              {rhythmCard(
+                "Asystole",
+                ["Asystole"],
+                "Discontinue at any point if inappropriate. At 45 mins, cessation is appropriate unless there is a compelling reason to continue.",
+              )}
+              {rhythmCard(
+                "PEA",
+                ["PEA"],
+                "At 45 mins, consider cessation if rate <40 bpm and QRS width >120msecs. Otherwise, seek advice.",
+              )}
+              {rhythmCard(
+                "VF / VT",
+                ["VF", "VT"],
+                "Follow local pathway for refractory arrest. Seek advice at 45 mins. Cessation may be appropriate.",
+                "text-blue-600 dark:text-blue-400",
+              )}
 
               <hr className="border-gray-300 dark:border-gray-600" />
 
@@ -3570,9 +3587,10 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
                   <li>Sustained (&gt;10 mins) then re-arrest: Discuss with a senior clinician.</li>
                 </ul>
               </div>
+              <p className="text-xs font-semibold">{TOR_ADULT_EXCLUSIONS}</p>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* The same ToR rules apply to traumatic arrest (JRCALC); the somatic criteria are met more often. */}
         {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={isTraumaArrest} />}
@@ -3888,8 +3906,9 @@ const DosageEntryModal: React.FC<{
     didConfirmRef.current = true;
     if (ageVal) {
       setPatientAgeCategory(ageVal);
-      // Two-way sync: update demographic age from drug calculator
-      const ageStr = categoryToAgeString(ageVal);
+      // Two-way sync: years as a bare number ("6"), months kept as months ("6 months"), so an infant isn't
+      // recorded as 6 years old. Adult records nothing.
+      const ageStr = ageTextForCategory(ageVal, ageVal === PatientAgeCategory.Adult);
       if (ageStr && ageStr !== patientAgeStr) {
         setPatientAgeStr(ageStr);
       }
@@ -4935,6 +4954,8 @@ const ActiveArrestContentView: React.FC<{
     uiState,
     isTraumaArrest,
     setTraumaArrest,
+    areDrugPromptsQuietened,
+    restoreDrugPrompts,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
     shouldShowLidocaineReminder,
@@ -4995,7 +5016,14 @@ const ActiveArrestContentView: React.FC<{
       </div>
       <VoiceListeningStatus />
 
-      {isTraumaArrest && <HOTTCard compact onOpen={props.onShowTrauma} onNotTrauma={() => setTraumaArrest(false)} />}
+      {isTraumaArrest && (
+        <HOTTCard
+          compact
+          onOpen={props.onShowTrauma}
+          onRestorePrompts={areDrugPromptsQuietened ? restoreDrugPrompts : undefined}
+          onNotTrauma={() => setTraumaArrest(false)}
+        />
+      )}
 
       {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
 
@@ -5709,14 +5737,22 @@ const ArrestView: React.FC<{
   const [drugToLog, setDrugToLog] = useState<DrugToLog | null>(null);
   const [drugConfirmation, setDrugConfirmation] = useState<{ drug: DrugToLog; dose: string } | null>(null);
 
-  // A double tap is dropped; a repeat within a minute (or a second TXA) is asked about first (matches iOS checkRepeat).
+  // A double tap is dropped; a repeat soon after (or a second TXA, or a third antiarrhythmic) is asked about
+  // first (matches iOS checkRepeat).
   const [repeatPrompt, setRepeatPrompt] = useState<{ message: string; proceed: () => void } | null>(null);
+  const repeatCounts = { amiodarone: viewModel.amiodaroneCount, lidocaine: viewModel.lidocaineCount };
+  const checkRepeatFor = (name: string) =>
+    repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime, repeatCounts);
   const checkRepeat = (name: string, proceed: () => void) => {
-    const check = repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime);
+    const check = checkRepeatFor(name);
     if (check.kind === "new") proceed();
-    else if (check.kind === "confirm") {
+    else if (check.kind === "doubleTap") {
+      // Said, so a gloved tap that did nothing isn't taken for a second dose logged.
       HapticManager.notification("warning");
-      setRepeatPrompt({ message: repeatMessage(name, check.ago, check.at), proceed });
+      showVoiceFeedback(`${name} already logged`, true);
+    } else {
+      HapticManager.notification("warning");
+      setRepeatPrompt({ message: check.message, proceed });
     }
   };
 
@@ -5818,10 +5854,25 @@ const ArrestView: React.FC<{
     showVoiceFeedback("Given shocks or drugs before eResus? Tap the counters at the top to add them.", true);
   };
 
+  // Logging a trauma intervention can quieten the drug prompts; say so, so it's never silent.
+  const wasTraumaRef = useRef(viewModel.isTraumaArrest);
+  useEffect(() => {
+    const wasTrauma = wasTraumaRef.current;
+    wasTraumaRef.current = viewModel.isTraumaArrest;
+    // A phrase being run says it in its own result.
+    if (!viewModel.isTraumaArrest || wasTrauma || voiceFeedback || voiceRun || viewModel.arrestState !== ArrestState.Active) return;
+    showVoiceFeedback(
+      "Treated as a traumatic arrest: HOTT first, drug prompts quietened. Use Not trauma or Prompts on in the HOTT card to change this.",
+      true,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewModel.isTraumaArrest]);
+
   const showVoiceFeedback = (message: string, succeeded: boolean, undoDepth: number | null = null) => {
     const id = Date.now();
     setVoiceFeedback({ id, message, succeeded, undoDepth });
-    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), 5000);
+    // Long enough to read and reach Undo mid-compressions; a refusal stays longer, as it needs acting on.
+    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), succeeded ? 12000 : 20000);
   };
 
   const handleVoiceTranscript = (transcript: string) => {
@@ -5908,7 +5959,7 @@ const ArrestView: React.FC<{
 
   // Live (not back-dated) voice entries of something just logged are refused, so closed-loop calls aren't two doses.
   const voiceRefusal = (name: string, time: number | null) =>
-    voiceRepeatRefusal(viewModel.events, name, time, Date.now() / 1000, viewModel.totalArrestTime);
+    voiceRepeatRefusal(viewModel.events, name, time, Date.now() / 1000, viewModel.totalArrestTime, repeatCounts);
 
   // Each action only applies when a tap would make sense at this point in the algorithm (matches iOS).
   // "continue" means it has done the first half and wants the next render to finish.
@@ -6006,11 +6057,13 @@ const ArrestView: React.FC<{
         if (!isTraumaProcedureName(action.procedure)) return { failure: `${action.procedure}: say left, right or both.` };
         const refusal = voiceRefusal(action.procedure, time);
         if (refusal) return { failure: refusal };
-        const wasTrauma = vm.isTraumaArrest;
+        // Only a definitive TCA intervention during the arrest marks it as traumatic (as logTraumaProcedure decides).
+        const marksTrauma =
+          !vm.isTraumaArrest && vm.arrestState === ArrestState.Active && TRAUMA_MARKS_ARREST.has(action.procedure);
         vm.performFromVoice(time, () => vm.logTraumaProcedure(action.procedure));
         return {
           summary: action.procedure,
-          note: wasTrauma ? undefined : "Treated as a traumatic arrest: HOTT first, drug prompts quietened.",
+          note: marksTrauma ? "Treated as a traumatic arrest: HOTT first, drug prompts quietened." : undefined,
         };
       }
       case "trauma":
@@ -6208,7 +6261,7 @@ const ArrestView: React.FC<{
         isTrauma={viewModel.isTraumaArrest}
         onSetTrauma={viewModel.setTraumaArrest}
         onLogProcedure={viewModel.logTraumaProcedure}
-        repeatCheckFor={(name) => repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime)}
+        repeatCheckFor={checkRepeatFor}
         loggedAt={(name) => loggedAt(viewModel.events, name)}
         onDrug={handleSelectOtherDrug}
         onFluids={() => openDrugs("fluids")}
