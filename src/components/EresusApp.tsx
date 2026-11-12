@@ -93,10 +93,12 @@ import {
   AudioWaveform,
   Ear,
   Mic,
+  MicOff,
   Bandage,
   Stethoscope,
   PhoneOutgoing,
   Play,
+  Sparkles,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
@@ -112,6 +114,7 @@ import {
 import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
 import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
 import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
+import WhatsNewView, { hasSeenWhatsNew } from "./WhatsNewView";
 import Modal from "./Modal";
 import SummaryView from "./SummaryView";
 import {
@@ -137,7 +140,6 @@ import {
   TOR_ADULT_EXCLUSIONS,
   torCaution as torCautionFrom,
   TRAUMA_MARKS_ARREST,
-  TRAUMA_PROMPTS_RESTORED_ENTRY,
   DESTINATION_TASK,
   doseNote as checkDose,
   hhmm,
@@ -1136,6 +1138,8 @@ const useArrestViewModel = () => {
   );
   const [masterTime, setMasterTime] = useState<number>(0);
   const [cprTime, setCprTime] = useState<number>(cprCycleDuration);
+  // How long the rhythm check has been due, or null. While due, cprTime counts down the next cycle (matches iOS).
+  const [rhythmCheckOverdue, setRhythmCheckOverdue] = useState<number | null>(null);
   const [timeOffset, setTimeOffset] = useState<number>(s?.timeOffset ?? 0);
   const [uiState, setUiState] = useState<UIState>(s?.uiState ?? UIState.Default);
   const [events, setEvents] = useState<Event[]>(s?.events ?? []);
@@ -1273,7 +1277,8 @@ const useArrestViewModel = () => {
     else setHideAdrenalineDueWarning(true);
   };
 
-  const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
+  const isRhythmCheckDue =
+    arrestState === ArrestState.Active && uiState === UIState.Default && rhythmCheckOverdue !== null;
 
   // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
   const activePromptsRef = useRef<Set<VoicePrompt>>(new Set());
@@ -1285,7 +1290,7 @@ const useArrestViewModel = () => {
 
     const current = new Set<VoicePrompt>();
     if (uiState === UIState.Default) {
-      if (cprTime <= 0) {
+      if (isRhythmCheckDue) {
         current.add("rhythm_check_due");
       } else if (rhythmCheckWarning > 0 && cprTime <= rhythmCheckWarning) {
         current.add("prepare_rhythm_check");
@@ -1321,6 +1326,7 @@ const useArrestViewModel = () => {
     activePromptsRef.current = current;
   }, [
     arrestState,
+    isRhythmCheckDue,
     isTimerPaused,
     uiState,
     cprTime,
@@ -1733,13 +1739,21 @@ const useArrestViewModel = () => {
 
   useEffect(() => {
     if (arrestState === ArrestState.Active && uiState === UIState.Default) {
-      const newCprTime = cprCycleDuration - (totalArrestTime - cprCycleStartTimeRef.current);
-      setCprTime((prevCprTime) => {
-        if (newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
-        if (prevCprTime > 0 && newCprTime <= 0) HapticManager.notification("warning");
-        if (newCprTime < 0) return 0;
+      // The cycle start stays where the last check left it until the next check, so how late the check is
+      // can always be worked out; the ring shows the next cycle counting down meanwhile.
+      const elapsed = totalArrestTime - cprCycleStartTimeRef.current;
+      const due = elapsed >= cprCycleDuration;
+      const newCprTime = due ? cprCycleDuration - (elapsed % cprCycleDuration) : cprCycleDuration - elapsed;
+      setRhythmCheckOverdue((prev) => {
+        if (due && prev === null) HapticManager.notification("warning");
+        return due ? elapsed - cprCycleDuration : null;
+      });
+      setCprTime(() => {
+        if (!due && newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
         return newCprTime;
       });
+    } else if (uiState !== UIState.Default) {
+      setRhythmCheckOverdue(null);
     }
   }, [totalArrestTime, arrestState, uiState, cprCycleDuration]);
 
@@ -1894,13 +1908,6 @@ const useArrestViewModel = () => {
     if (isTrauma === isTraumaArrest) return;
     saveUndoState();
     logEvent(isTrauma ? TRAUMA_ON_ENTRY : TRAUMA_OFF_ENTRY, EventType.Status);
-  };
-
-  // Still traumatic, but HOTT is dealt with: back to standard ALS drug prompts without recording "not trauma".
-  const restoreDrugPrompts = () => {
-    if (!areDrugPromptsQuietened) return;
-    saveUndoState();
-    logEvent(TRAUMA_PROMPTS_RESTORED_ENTRY, EventType.Status);
   };
 
   const completePostROSCTask = (name: string) => {
@@ -2552,6 +2559,8 @@ const useArrestViewModel = () => {
     isTimerPaused,
     startTime: startTimeRef.current,
     cprCycleStartTime: cprCycleStartTimeRef.current,
+    isRhythmCheckDue,
+    rhythmCheckDueAt: isRhythmCheckDue ? cprCycleStartTimeRef.current + cprCycleDuration : null,
     lastAdrenalineTime: lastAdrenalineTimeRef.current,
     shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
     initialRhythm,
@@ -2753,6 +2762,7 @@ const useArrestViewModel = () => {
     totalArrestTime,
     resuscitationTime,
     isRhythmCheckDue,
+    rhythmCheckOverdue: isRhythmCheckDue ? rhythmCheckOverdue : null,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
     shouldShowLidocaineReminder,
@@ -2771,7 +2781,6 @@ const useArrestViewModel = () => {
     dismissAdrenalinePrompt,
     isTraumaArrest,
     areDrugPromptsQuietened,
-    restoreDrugPrompts,
     isPaediatric: isPaediatricFrom(
       patientAgeCategory === null ? null : patientAgeCategory === PatientAgeCategory.Adult,
       patientAgeStr,
@@ -2868,7 +2877,7 @@ const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Patient Info">
       <div className="space-y-4">
-        <h3 className="text-blue-600 dark:text-blue-400 font-semibold">Patient Demographics</h3>
+        <h3 className="text-tone-accent font-semibold">Patient Demographics</h3>
         <div className="space-y-2">
           <input
             type="number"
@@ -2896,7 +2905,7 @@ const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> 
         <p className="text-xs text-gray-500 dark:text-gray-400">
           These details help ambulance trusts understand demographic differences in cardiac arrest outcomes.
         </p>
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -2938,7 +2947,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   return (
     <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
-        <BarChart3 size={64} className="text-blue-500 mx-auto" />
+        <BarChart3 size={64} className="text-tone-accent mx-auto" />
         <h2 className="text-2xl font-bold text-center text-gray-900 dark:text-white">Help Advance Science</h2>
         <p className="text-sm text-center text-gray-600 dark:text-gray-400">
           eResus is partnering with researchers to track the effectiveness of interventions. By enrolling, your app will
@@ -2948,7 +2957,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
           href="https://tech.aegismedicalsolutions.co.uk/eresus/data-policy"
           target="_blank"
           rel="noopener noreferrer"
-          className="block text-center text-sm text-blue-600 dark:text-blue-400 underline"
+          className="block text-center text-sm text-tone-accent underline"
         >
           Read the Data Collection Policy & Agreement
         </a>
@@ -2975,7 +2984,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             setHasRespondedToResearchTerms(true);
             onClose();
           }}
-          className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+          className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
         >
           Enroll & Accept Terms
         </button>
@@ -3042,7 +3051,7 @@ const SessionTransferModal: React.FC<{ isOpen: boolean; onClose: () => void }> =
             <ActionButton
               title="Receive from Another Device"
               icon={<QrCode size={18} />}
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={() => setMode("receive")}
             />
@@ -3085,7 +3094,7 @@ const SessionTransferModal: React.FC<{ isOpen: boolean; onClose: () => void }> =
             {receiveError && <p className="text-sm text-red-500 text-center">{receiveError}</p>}
             <ActionButton
               title={isReceiving ? "Receiving..." : "Receive Session"}
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={handleReceive}
               disabled={receiveCode.length !== 6 || isReceiving}
@@ -3171,7 +3180,7 @@ const EditLogPatientInfoModal: React.FC<{
             </p>
           </div>
         )}
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -3251,14 +3260,14 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
           </p>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
+        <div className="bg-tone-tint rounded-xl p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-tone-accent">
             {info.device}
           </p>
           <ol className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
             {info.steps.map((step, i) => (
               <li key={i} className="flex items-start space-x-2.5">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center mt-0.5">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-tone-accent text-white text-xs font-bold flex items-center justify-center mt-0.5">
                   {i + 1}
                 </span>
                 <span>{step}</span>
@@ -3269,7 +3278,7 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
 
         <button
           onClick={onClose}
-          className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+          className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
         >
           Continue to App
         </button>
@@ -3307,7 +3316,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
             </p>
             <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300">
               <div className="flex items-start space-x-3">
-                <RotateCw size={18} className="text-blue-500 mt-0.5 shrink-0" />
+                <RotateCw size={18} className="text-tone-accent mt-0.5 shrink-0" />
                 <p>
                   <strong>Sync across devices</strong> - access your arrest logs from any phone, tablet, or computer.
                 </p>
@@ -3328,7 +3337,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
             </div>
             <button
               onClick={() => setShowAuthModal(true)}
-              className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+              className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
             >
               Sign Up / Sign In
             </button>
@@ -3435,7 +3444,7 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             </button>
           </div>
         </div>
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -3464,11 +3473,11 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   const rhythmCard = (title: string, matches: string[], text: string, titleClass = "") => {
     const highlighted = currentRhythm !== null && matches.includes(currentRhythm);
     return (
-      <div className={highlighted ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}>
+      <div className={highlighted ? "p-3 border-2 border-tone-accent rounded-lg bg-tone-tint" : ""}>
         <p className={`font-bold ${titleClass}`}>
           {title}
           {highlighted && (
-            <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
+            <span className="ml-2 text-xs bg-tone-accent text-white px-2 py-0.5 rounded-full uppercase font-bold">
               Current rhythm
             </span>
           )}
@@ -3579,7 +3588,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
                 "VF / VT",
                 ["VF", "VT"],
                 "Follow local pathway for refractory arrest. Seek advice at 45 mins. Cessation may be appropriate.",
-                "text-blue-600 dark:text-blue-400",
+                "text-tone-accent",
               )}
 
               <hr className="border-gray-300 dark:border-gray-600" />
@@ -3611,8 +3620,8 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         />
         <ActionButton
           title="Cancel & Continue Resuscitation"
-          backgroundColor="bg-blue-50 dark:bg-blue-900/30"
-          foregroundColor="text-blue-600 dark:text-blue-400"
+          backgroundColor="bg-tone-tint"
+          foregroundColor="text-tone-accent"
           onClick={onClose}
         />
       </div>
@@ -3729,7 +3738,7 @@ const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
         <ActionButton
           title="Copy, Save & Reset"
           icon={<Clipboard size={18} />}
-          backgroundColor="bg-blue-600"
+          backgroundColor="bg-tone-accent"
           foregroundColor="text-white"
           onClick={() => {
             performReset(true, true);
@@ -3862,7 +3871,7 @@ const AirwayAdjunctModal: React.FC<{
         <p className="text-center text-gray-600 dark:text-gray-400">Choose the type of advanced airway placed.</p>
         <ActionButton
           title="Supraglottic Airway (i-Gel)"
-          backgroundColor="bg-blue-600"
+          backgroundColor="bg-tone-accent"
           foregroundColor="text-white"
           onClick={() => handleSelect(AirwayAdjunctType.SGA)}
         />
@@ -3954,14 +3963,14 @@ const DosageEntryModal: React.FC<{
         {drug.type === "adrenaline" || drug.type === "amiodarone" ? (
           <>
             <div className="space-y-2">
-              <h4 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Patient Age</h4>
+              <h4 className="text-tone-accent font-semibold text-sm">Patient Age</h4>
               <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-xl">
                 <div className="flex justify-between items-center">
                   <span className="text-gray-800 dark:text-gray-200">Age Category</span>
                   <select
                     value={age}
                     onChange={(e) => setAge(e.target.value as PatientAgeCategory)}
-                    className="bg-transparent text-blue-600 dark:text-blue-400 font-medium text-right"
+                    className="bg-transparent text-tone-accent font-medium text-right"
                   >
                     {allPatientAgeCategories.map((cat) => (
                       <option key={cat} value={cat}>
@@ -3974,14 +3983,14 @@ const DosageEntryModal: React.FC<{
             </div>
 
             <div className="space-y-2">
-              <h4 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Calculated Dose</h4>
+              <h4 className="text-tone-accent font-semibold text-sm">Calculated Dose</h4>
               <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
                 {calculatedDose ? (
                   <div className="space-y-3">
                     <p className="text-center text-3xl font-bold text-gray-900 dark:text-white">{calculatedDose}</p>
                     <ActionButton
                       title="Log Calculated Dose"
-                      backgroundColor="bg-blue-600"
+                      backgroundColor="bg-tone-accent"
                       foregroundColor="text-white"
                       onClick={() => onConfirm(calculatedDose, age)}
                     />
@@ -4008,7 +4017,7 @@ const DosageEntryModal: React.FC<{
                   <select
                     value={manualUnit}
                     onChange={(e) => setManualUnit(e.target.value)}
-                    className="bg-transparent text-blue-600 dark:text-blue-400 font-medium"
+                    className="bg-transparent text-tone-accent font-medium"
                   >
                     <option>mg</option>
                     <option>mcg</option>
@@ -4262,7 +4271,7 @@ const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
   const [showTimeCorrection, setShowTimeCorrection] = useState(false);
   const [showBeforeEResus, setShowBeforeEResus] = useState(false);
 
-  const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
+  const { isRhythmCheckDue } = useArrest();
   const showsDue = isRhythmCheckDue && !isTimerPaused;
   const canCorrectTime = timeOffset > 0 && !isRhythmCheckDue && arrestState !== ArrestState.Ended;
   const canAddBeforeEResus = arrestState === ArrestState.Active && !isRhythmCheckDue && !isTimerPaused;
@@ -4542,8 +4551,7 @@ const StatsRow: React.FC = () => {
     antiarrhythmicGiven,
   } = useArrest();
 
-  const isRhythmCheckDue =
-    arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0 && !isTimerPaused;
+  const isRhythmCheckDue = useArrest().isRhythmCheckDue && !isTimerPaused;
   const color = `font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`;
   // One antiarrhythmic per arrest, so one slot: amiodarone until lidocaine is the one given.
   const usesLidocaine = antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine;
@@ -4601,17 +4609,25 @@ const useVoiceCommandsAvailable = () => {
 const usePushToTalk = (onVoiceTranscript: ((transcript: string) => void) | undefined, label: string) => {
   const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
   const [isPressed, setIsPressed] = useState(false);
+  // Set once the hold has lasted long enough, whether or not the recogniser starts, so the ring always changes
+  // under the finger and says so if the microphone couldn't be used (matches iOS).
+  const [isHolding, setIsHolding] = useState(false);
+  const [micFailed, setMicFailed] = useState(false);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTalking = (e: React.PointerEvent) => {
     e.preventDefault();
     setIsPressed(true);
     holdTimerRef.current = setTimeout(() => {
       holdTimerRef.current = null;
-      if (voiceCommandListener.startPushToTalk()) navigator.vibrate?.(15);
+      const started = voiceCommandListener.startPushToTalk();
+      setMicFailed(!started);
+      setIsHolding(true);
+      navigator.vibrate?.(15);
     }, 350);
   };
   const stopTalking = () => {
     setIsPressed(false);
+    setIsHolding(false);
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
@@ -4629,21 +4645,26 @@ const usePushToTalk = (onVoiceTranscript: ((transcript: string) => void) | undef
         "aria-label": label,
       }
     : {};
-  return { voiceAvailable, isPressed, pushToTalk };
+  return { voiceAvailable, isPressed, isHolding, micFailed, pushToTalk };
 };
 
 // Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
 const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
-  const { cprTime, isRhythmCheckDue } = useArrest();
+  const { cprTime, rhythmCheckOverdue, uiState } = useArrest();
+  const isDue = rhythmCheckOverdue !== null;
+  // During a rhythm check the cycle stands still until a shock or a non-shockable rhythm restarts it.
+  const isPausedForCheck = uiState !== UIState.Default;
   const { cprCycleDuration } = useSettings();
   const listener = useVoiceListener();
-  const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Press and hold to speak a command");
+  const { voiceAvailable, isPressed, isHolding, micFailed, pushToTalk } = usePushToTalk(
+    onVoiceTranscript,
+    "Press and hold to speak a command",
+  );
 
-  // Agrees with the header: a check that's due shows as due, not as time left in the next cycle.
-  const percentage = isRhythmCheckDue ? 1 : cprTime / cprCycleDuration;
+  const percentage = Math.max(0, cprTime) / cprCycleDuration;
   const strokeDasharray = 2 * Math.PI * 52;
   const strokeDashoffset = strokeDasharray * (1 - percentage);
-  const isEnding = isRhythmCheckDue || cprTime <= 10;
+  const isEnding = isDue || (cprTime <= 10 && !isPausedForCheck);
 
   return (
     <div
@@ -4663,7 +4684,9 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
           cy="60"
         />
         <circle
-          className={`transition-all duration-1000 linear ${isEnding ? "text-tone-danger" : "text-tone-accent"}`}
+          className={`transition-all duration-1000 linear ${
+            isPausedForCheck ? "text-tone-slate" : isEnding ? "text-tone-danger" : "text-tone-accent"
+          }`}
           strokeWidth="9"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
@@ -4677,23 +4700,29 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`font-mono font-bold text-5xl ${isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"}`}>
-          {isRhythmCheckDue ? "0:00" : TimeFormatter.format(cprTime)}
+        <span
+          className={`font-mono font-bold text-5xl ${
+            isPausedForCheck ? "text-gray-500 dark:text-gray-400" : isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"
+          }`}
+        >
+          {TimeFormatter.format(Math.max(0, cprTime))}
         </span>
         <span
-          className={`text-xs font-semibold uppercase ${isRhythmCheckDue ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"}`}
+          className={`text-xs font-semibold uppercase tabular-nums ${isDue ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"}`}
         >
-          {isRhythmCheckDue ? "Check rhythm" : "CPR Cycle"}
+          {isDue ? `Check due +${TimeFormatter.format(rhythmCheckOverdue ?? 0)}` : isPausedForCheck ? "Paused" : "CPR Cycle"}
         </span>
       </div>
-      {voiceAvailable && listener.isPushToTalkActive && <PushToTalkRing transcript={listener.transcript} />}
+      {voiceAvailable && (isHolding || listener.isPushToTalkActive) && (
+        <PushToTalkRing transcript={listener.transcript} failed={micFailed && !listener.isPushToTalkActive} />
+      )}
     </div>
   );
 };
 
 // The listening state of the ring (matches iOS). Browsers don't expose the recogniser's audio level,
 // so the halo bumps as each word arrives instead of following loudness.
-const PushToTalkRing: React.FC<{ transcript: string }> = ({ transcript }) => (
+const PushToTalkRing: React.FC<{ transcript: string; failed?: boolean }> = ({ transcript, failed = false }) => (
   <div className="absolute inset-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-90 motion-safe:duration-300">
     <div className="absolute inset-0 rounded-full border-[10px] border-tone-danger motion-safe:animate-ptt-ripple motion-reduce:hidden" />
     <div
@@ -4717,14 +4746,20 @@ const PushToTalkRing: React.FC<{ transcript: string }> = ({ transcript }) => (
     </svg>
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
       {/* The timer gives way to a microphone as listening starts. */}
-      <Mic
-        size={44}
-        strokeWidth={2.5}
-        className={`text-tone-danger motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:duration-300 ${
-          transcript ? "" : "motion-safe:animate-pulse"
-        }`}
-      />
-      <span className="font-semibold text-sm text-foreground line-clamp-4">{transcript || "Listening…"}</span>
+      {failed ? (
+        <MicOff size={44} strokeWidth={2.5} className="text-tone-danger" />
+      ) : (
+        <Mic
+          size={44}
+          strokeWidth={2.5}
+          className={`text-tone-danger motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:duration-300 ${
+            transcript ? "" : "motion-safe:animate-pulse"
+          }`}
+        />
+      )}
+      <span className="font-semibold text-sm text-foreground line-clamp-4">
+        {failed ? "Microphone unavailable. Try again." : transcript || "Listening…"}
+      </span>
     </div>
   </div>
 );
@@ -4960,7 +4995,6 @@ const ActiveArrestContentView: React.FC<{
     isTraumaArrest,
     setTraumaArrest,
     areDrugPromptsQuietened,
-    restoreDrugPrompts,
     isAdrenalineHighlighted,
     isAmiodaroneHighlighted,
     shouldShowLidocaineReminder,
@@ -5022,12 +5056,7 @@ const ActiveArrestContentView: React.FC<{
       <VoiceListeningStatus />
 
       {isTraumaArrest && (
-        <HOTTCard
-          compact
-          onOpen={props.onShowTrauma}
-          onRestorePrompts={areDrugPromptsQuietened ? restoreDrugPrompts : undefined}
-          onNotTrauma={() => setTraumaArrest(false)}
-        />
+        <HOTTCard compact onOpen={props.onShowTrauma} />
       )}
 
       {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
@@ -5229,7 +5258,7 @@ const EndedView: React.FC<{
           <ActionButton
             title="Confirm VOD"
             icon={<Shield size={18} />}
-            backgroundColor={allVodChecked ? "bg-blue-600" : "bg-gray-400 dark:bg-gray-600"}
+            backgroundColor={allVodChecked ? "bg-tone-accent" : "bg-gray-400 dark:bg-gray-600"}
             foregroundColor="text-white"
             onClick={confirmVOD}
             disabled={!allVodChecked}
@@ -5252,7 +5281,7 @@ const EndedView: React.FC<{
           <ActionButton
             title="Breaking Bad News (PLIIE)"
             icon={<Users size={18} />}
-            backgroundColor="bg-blue-600"
+            backgroundColor="bg-tone-accent"
             foregroundColor="text-white"
             onClick={() => setShowPLIIE(true)}
           />
@@ -5606,7 +5635,7 @@ const ChecklistView: React.FC<{
         >
           {item.name}
           {item.name === "Hypothermia" && item.hypothermiaStatus !== HypothermiaStatus.None && (
-            <span className="ml-2 text-xs text-blue-500">[{item.hypothermiaStatus}]</span>
+            <span className="ml-2 text-xs text-tone-accent">[{item.hypothermiaStatus}]</span>
           )}
         </span>
         {item.name === "Hypothermia" && <ChevronRight size={16} className="text-gray-400 ml-auto" />}
@@ -5867,7 +5896,7 @@ const ArrestView: React.FC<{
     // A phrase being run says it in its own result.
     if (!viewModel.isTraumaArrest || wasTrauma || voiceFeedback || voiceRun || viewModel.arrestState !== ArrestState.Active) return;
     showVoiceFeedback(
-      "Treated as a traumatic arrest: HOTT first, drug prompts quietened. Use Not trauma or Prompts on in the HOTT card to change this.",
+      "Traumatic cardiac arrest mode selected: drug reminders paused while HOTT comes first. Switch it off in the Trauma sheet.",
       true,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6068,13 +6097,13 @@ const ArrestView: React.FC<{
         vm.performFromVoice(time, () => vm.logTraumaProcedure(action.procedure));
         return {
           summary: action.procedure,
-          note: marksTrauma ? "Treated as a traumatic arrest: HOTT first, drug prompts quietened." : undefined,
+          note: marksTrauma ? "Traumatic cardiac arrest mode selected: drug reminders paused." : undefined,
         };
       }
       case "trauma":
         if (vm.isTraumaArrest) return { summary: "traumatic arrest (already set)" };
         vm.performFromVoice(null, () => vm.setTraumaArrest(true));
-        return { summary: "traumatic arrest: HOTT first, drug prompts quietened" };
+        return { summary: "traumatic cardiac arrest mode selected" };
       case "observation": {
         const { kind, value } = action;
         vm.performFromVoice(null, () => vm.logObservation(kind, value));
@@ -6308,7 +6337,7 @@ const ArrestView: React.FC<{
               />
               <ActionButton
                 title="Confirm"
-                backgroundColor="bg-blue-600"
+                backgroundColor="bg-tone-accent"
                 foregroundColor="text-white"
                 onClick={() => handleConfirmDrug(true)}
               />
@@ -6426,7 +6455,7 @@ const LogbookView: React.FC = () => {
                   Lido: {log.lidocaineCount ?? 0}
                 </p>
                 {hasPatientInfo(log) ? (
-                  <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">
+                  <p className="text-xs text-tone-accent font-semibold mt-1">
                     {getPatientInfoText(log)}
                   </p>
                 ) : (
@@ -6435,14 +6464,14 @@ const LogbookView: React.FC = () => {
                       e.stopPropagation();
                       setEditingLog(log);
                     }}
-                    className="inline-block mt-2 px-3 py-1 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded-full cursor-pointer"
+                    className="inline-block mt-2 px-3 py-1 text-xs font-semibold text-tone-accent bg-tone-tint rounded-full cursor-pointer"
                   >
                     + Add Patient Info
                   </span>
                 )}
               </div>
               <div className="flex flex-col items-end space-y-1 flex-shrink-0 ml-2">
-                <button onClick={() => setEditingLog(log)} className="p-1.5 text-gray-400 hover:text-blue-500">
+                <button onClick={() => setEditingLog(log)} className="p-1.5 text-gray-400 hover:text-tone-accent">
                   <Pencil size={16} />
                 </button>
                 <button onClick={() => log.id && deleteLog(log.id)} className="p-1.5 text-gray-400 hover:text-red-500">
@@ -6591,8 +6620,8 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
     return (
       <Modal isOpen={isOpen} onClose={onClose} title="Account">
         <div className="space-y-4 text-center">
-          <div className="w-16 h-16 mx-auto rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
-            <UserIcon size={32} className="text-blue-600 dark:text-blue-400" />
+          <div className="w-16 h-16 mx-auto rounded-full bg-tone-tint flex items-center justify-center">
+            <UserIcon size={32} className="text-tone-accent" />
           </div>
           <p className="text-gray-700 dark:text-gray-300">Signed in as</p>
           <p className="font-semibold text-gray-900 dark:text-white">
@@ -6626,7 +6655,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
             </p>
             <ActionButton
               title="Back to Sign In"
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={() => {
                 setMode("login");
@@ -6715,7 +6744,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                       ? "Create Account"
                       : "Sign In with Email"
               }
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={handleSubmit}
               disabled={loading}
@@ -6727,7 +6756,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                     setMode("register");
                     setError("");
                   }}
-                  className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                  className="w-full text-center text-sm text-tone-accent"
                 >
                   Don't have an account? Create one
                 </button>
@@ -6748,7 +6777,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                   setMode("login");
                   setError("");
                 }}
-                className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                className="w-full text-center text-sm text-tone-accent"
               >
                 Already have an account? Sign in
               </button>
@@ -6760,7 +6789,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                   setError("");
                   setResetSent(false);
                 }}
-                className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                className="w-full text-center text-sm text-tone-accent"
               >
                 Back to Sign In
               </button>
@@ -6840,6 +6869,7 @@ const SettingsView: React.FC = () => {
 
   const [availableOrgs, setAvailableOrgs] = useState<string[]>(["Independent / None"]);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -6881,11 +6911,11 @@ const SettingsView: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-900 dark:text-white font-medium">{user.email}</p>
-                <p className="text-xs text-green-600 dark:text-green-400">Signed in</p>
+                <p className="text-xs text-tone-accent">Signed in</p>
               </div>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded-lg"
+                className="px-3 min-h-11 text-sm font-medium text-tone-on-tint bg-tone-tint rounded-lg"
               >
                 Manage
               </button>
@@ -6893,12 +6923,12 @@ const SettingsView: React.FC = () => {
           ) : (
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-700 dark:text-gray-300">Anonymous</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Sign in to sync logs across devices</p>
+                <p className="text-sm text-gray-700 dark:text-gray-300">Not signed in</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Back up and sync your logbook</p>
               </div>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg active:scale-95 transition-transform"
+                className="px-3 min-h-11 text-sm font-medium text-white bg-tone-accent rounded-lg active:scale-95 transition-transform"
               >
                 Sign In
               </button>
@@ -6906,9 +6936,9 @@ const SettingsView: React.FC = () => {
           )}
         </div>
 
-        {/* Timers */}
+        {/* During an Arrest */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Timers</h3>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">During an Arrest</h3>
           <SettingStepper
             label="CPR Cycle"
             value={cprCycleDuration}
@@ -6927,13 +6957,8 @@ const SettingsView: React.FC = () => {
             step={1}
             unit="minutes"
           />
-        </div>
-
-        {/* Metronome */}
-        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Metronome</h3>
           <SettingStepper
-            label="BPM"
+            label="Metronome"
             value={metronomeBPM}
             onChange={setMetronomeBPM}
             min={80}
@@ -6941,9 +6966,32 @@ const SettingsView: React.FC = () => {
             step={5}
             unit="BPM"
           />
+          <SettingToggle
+            label="Dose Calculator"
+            enabled={showDosagePrompts}
+            onChange={setShowDosagePrompts}
+            description="Asks for the patient's age or a dose when adrenaline, amiodarone or other drugs are logged."
+          />
+          {!researchModeEnabled && (
+            <SettingToggle
+              label="Ask for Age and Sex"
+              enabled={askForPatientInfo}
+              onChange={setAskForPatientInfo}
+              description="Asks for approximate age and sex when an arrest starts."
+            />
+          )}
+          <SegmentedSetting
+            label="ETCO2 Unit"
+            value={etco2Unit}
+            options={[
+              { value: "kPa", label: "kPa" },
+              { value: "mmHg", label: "mmHg" },
+            ]}
+            onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
+          />
         </div>
 
-        {/* Spoken Prompts */}
+        {/* Prompts & Hands-Free */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
           <h3 className="font-semibold text-gray-700 dark:text-gray-300">Spoken Prompts</h3>
           <SettingToggle
@@ -6995,8 +7043,6 @@ const SettingsView: React.FC = () => {
             </>
           )}
         </div>
-
-        {/* Voice Commands */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
           <h3 className="font-semibold text-gray-700 dark:text-gray-300">Voice Commands (Experimental)</h3>
           <SettingToggle
@@ -7027,29 +7073,26 @@ const SettingsView: React.FC = () => {
           )}
         </div>
 
-        {/* Capnography */}
+        {/* Appearance */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Capnography</h3>
-          <SegmentedSetting
-            label="ETCO2 Unit"
-            value={etco2Unit}
-            options={[
-              { value: "kPa", label: "kPa" },
-              { value: "mmHg", label: "mmHg" },
-            ]}
-            onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
-          />
-        </div>
-
-        {/* Medications */}
-        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Medications</h3>
-          <SettingToggle
-            label="Show Dosage Prompts"
-            enabled={showDosagePrompts}
-            onChange={setShowDosagePrompts}
-            description="When enabled, the app will ask for patient age or a manual dose when you log Adrenaline, Amiodarone, or other drugs."
-          />
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Appearance</h3>
+          <div className="flex space-x-2">
+            {appearanceOptions.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setAppearanceMode(opt.value)}
+                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-xl border-2
+                ${
+                  appearanceMode === opt.value
+                    ? "bg-tone-tint border-tone-accent text-tone-on-tint"
+                    : "bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400"
+                }`}
+              >
+                {opt.icon}
+                <span className="text-sm font-medium">{opt.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Research & Data */}
@@ -7059,32 +7102,17 @@ const SettingsView: React.FC = () => {
             <span>Research & Data</span>
           </h3>
           <SettingToggle
-            label="Research Mode"
+            label="Enrol in Research"
             enabled={researchModeEnabled}
             onChange={(enabled) => {
               // Switching it on here is an active choice, so it counts as consent.
               if (enabled) setHasRespondedToResearchTerms(true);
               setResearchModeEnabled(enabled);
             }}
-            description="When enabled, anonymised arrest data is uploaded to help improve cardiac arrest outcomes research."
+            description="Uploads anonymised logs when an arrest ends, to help improve cardiac arrest outcomes."
           />
-          {researchModeEnabled ? (
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-800 dark:text-gray-200">Ask for Patient Info</span>
-                <span className="text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
-                  Required
-                </span>
-              </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Mandatory when Research Mode is enabled.</p>
-            </div>
-          ) : (
-            <SettingToggle
-              label="Ask for Patient Info"
-              enabled={askForPatientInfo}
-              onChange={setAskForPatientInfo}
-              description="Prompt for approximate patient age and gender when starting an arrest."
-            />
+          {researchModeEnabled && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">Age and sex are asked for at the start of each arrest while enrolled.</p>
           )}
           <div className="space-y-2">
             <span className="text-gray-800 dark:text-gray-200 text-sm">Organisation</span>
@@ -7104,43 +7132,36 @@ const SettingsView: React.FC = () => {
             href="https://tech.aegismedicalsolutions.co.uk/eresus/data-policy"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-600 dark:text-blue-400 underline flex items-center space-x-1"
+            className="text-sm text-tone-accent underline flex items-center space-x-1"
           >
             <ExternalLink size={14} />
-            <span>Data Collection Policy</span>
+            <span>Data Policy</span>
           </a>
         </div>
 
-        {/* Appearance */}
+        {/* About */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Appearance</h3>
-          <div className="flex space-x-2">
-            {appearanceOptions.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setAppearanceMode(opt.value)}
-                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-xl border-2
-                ${
-                  appearanceMode === opt.value
-                    ? "bg-blue-100 dark:bg-blue-900 border-blue-500 text-blue-700 dark:text-blue-300"
-                    : "bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400"
-                }`}
-              >
-                {opt.icon}
-                <span className="text-sm font-medium">{opt.label}</span>
-              </button>
-            ))}
-          </div>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">About</h3>
+          <button
+            onClick={() => setShowWhatsNew(true)}
+            className="w-full min-h-11 flex items-center justify-between text-gray-800 dark:text-gray-200"
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles size={18} className="text-tone-accent" aria-hidden="true" />
+              What's New & Quick Tour
+            </span>
+            <ChevronRight size={18} className="text-gray-400" aria-hidden="true" />
+          </button>
         </div>
 
         {/* Developer Info */}
         <div className="text-center py-4 space-y-1">
-          <p className="text-xs text-gray-400 dark:text-gray-500">eResus v1.2</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">eResus v1.3</p>
           <a
             href="https://tech.aegismedicalsolutions.co.uk"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors"
+            className="text-xs text-gray-400 dark:text-gray-500 hover:text-tone-accent transition-colors"
           >
             Developed by Aegis Medical Solutions Ltd
           </a>
@@ -7148,6 +7169,7 @@ const SettingsView: React.FC = () => {
       </div>
 
       <AuthView isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <WhatsNewView isOpen={showWhatsNew} onClose={() => setShowWhatsNew(false)} voiceCommandsEnabled={voiceCommandsEnabled} />
     </div>
   );
 };
@@ -7224,7 +7246,7 @@ const SettingToggle: React.FC<{
         onClick={() => onChange(!enabled)}
         className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent 
         transition-colors duration-200 ease-in-out focus:outline-none
-        ${enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}
+        ${enabled ? "bg-tone-accent" : "bg-gray-300 dark:bg-gray-600"}`}
       >
         <span
           className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 
@@ -7247,7 +7269,7 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf,
         <h2 className="text-lg font-semibold text-white truncate flex-1 mr-4">{pdf.title}</h2>
         <button
           onClick={onClose}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex-shrink-0 transition-colors"
+          className="px-4 py-2 bg-tone-accent hover:opacity-90 text-white rounded-xl flex-shrink-0 transition-colors"
         >
           Done
         </button>
@@ -7307,6 +7329,7 @@ const AppContent: React.FC = () => {
     voicePromptsEnabled,
     voicePromptsToneOnly,
     promptRhythmCheck,
+    voiceCommandsEnabled,
   } = useSettings();
   const { db, userId, isAnonymous, user } = useFirebase();
   const [showAccountPrompt, setShowAccountPrompt] = useState(false);
@@ -7369,6 +7392,11 @@ const AppContent: React.FC = () => {
     hasRespondedToResearchTerms,
     settingsLoaded,
   ]);
+
+  // After an update, a short tour, once. Never over a running or recovered arrest.
+  const [showWhatsNewOnLaunch, setShowWhatsNewOnLaunch] = useState(
+    () => !hasSeenWhatsNew() && arrestViewModel.arrestState === ArrestState.Pending,
+  );
 
   const previousArrestStateRef = useRef(arrestViewModel.arrestState);
   useEffect(() => {
@@ -7479,6 +7507,11 @@ const AppContent: React.FC = () => {
         <InstallInstructionsModal isOpen={showInstallModal} onClose={handleCloseInstallModal} />
         <AccountPromptView isOpen={showAccountPrompt} onClose={handleCloseAccountPrompt} />
         <ResearchConsentView isOpen={showResearchConsent} onClose={handleCloseResearchConsent} />
+        <WhatsNewView
+          isOpen={showWhatsNewOnLaunch && arrestViewModel.arrestState === ArrestState.Pending}
+          onClose={() => setShowWhatsNewOnLaunch(false)}
+          voiceCommandsEnabled={voiceCommandsEnabled}
+        />
         <PatientInfoPromptView
           isOpen={arrestViewModel.showPatientInfoPrompt}
           onClose={() => arrestViewModel.setShowPatientInfoPrompt(false)}
@@ -7509,7 +7542,7 @@ const TabButton: React.FC<{
     className={`flex flex-col items-center w-20 p-1 rounded-lg transition-colors
     ${
       isActive
-        ? "text-blue-600 dark:text-blue-400"
+        ? "text-tone-accent"
         : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
     }`}
   >

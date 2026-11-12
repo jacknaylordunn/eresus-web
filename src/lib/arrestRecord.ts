@@ -12,10 +12,18 @@ export interface LoggedEvent {
 // MARK: Traumatic cardiac arrest
 
 // HOTT comes before drugs, so drug reminders stay quiet. The buttons still work.
-export const TRAUMA_ON_ENTRY = "Traumatic cardiac arrest: HOTT first, drug prompts quietened";
-export const TRAUMA_OFF_ENTRY = "Not a traumatic arrest: drug prompts restored";
-// Still a traumatic arrest, but HOTT has been dealt with and the crew moves on to standard ALS drugs.
-export const TRAUMA_PROMPTS_RESTORED_ENTRY = "HOTT addressed: drug prompts restored";
+// Plain wording: the log may be read back long afterwards, by people who never saw the app.
+export const TRAUMA_ON_ENTRY = "Traumatic cardiac arrest mode selected";
+export const TRAUMA_OFF_ENTRY = "Traumatic cardiac arrest mode switched off";
+// Earlier wording, still read from older logs, restored sessions and transfers.
+const LEGACY_TRAUMA_ON = ["Traumatic cardiac arrest: HOTT first"];
+const LEGACY_TRAUMA_OFF = ["Not a traumatic arrest"];
+// Older builds could turn drug prompts back on while staying a traumatic arrest.
+const LEGACY_PROMPTS_RESTORED = "HOTT addressed";
+
+const isTraumaOn = (message: string) => message.startsWith(TRAUMA_ON_ENTRY) || LEGACY_TRAUMA_ON.some((p) => message.startsWith(p));
+const isTraumaOff = (message: string) =>
+  message.startsWith(TRAUMA_OFF_ENTRY) || LEGACY_TRAUMA_OFF.some((p) => message.startsWith(p));
 
 export const TRAUMA_EARLY_ACTIONS = ["Enhanced / critical care requested"];
 
@@ -51,21 +59,20 @@ export const isTraumaProcedureName = (name: string): boolean => TRAUMA_NAMES.has
 // Read from the log (newest first), so it survives a reload, an undo and a transfer without extra state.
 export const isTraumaArrest = (events: { message: string }[]): boolean => {
   for (const event of events) {
-    if (event.message.startsWith(TRAUMA_ON_ENTRY)) return true;
-    if (event.message.startsWith(TRAUMA_OFF_ENTRY)) return false;
+    if (isTraumaOn(event.message)) return true;
+    if (isTraumaOff(event.message)) return false;
   }
   return false;
 };
 
-// Drug reminders are quiet from the trauma entry until HOTT is marked as addressed or it's not trauma.
-// Events are newest first.
+// Drug reminders are quiet while traumatic arrest mode is on. Events are newest first.
 export const areDrugPromptsQuietened = (events: { message: string }[]): boolean => {
+  if (!isTraumaArrest(events)) return false;
   for (const event of events) {
-    if (event.message.startsWith(TRAUMA_PROMPTS_RESTORED_ENTRY)) return false;
-    if (event.message.startsWith(TRAUMA_ON_ENTRY)) return true;
-    if (event.message.startsWith(TRAUMA_OFF_ENTRY)) return false;
+    if (event.message.startsWith(LEGACY_PROMPTS_RESTORED)) return false;
+    if (isTraumaOn(event.message)) return true;
   }
-  return false;
+  return true;
 };
 
 export const traumaInterventionCount = (events: { message: string; type: string }[]): number =>

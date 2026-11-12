@@ -55,6 +55,7 @@ Required means iOS 1.2 cannot decode the session without it.
 | `nlsCycleDuration` | number | yes | Newborn cycle length (seconds) |
 | `uiState` | object | yes | `{"default":{}}`, `{"analyzing":{}}` or `{"shockAdvised":{}}`. Readers also accept the bare string |
 | `isRhythmCheckDue` | bool | yes | |
+| `rhythmCheckDueAt` | number | | *v2.* Total time at which the current rhythm check fell due, while it is due. iOS moves `cprCycleStartTime` on to the next cycle while a check is overdue, so readers use this to show how late the check is. Missing when no check is due |
 
 ### Counts and drugs
 

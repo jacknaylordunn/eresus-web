@@ -53,6 +53,10 @@ export interface SessionSnapshot {
   isTimerPaused: boolean;
   startTime: Date | null;
   cprCycleStartTime: number;
+  // When the rhythm check fell due, while it's due. iOS moves cprCycleStartTime on to the next cycle while a
+  // check is overdue, so this is what keeps "how late" across a transfer.
+  isRhythmCheckDue?: boolean;
+  rhythmCheckDueAt?: number | null;
   lastAdrenalineTime: number | null;
   shockCountForAmiodarone1: number | null;
   initialRhythm: string | null;
@@ -134,7 +138,8 @@ export const encodeSession = (session: SessionSnapshot): string => {
     cprTime: session.cprTime,
     timeOffset: session.timeOffset,
     cprCycleStartTime: session.cprCycleStartTime,
-    isRhythmCheckDue: false,
+    isRhythmCheckDue: session.isRhythmCheckDue ?? false,
+    ...(typeof session.rhythmCheckDueAt === "number" ? { rhythmCheckDueAt: session.rhythmCheckDueAt } : {}),
     eventsData: utf8ToBase64(JSON.stringify(toWireEvents(session.events))),
     shockCount: session.shockCount,
     stackedShockExtra: session.stackedShockExtra,
@@ -196,10 +201,15 @@ export const decodeSession = (wire: any, cycleDuration: number): DecodedSession 
   const masterTime = wire.masterTime ?? 0;
   const timeOffset = wire.timeOffset ?? 0;
   const cprTime = wire.cprTime ?? cycleDuration;
-  const cprCycleStartTime =
+  const isRhythmCheckDue = wire.isRhythmCheckDue === true;
+  const rhythmCheckDueAt = typeof wire.rhythmCheckDueAt === "number" ? wire.rhythmCheckDueAt : null;
+  let cprCycleStartTime =
     typeof wire.cprCycleStartTime === "number"
       ? wire.cprCycleStartTime
       : masterTime + timeOffset - (cycleDuration - cprTime);
+  // The PWA keeps the cycle start at the last check until the next one, so an overdue check goes back to
+  // where it fell due.
+  if (isRhythmCheckDue && rhythmCheckDueAt !== null) cprCycleStartTime = rhythmCheckDueAt - cycleDuration;
 
   return {
     formatVersion: typeof wire.formatVersion === "number" ? wire.formatVersion : 1,
@@ -209,6 +219,8 @@ export const decodeSession = (wire: any, cycleDuration: number): DecodedSession 
     cprTime,
     timeOffset,
     cprCycleStartTime,
+    isRhythmCheckDue,
+    rhythmCheckDueAt,
     events: events.map((event) => ({
       id: event.id,
       timestamp: event.timestamp ?? 0,

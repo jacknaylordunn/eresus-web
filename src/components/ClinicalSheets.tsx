@@ -1,7 +1,7 @@
 // Sheets for logging drugs, traumatic arrest interventions and post-ROSC observations (matches iOS
 // ClinicalSheets.swift).
 import React, { useEffect, useMemo, useState } from "react";
-import { Bandage, Check, CheckCircle2, ChevronDown, Search } from "lucide-react";
+import { Bandage, Check, CheckCircle2, ChevronDown, ChevronRight, Search } from "lucide-react";
 import Modal from "./Modal";
 import {
   bpEntry,
@@ -186,51 +186,34 @@ export const OtherDrugsSheet: React.FC<{
 // clinical priority (not in order) before chest compressions and ALS drugs.
 export const HOTTCard: React.FC<{
   compact?: boolean;
+  // On the arrest screen the whole card opens the trauma sheet.
   onOpen?: () => void;
-  // Still traumatic, but HOTT is dealt with: back to standard ALS drug prompts without recording "not trauma".
-  onRestorePrompts?: () => void;
-  onNotTrauma?: () => void;
-}> = ({ compact = false, onOpen, onRestorePrompts, onNotTrauma }) => (
-  <div className="p-4 rounded-xl bg-tone-tint text-tone-on-tint space-y-2">
-    <div className="flex items-center gap-2 font-bold">
-      <Bandage size={18} aria-hidden="true" />
-      <span>Traumatic arrest: HOTT first</span>
-    </div>
-    <p className="text-sm font-semibold">Hypovolaemia · Oxygenation · Tension pneumothorax · Tamponade</p>
-    {!compact && (
-      <p className="text-xs opacity-85">
-        By clinical priority, not in order. Give TXA early and request enhanced or critical care. Penetrating trauma: convey
-        rapidly and do interventions en route.
-      </p>
-    )}
-    {(onOpen || onRestorePrompts || onNotTrauma) && (
-      // Wraps as whole buttons (never mid-label): on a phone the interventions button gets its own line.
-      <div className="flex flex-wrap items-center gap-x-4 pt-1">
-        {onOpen && (
-          <button onClick={onOpen} className="min-h-11 whitespace-nowrap text-sm font-bold underline-offset-2 hover:underline">
-            Trauma interventions
-          </button>
+}> = ({ compact = false, onOpen }) => {
+  const content = (
+    <>
+      <Bandage size={22} aria-hidden="true" className="shrink-0" />
+      <span className="flex-1 min-w-0 text-left space-y-0.5">
+        <span className="block font-bold">Traumatic arrest: treat HOTT first</span>
+        <span className="block text-sm opacity-85">Hypovolaemia · Oxygenation · Tension pneumothorax · Tamponade</span>
+        {!compact && (
+          <span className="block text-sm opacity-85 pt-1">
+            By clinical priority, not in order. Give TXA early and request enhanced or critical care. Penetrating trauma:
+            convey rapidly and do interventions en route.
+          </span>
         )}
-        <span className="flex gap-4">
-          {onRestorePrompts && (
-            <button
-              onClick={onRestorePrompts}
-              aria-description="HOTT addressed: restores drug prompts, still recorded as a traumatic arrest"
-              className="min-h-11 whitespace-nowrap text-sm font-bold"
-            >
-              Prompts on
-            </button>
-          )}
-          {onNotTrauma && (
-            <button onClick={onNotTrauma} aria-description="Restores drug prompts" className="min-h-11 whitespace-nowrap text-sm">
-              Not trauma
-            </button>
-          )}
-        </span>
-      </div>
-    )}
-  </div>
-);
+      </span>
+      {onOpen && <ChevronRight size={20} aria-hidden="true" className="shrink-0 opacity-70" />}
+    </>
+  );
+  const className = "w-full flex items-center gap-3 p-3.5 rounded-xl bg-tone-tint text-tone-on-tint";
+  return onOpen ? (
+    <button onClick={onOpen} aria-description="Opens trauma interventions" className={`${className} active:scale-[0.98] transition-transform`}>
+      {content}
+    </button>
+  ) : (
+    <div className={className}>{content}</div>
+  );
+};
 
 export const TraumaSheet: React.FC<{
   isOpen: boolean;
@@ -278,7 +261,7 @@ export const TraumaSheet: React.FC<{
         <div className="space-y-4">
           {/* Compact, so the interventions are near the top of the sheet. */}
           <HOTTCard compact />
-          <Section footer="Quietens the drug prompts so HOTT comes first; drug buttons still work. A tourniquet, pelvic binder, chest procedure, thoracotomy or REBOA turns this on. If the cause is medical (with injuries), switch it off and follow ALS.">
+          <Section footer="Pauses drug reminders so HOTT comes first; the drug buttons still work. Switches on by itself when a tourniquet, pelvic binder, chest procedure, thoracotomy or REBOA is logged. Switch it off once HOTT is dealt with, or if the cause is medical.">
             <label className="flex items-center justify-between min-h-11 px-3 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
               <span>Traumatic cardiac arrest</span>
               <input

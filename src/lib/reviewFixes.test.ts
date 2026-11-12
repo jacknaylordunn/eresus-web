@@ -13,7 +13,6 @@ import {
   TRAUMA_MARKS_ARREST,
   TRAUMA_OFF_ENTRY,
   TRAUMA_ON_ENTRY,
-  TRAUMA_PROMPTS_RESTORED_ENTRY,
   type LoggedEvent,
 } from "./arrestRecord";
 import { buildSummary } from "./arrestSummary";
@@ -104,7 +103,8 @@ describe("review fixes", () => {
       antiarrhythmicGiven: "none",
     };
     expect(drugPrompts(input).adrenalineButtonDetail).toBeNull();
-    events = [{ timestamp: 30, message: TRAUMA_PROMPTS_RESTORED_ENTRY, type: "status" }, ...events];
+    // An entry from an older build that turned prompts back on while staying trauma.
+    events = [{ timestamp: 30, message: "HOTT addressed: drug prompts restored", type: "status" }, ...events];
     expect(isTraumaArrest(events)).toBe(true);
     expect(areDrugPromptsQuietened(events)).toBe(false);
     expect(drugPrompts({ ...input, areDrugPromptsQuietened: areDrugPromptsQuietened(events) }).adrenalineButtonDetail).toBe(
