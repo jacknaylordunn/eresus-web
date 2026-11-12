@@ -3540,15 +3540,20 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
               JRCALC Guidelines (Paediatric)
             </h4>
             <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200">
-              <p className="font-semibold">Paediatric / Infant Arrest</p>
-              <p>
-                All paediatric cardiac arrests should be conveyed to the Emergency Department unless there is a clear
-                reason not to (e.g. DNACPR, expected death).
-              </p>
-              <p>
-                Consider continuing resuscitation for at least <strong>60 minutes</strong> from the time of arrest.
-              </p>
-              <p>Contact paediatric specialist for advice early.</p>
+              {/* Same wording as the iOS ToR sheet. */}
+              <ul className="space-y-2">
+                <li>
+                  • Consider termination after <strong>60 minutes</strong> of resuscitation.
+                </li>
+                <li>
+                  • Ceasing resuscitation on scene should ONLY be considered if senior clinicians are present or senior
+                  advice has been sought.
+                </li>
+                <li>• The child must still be conveyed to an ED (unless care plan states otherwise).</li>
+                <li>
+                  • Resuscitation should ALWAYS be continued in: hypothermia, suspected overdose/poisoning, or pregnancy.
+                </li>
+              </ul>
             </div>
           </div>
         )}
