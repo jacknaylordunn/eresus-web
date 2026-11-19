@@ -1,5 +1,4 @@
-const CACHE_NAME = 'eresus-react-v10';
-const PDF_CACHE_NAME = 'eresus-pdfs-v2';
+const CACHE_NAME = 'eresus-react-v11';
 
 const STATIC_URLS = [
   '/',
@@ -14,19 +13,15 @@ const STATIC_URLS = [
   '/audio/prompts/consider_amiodarone_second.mp3',
   '/audio/prompts/consider_lidocaine_second.mp3',
   '/audio/prompts/reassess_newborn.mp3',
+  // Guideline charts are bundled, so every one opens with no signal
+  '/guidelines/adult_als.png',
+  '/guidelines/paediatric_als.png',
+  '/guidelines/newborn_ls.png',
+  '/guidelines/traumatic_arrest.png',
+  '/guidelines/post_arrest.png',
+  '/guidelines/jrcalc_adult_arrest.webp',
+  '/guidelines/jrcalc_post_rosc.webp',
 ];
-
-// Map of same-origin proxy paths -> upstream PDF URLs
-const PDF_MAP = {
-  '/cached-pdf/adult.pdf':
-    'https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf',
-  '/cached-pdf/paeds.pdf':
-    'https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf',
-  '/cached-pdf/newborn.pdf':
-    'https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf',
-  '/cached-pdf/post.pdf':
-    'https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf',
-};
 
 // Discover and cache all Vite-built assets from index.html
 async function discoverAndCacheAssets(cache) {
@@ -56,47 +51,6 @@ async function discoverAndCacheAssets(cache) {
   }
 }
 
-// Pre-cache PDFs as same-origin keys.
-// Strategy: fetch upstream as no-cors (opaque), then store the opaque Response
-// under a same-origin URL key (e.g. /cached-pdf/adult.pdf). When the app
-// requests that same-origin URL, the SW responds with the opaque body, which
-// browsers DO accept for <object> / <iframe> because the URL itself is same-origin.
-async function precachePDFs() {
-  const cache = await caches.open(PDF_CACHE_NAME);
-  const results = await Promise.all(
-    Object.entries(PDF_MAP).map(async ([proxyPath, upstreamUrl]) => {
-      try {
-        // Check if already cached
-        const existing = await cache.match(proxyPath);
-        if (existing) {
-          console.log('[SW] PDF already cached:', proxyPath);
-          return { proxyPath, ok: true, cached: true };
-        }
-
-        const upstreamResp = await fetch(upstreamUrl, {
-          mode: 'no-cors',
-          cache: 'no-store',
-          credentials: 'omit',
-        });
-
-        // Opaque responses have status 0 but are still storable
-        if (upstreamResp.type === 'opaque' || upstreamResp.ok) {
-          // Store under the SAME-ORIGIN proxy path
-          await cache.put(proxyPath, upstreamResp.clone());
-          console.log('[SW] Pre-cached PDF:', proxyPath);
-          return { proxyPath, ok: true };
-        }
-        console.warn('[SW] PDF fetch not cacheable:', proxyPath, upstreamResp.status);
-        return { proxyPath, ok: false };
-      } catch (err) {
-        console.warn('[SW] Failed pre-cache PDF:', proxyPath, err);
-        return { proxyPath, ok: false, error: String(err) };
-      }
-    })
-  );
-  console.log('[SW] PDF precache results:', results);
-}
-
 self.addEventListener('install', event => {
   self.skipWaiting();
 
@@ -105,19 +59,13 @@ self.addEventListener('install', event => {
       const cache = await caches.open(CACHE_NAME);
       console.log('[SW] Installing:', CACHE_NAME);
 
-      await cache.addAll(STATIC_URLS).catch(err =>
-        console.warn('[SW] Static URL cache failed:', err)
+      // One at a time, so one missing file can't stop the rest (prompts, charts) caching.
+      await Promise.all(
+        STATIC_URLS.map(url => cache.add(url).catch(err => console.warn('[SW] Static URL cache failed:', url, err)))
       );
       await discoverAndCacheAssets(cache);
-      await precachePDFs();
     })()
   );
-});
-
-self.addEventListener('message', event => {
-  if (event.data && event.data.type === 'PRECACHE_PDFS') {
-    event.waitUntil(precachePDFs());
-  }
 });
 
 self.addEventListener('fetch', event => {
@@ -135,66 +83,6 @@ self.addEventListener('fetch', event => {
     url.hostname.includes('identitytoolkit') ||
     url.hostname.includes('securetoken')
   ) {
-    return;
-  }
-
-  // 1. Same-origin PDF proxy: serve from cache, fall back to network fetch + cache
-  if (url.origin === self.location.origin && url.pathname.startsWith('/cached-pdf/')) {
-    event.respondWith(
-      (async () => {
-        const cache = await caches.open(PDF_CACHE_NAME);
-        const cached = await cache.match(url.pathname);
-        if (cached) {
-          console.log('[SW] Serving cached PDF:', url.pathname);
-          return cached;
-        }
-        // Not cached yet — fetch upstream now, cache, return
-        const upstreamUrl = PDF_MAP[url.pathname];
-        if (!upstreamUrl) {
-          return new Response('PDF not found', { status: 404 });
-        }
-        try {
-          const resp = await fetch(upstreamUrl, { mode: 'no-cors', credentials: 'omit' });
-          if (resp.type === 'opaque' || resp.ok) {
-            await cache.put(url.pathname, resp.clone());
-          }
-          return resp;
-        } catch (err) {
-          return new Response('Offline and PDF not cached', { status: 503 });
-        }
-      })()
-    );
-    return;
-  }
-
-  // 2. Direct upstream PDF requests (legacy, in case any code still uses raw URL):
-  // try cache first via PDF_MAP reverse lookup, then network.
-  if (url.href.endsWith('.pdf')) {
-    const proxyPath = Object.keys(PDF_MAP).find(k => PDF_MAP[k] === url.href);
-    event.respondWith(
-      (async () => {
-        if (proxyPath) {
-          const cache = await caches.open(PDF_CACHE_NAME);
-          const cached = await cache.match(proxyPath);
-          if (cached && !navigator.onLine) return cached;
-          try {
-            const resp = await fetch(event.request);
-            if (resp && (resp.ok || resp.type === 'opaque')) {
-              await cache.put(proxyPath, resp.clone());
-            }
-            return resp;
-          } catch {
-            if (cached) return cached;
-            return new Response('Offline', { status: 503 });
-          }
-        }
-        try {
-          return await fetch(event.request);
-        } catch {
-          return new Response('Offline', { status: 503 });
-        }
-      })()
-    );
     return;
   }
 
@@ -253,12 +141,10 @@ self.addEventListener('activate', event => {
       const names = await caches.keys();
       await Promise.all(
         names
-          .filter(n => n !== CACHE_NAME && n !== PDF_CACHE_NAME)
+          .filter(n => n !== CACHE_NAME)
           .map(n => caches.delete(n))
       );
       await self.clients.claim();
-      // Trigger PDF precache again on activation in case install missed any
-      precachePDFs();
     })()
   );
 });

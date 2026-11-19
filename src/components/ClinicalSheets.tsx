@@ -333,11 +333,11 @@ export const SomaticCriteriaSection: React.FC<{ isPaediatric: boolean; initially
           <p>Resuscitation is not indicated, or can be stopped, if any of these are present:</p>
           <ul className="list-disc pl-5 space-y-0.5">
             <li>Decapitation</li>
-            <li>Massive cranial and cerebral destruction (far beyond a simple depressed skull fracture)</li>
+            <li>Massive cranial and cerebral destruction</li>
             <li>Hemicorporectomy or similar massive injury</li>
             <li>Over 95% full-thickness burns, or incineration clearly incompatible with life</li>
             <li>Decomposition or putrefaction</li>
-            <li>Prolonged submersion (see Drowning)</li>
+            <li>Prolonged submersion</li>
             <li>Post-mortem hypostasis</li>
             <li>Rigor mortis (not rigidity at the moment of arrest)</li>
           </ul>

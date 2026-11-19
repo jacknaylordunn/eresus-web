@@ -95,8 +95,6 @@ import {
   Mic,
   MicOff,
   Bandage,
-  Stethoscope,
-  PhoneOutgoing,
   Play,
   Sparkles,
 } from "lucide-react";
@@ -338,8 +336,6 @@ export interface UndoState {
 export interface PDFIdentifiable {
   id: string;
   pdfUrl: string;
-  /** Original cross-origin URL (for fallback viewers like Google Docs) */
-  upstreamUrl?: string;
   title: string;
 }
 
@@ -631,38 +627,6 @@ const AppConstants = {
     },
   ],
 
-  pdfAlgorithms: [
-    {
-      id: "adult",
-      // Same-origin proxy path served by service worker (offline-cacheable).
-      // SW maps this to the upstream Resus Council PDF URL.
-      pdfUrl: "/cached-pdf/adult.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf",
-      title: "Adult ALS",
-    },
-    {
-      id: "paeds",
-      pdfUrl: "/cached-pdf/paeds.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf",
-      title: "Paediatric ALS",
-    },
-    {
-      id: "newborn",
-      pdfUrl: "/cached-pdf/newborn.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf",
-      title: "Newborn LS",
-    },
-    {
-      id: "post",
-      pdfUrl: "/cached-pdf/post.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf",
-      title: "Post Arrest Care",
-    },
-  ],
 };
 
 //============================================================================
@@ -3401,7 +3365,7 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
         {failedIVAttempts >= 2 && (
           <div className="flex items-start gap-2 p-3 rounded-xl bg-tone-tint text-tone-on-tint text-sm">
             <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
-            <span>{failedIVAttempts} IV attempts unsuccessful. Consider IO access (RCUK 2025).</span>
+            <span>{failedIVAttempts} IV attempts unsuccessful. Consider IO access.</span>
           </div>
         )}
         <h3 className="text-tone-accent font-semibold text-sm">Access Details</h3>
@@ -3434,14 +3398,14 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             type="text"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            placeholder="Location (e.g. Left AC, Tibia) - Optional"
+            placeholder="Location, e.g. left AC"
             className="w-full p-3 bg-transparent border-b border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none"
           />
           <input
             type="text"
             value={gauge}
             onChange={(e) => setGauge(e.target.value)}
-            placeholder="Gauge (e.g. 18G, Pink) - Optional"
+            placeholder="Gauge, e.g. 18G"
             className="w-full p-3 bg-transparent border-b border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none"
           />
           <div className="flex justify-between items-center">
@@ -3511,15 +3475,14 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
           <p
             className={`font-semibold ${resuscitationTime >= thresholdTime ? "text-red-600 dark:text-red-400" : "text-gray-700 dark:text-gray-300"}`}
           >
-            Resuscitation Time: {timeOffset > 0 ? "~" : ""}
+            Resuscitation time: {timeOffset > 0 ? "~" : ""}
             {TimeFormatter.format(resuscitationTime)}
-            {timeOffset > 0 ? " (estimated)" : ""}
           </p>
           {/* With no time added, the clock started with eResus, so say that rather than claim more. */}
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {timeOffset > 0
-              ? `Timed from when the first ambulance resource (crew or CFR) confirmed cardiac arrest, including about ${Math.round(timeOffset / 60)} min before eResus was started (estimated).`
-              : "Timed from when eResus was started. If the arrest was confirmed earlier, add the time with +1/+5/+10."}
+              ? `Timed from when arrest was confirmed, including about ${Math.round(timeOffset / 60)} min before eResus.`
+              : "Timed from when eResus was started. Add earlier time with +1, +5 or +10."}
           </p>
         </div>
 
@@ -3561,7 +3524,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         {knownPaediatric !== false && (
           <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
             <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-              JRCALC Guidelines (Paediatric)
+              JRCALC Child
             </h4>
             <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200">
               {/* Same wording as the iOS ToR sheet. */}
@@ -3570,12 +3533,12 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
                   • Consider termination after <strong>60 minutes</strong> of resuscitation.
                 </li>
                 <li>
-                  • Ceasing resuscitation on scene should ONLY be considered if senior clinicians are present or senior
+                  • Ceasing resuscitation on scene should only be considered if senior clinicians are present or senior
                   advice has been sought.
                 </li>
-                <li>• The child must still be conveyed to an ED (unless care plan states otherwise).</li>
+                <li>• The child must still be conveyed to an ED unless a care plan states otherwise.</li>
                 <li>
-                  • Resuscitation should ALWAYS be continued in: hypothermia, suspected overdose/poisoning, or pregnancy.
+                  • Resuscitation should always be continued in hypothermia, suspected overdose or poisoning, and pregnancy.
                 </li>
               </ul>
             </div>
@@ -3585,7 +3548,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         {knownPaediatric !== true && (
           <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
             <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-              JRCALC Guidelines (Adult)
+              JRCALC Adult
             </h4>
             <div className="space-y-4 text-sm text-gray-800 dark:text-gray-200">
               <p className="text-xs text-gray-500 dark:text-gray-400">{currentRhythmLine(currentRhythm, initialRhythm)}</p>
@@ -3617,6 +3580,10 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
                 </ul>
               </div>
               <p className="text-xs font-semibold">{TOR_ADULT_EXCLUSIONS}</p>
+              <details>
+                <summary className="cursor-pointer text-sm font-semibold text-tone-accent">JRCALC termination of resus flowchart</summary>
+                <img src={GUIDELINES.jrcalcAdultArrest.pdfUrl} alt="JRCALC termination of resuscitation flowchart" className="mt-2 w-full rounded-lg bg-white" />
+              </details>
             </div>
           </div>
         )}
@@ -3625,7 +3592,7 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={hasTraumaContext} />}
 
         <ActionButton
-          title="Confirm TOR (Stop CPR)"
+          title="Confirm ToR"
           tone="danger"
           icon={<Shield size={18} />}
           onClick={() => {
@@ -4497,8 +4464,7 @@ const BeforeEResusModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
         </p>
       )}
       <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-        Recorded as given before eResus, times unknown (estimated). If you know when the last adrenaline was, you can choose it
-        on the arrest screen.
+        Given before eResus, time unknown. If you know when, choose it on the arrest screen.
       </p>
       <button
         disabled={!hasAny}
@@ -4926,7 +4892,7 @@ const PendingView: React.FC<{
         fontSize="text-lg"
         onClick={onShowNewborn}
       />
-      <AlgorithmGridView onShowPdf={onShowPdf} />
+      <GuidelinesView onShowPdf={onShowPdf} />
 
       {needsSetup && onStartSetup && (
         <button
@@ -5019,6 +4985,7 @@ const ActiveArrestContentView: React.FC<{
     cprTime,
     uiState,
     isTraumaArrest,
+    isPaediatric,
     setTraumaArrest,
     areDrugPromptsQuietened,
     isAdrenalineHighlighted,
@@ -5090,8 +5057,6 @@ const ActiveArrestContentView: React.FC<{
 
       <ActionGridView {...props} />
 
-      <AlgorithmGridView onShowPdf={props.onShowPdf} />
-
       <ChecklistView
         title="Reversible Causes (4 H's & 4 T's)"
         items={reversibleCauses}
@@ -5101,13 +5066,16 @@ const ActiveArrestContentView: React.FC<{
 
       <EventLogView events={events} />
 
+      {/* Last but for Transfer, so a scroll to the bottom always finds them. */}
+      <GuidelinesView onShowPdf={props.onShowPdf} guidelines={guidelinesDuring(isPaediatric, isTraumaArrest)} />
+
       <TransferArrestPill />
     </div>
   );
 };
 
 const SectionTitle: React.FC<{ title: string }> = ({ title }) => (
-  <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{title}</h3>
+  <h3 className="text-center text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{title}</h3>
 );
 
 // Quick post-ROSC drugs (matches iOS QuickDrug). Doses follow JRCALC post-ROSC care; anything else goes
@@ -5121,7 +5089,16 @@ interface QuickDrug {
   message: string;
   childMessage: string;
 }
-const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride", QuickDrug> = {
+const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride" | "tranexamicAcid", QuickDrug> = {
+  tranexamicAcid: {
+    title: "Tranexamic acid",
+    drugName: "Tranexamic acid",
+    group: "fluids",
+    doses: ["1 g"],
+    childDoses: ["15 mg/kg (max 1 g)"],
+    message: "JRCALC: after ROSC following traumatic cardiac arrest. Single dose; consider time since injury.",
+    childMessage: "JRCALC: after ROSC following traumatic cardiac arrest. Single dose; consider time since injury.",
+  },
   pushDoseAdrenaline: {
     title: "Push-dose adrenaline",
     drugName: "Adrenaline push-dose",
@@ -5147,8 +5124,9 @@ const RoscView: React.FC<{
   onOpenDrugs: (focus: DrugGroupKind | null) => void;
   onShowEtco2: () => void;
   onVoiceTranscript?: (transcript: string) => void;
-  // A common post-ROSC drug at a set dose, checked for a repeat like any other.
-  onQuickDrug: (name: string, dose: string) => void;
+  // A common post-ROSC drug, checked for a repeat like any other. The dose is null when dose prompts are off:
+  // the drug is logged on the tap, like every other drug.
+  onQuickDrug: (name: string, dose: string | null) => void;
 }> = ({ onShowPdf, onOpenDrugs, onShowEtco2, onVoiceTranscript, onQuickDrug }) => {
   const {
     reArrest,
@@ -5165,6 +5143,10 @@ const RoscView: React.FC<{
   const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
   const [showDestination, setShowDestination] = useState(false);
   const [quickDrug, setQuickDrug] = useState<QuickDrug | null>(null);
+  const { showDosagePrompts } = useSettings();
+  const give = (drug: QuickDrug) => (showDosagePrompts ? setQuickDrug(drug) : onQuickDrug(drug.drugName, null));
+  // Arrest clock time of the latest tranexamic acid, from before or after ROSC. A single dose, so it shows.
+  const txaEvent = events.find((e) => e.type === EventType.Drug && e.message.startsWith("Tranexamic acid"));
   const listener = useVoiceListener();
   const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Hold to talk");
   const paediatric = isPaediatric === true;
@@ -5196,8 +5178,8 @@ const RoscView: React.FC<{
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-foreground">{talking ? "Listening…" : "Hold to talk"}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
-                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”, “ketamine 100 mg”"}
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”"}
               </p>
             </div>
           </div>
@@ -5223,13 +5205,24 @@ const RoscView: React.FC<{
       <div className="space-y-2">
         <SectionTitle title="Medications" />
         <div className="grid grid-cols-2 gap-3">
-          {/* The two most often needed after ROSC, one tap and a dose away. */}
-          <ActionButton title="Push-dose Adrenaline" icon={<HeartPulse size={16} />} tone="primary" height="h-12" fontSize="text-sm" onClick={() => setQuickDrug(QUICK_DRUGS.pushDoseAdrenaline)} />
-          <ActionButton title="Sodium Chloride 0.9%" icon={<Droplet size={16} />} tone="primary" height="h-12" fontSize="text-sm" onClick={() => setQuickDrug(QUICK_DRUGS.sodiumChloride)} />
-          <ActionButton title="Sedation / RSI..." icon={<Syringe size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("sedation")} />
-          <ActionButton title="Fluids & Blood..." icon={<Droplet size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("fluids")} />
-          <ActionButton title="Vasopressors..." icon={<HeartPulse size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("arrest")} />
-          <ActionButton title="Other Meds..." icon={<Pill size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs(null)} />
+          {/* The two most often needed after ROSC: one tap, plus a dose when dose prompts are on. */}
+          <ActionButton title="Push-dose Adrenaline" tone="primary" height="h-12" fontSize="text-sm" onClick={() => give(QUICK_DRUGS.pushDoseAdrenaline)} />
+          <ActionButton title="Sodium Chloride 0.9%" tone="primary" height="h-12" fontSize="text-sm" onClick={() => give(QUICK_DRUGS.sodiumChloride)} />
+          {/* JRCALC: if ROSC follows traumatic cardiac arrest, give tranexamic acid. A single dose, so the time it
+              was given shows here and a second one is asked about first. */}
+          {hasTraumaContext && (
+            <button
+              onClick={() => give(QUICK_DRUGS.tranexamicAcid)}
+              className={`col-span-2 flex min-h-12 flex-col items-center justify-center rounded-xl text-sm font-semibold active:scale-95 transition-transform ${
+                txaEvent ? "bg-tone-tint text-tone-on-tint" : "bg-tone-accent text-white"
+              }`}
+            >
+              <span>Tranexamic Acid</span>
+              {txaEvent && <span className="text-xs font-normal opacity-80">Given {TimeFormatter.format(txaEvent.timestamp)}</span>}
+            </button>
+          )}
+          <ActionButton title="Sedation / RSI..." tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("sedation")} />
+          <ActionButton title="All Drugs..." tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs(null)} />
         </div>
       </div>
 
@@ -5269,13 +5262,13 @@ const RoscView: React.FC<{
       <div className="space-y-2">
         <SectionTitle title="Conveyance" />
         <div className="grid grid-cols-2 gap-3">
-          <ActionButton title="Destination..." icon={<Stethoscope size={16} />} tone="slate" height="h-12" fontSize="text-sm" onClick={() => setShowDestination(true)} />
-          <ActionButton title="Pre-alert Given" icon={<PhoneOutgoing size={16} />} tone="slate" height="h-12" fontSize="text-sm" onClick={() => logDestination("Pre-alert given")} />
+          <ActionButton title="Destination..." tone="slate" height="h-12" fontSize="text-sm" onClick={() => setShowDestination(true)} />
+          <ActionButton title="Pre-alert Given" tone="slate" height="h-12" fontSize="text-sm" onClick={() => logDestination("Pre-alert given")} />
         </div>
       </div>
 
       <EventLogView events={events} />
-      <AlgorithmGridView onShowPdf={onShowPdf} />
+      <GuidelinesView onShowPdf={onShowPdf} guidelines={guidelinesAfterROSC(isPaediatric, hasTraumaContext)} />
       <TransferArrestPill />
 
       <ObservationSheet
@@ -5307,6 +5300,7 @@ const EndedView: React.FC<{
     vodConfirmed,
     confirmVOD,
     toggleVodChecklistItem,
+    isPaediatric,
   } = useArrest();
   const [showPLIIE, setShowPLIIE] = useState(false);
 
@@ -5406,8 +5400,8 @@ const EndedView: React.FC<{
         </div>
       )}
 
-      <AlgorithmGridView onShowPdf={onShowPdf} />
       <EventLogView events={events} />
+      <GuidelinesView onShowPdf={onShowPdf} guidelines={guidelinesAfterStopping(isPaediatric)} />
       <TransferArrestPill />
 
       <PLIIEModal isOpen={showPLIIE} onClose={() => setShowPLIIE(false)} />
@@ -5761,24 +5755,109 @@ const EventLogView: React.FC<{ events: Event[] }> = ({ events }) => {
   );
 };
 
-const AlgorithmGridView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void }> = ({ onShowPdf }) => (
-  <div className="space-y-3">
-    <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Resuscitation Council UK</h3>
-    <div className="grid grid-cols-2 gap-3">
-      {AppConstants.pdfAlgorithms.map((pdf) => (
+// The guideline charts, bundled as images so they open with no signal (the service worker pre-caches them).
+type GuidelineSource = "rcuk" | "jrcalc";
+interface Guideline extends PDFIdentifiable {
+  source: GuidelineSource;
+  name: string;
+}
+const guideline = (id: string, source: GuidelineSource, name: string, file: string): Guideline => ({
+  id,
+  source,
+  name,
+  pdfUrl: `/guidelines/${file}`,
+  title: `${source === "rcuk" ? "RCUK" : "JRCALC"} ${name}`,
+});
+const GUIDELINES = {
+  adultALS: guideline("adultALS", "rcuk", "Adult ALS", "adult_als.png"),
+  paediatricALS: guideline("paediatricALS", "rcuk", "Paediatric ALS", "paediatric_als.png"),
+  newbornLS: guideline("newbornLS", "rcuk", "Newborn LS", "newborn_ls.png"),
+  traumaticArrest: guideline("traumaticArrest", "rcuk", "Traumatic Arrest", "traumatic_arrest.png"),
+  // The two post-ROSC charts sit side by side.
+  postResuscitationCare: guideline("postResuscitationCare", "rcuk", "Post-Resus Care", "post_arrest.png"),
+  jrcalcPostROSC: guideline("jrcalcPostROSC", "jrcalc", "Post-ROSC Care", "jrcalc_post_rosc.webp"),
+  jrcalcAdultArrest: guideline("jrcalcAdultArrest", "jrcalc", "Termination of Resus", "jrcalc_adult_arrest.webp"),
+};
+const ALL_GUIDELINES: Guideline[] = Object.values(GUIDELINES);
+
+// Which charts fit each screen (matches iOS Guideline). Age unknown (null) shows adult and child charts.
+const guidelinesDuring = (paediatric: boolean | null, trauma: boolean): Guideline[] => {
+  const g = GUIDELINES;
+  const list =
+    paediatric === true ? [g.paediatricALS]
+    : paediatric === false ? [g.adultALS, g.jrcalcAdultArrest]
+    : [g.adultALS, g.paediatricALS, g.jrcalcAdultArrest];
+  return trauma ? [...list, g.traumaticArrest] : list;
+};
+const guidelinesAfterROSC = (paediatric: boolean | null, trauma: boolean): Guideline[] => {
+  const g = GUIDELINES;
+  // The paediatric ALS chart carries the post-ROSC care for children.
+  const list = paediatric === true ? [g.paediatricALS] : [g.jrcalcPostROSC, g.postResuscitationCare];
+  if (paediatric === null) list.push(g.paediatricALS);
+  return trauma ? [...list, g.traumaticArrest] : list;
+};
+// The JRCALC chart is the adult ToR flowchart, so it is never the only chart offered when the age is unknown.
+const guidelinesAfterStopping = (paediatric: boolean | null): Guideline[] =>
+  paediatric === true ? [GUIDELINES.paediatricALS]
+  : paediatric === false ? [GUIDELINES.jrcalcAdultArrest]
+  : [GUIDELINES.paediatricALS, GUIDELINES.jrcalcAdultArrest];
+
+const GuidelinesView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void; guidelines?: Guideline[] }> = ({
+  onShowPdf,
+  guidelines = ALL_GUIDELINES,
+}) => {
+  const [showAll, setShowAll] = useState(false);
+  const isAll = guidelines.length === ALL_GUIDELINES.length;
+  return (
+    <div className="space-y-2">
+      <SectionTitle title="Guidelines" />
+      {/* One compact grid, small enough for the whole set to fit on the start screen. */}
+      <div className="grid grid-cols-2 gap-2.5">
+        {guidelines.map((chart, index) => (
+          <button
+            key={chart.id}
+            onClick={() => onShowPdf(chart)}
+            aria-label={`${chart.source === "rcuk" ? "Resuscitation Council UK" : "JRCALC"} ${chart.name}`}
+            // A card left on its own is centred at the same width.
+            className={`${guidelines.length % 2 === 1 && index === guidelines.length - 1 ? "col-span-2 w-[calc(50%-5px)] justify-self-center" : ""} flex min-h-[50px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-gray-100 px-1.5 py-1 text-gray-900 transition-transform active:scale-95 dark:border-gray-600 dark:bg-gray-700 dark:text-white`}
+          >
+            <span className="truncate text-sm font-semibold">{chart.name}</span>
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+              {chart.source === "rcuk" ? "RCUK" : "JRCALC"}
+            </span>
+          </button>
+        ))}
+      </div>
+      {!isAll && (
         <button
-          key={pdf.id}
-          onClick={() => onShowPdf(pdf)}
-          className="p-4 text-center font-semibold text-sm
-           bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-2xl
-           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors active:scale-95"
+          onClick={() => setShowAll(true)}
+          className="w-full rounded-xl bg-tone-tint py-2.5 text-sm font-semibold text-tone-accent active:scale-95 transition-transform"
         >
-          {pdf.title}
+          All guidelines
         </button>
-      ))}
+      )}
+      <Modal isOpen={showAll} onClose={() => setShowAll(false)} title="Guidelines">
+        <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          {ALL_GUIDELINES.map((chart) => (
+            <button
+              key={chart.id}
+              onClick={() => {
+                setShowAll(false);
+                onShowPdf(chart);
+              }}
+              className="flex w-full flex-col items-start py-3 text-left"
+            >
+              <span className="font-semibold text-gray-900 dark:text-white">{chart.name}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {chart.source === "rcuk" ? "Resuscitation Council UK" : "JRCALC"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Modal>
     </div>
-  </div>
-);
+  );
+};
 
 const BottomControlsView: React.FC<{
   onShowSummary: () => void;
@@ -6327,7 +6406,7 @@ const ArrestView: React.FC<{
             onOpenDrugs={openDrugs}
             onShowEtco2={() => setShowEtco2Modal(true)}
             onVoiceTranscript={handleVoiceTranscript}
-            onQuickDrug={(name, dose) => checkRepeat(name, () => viewModel.logOtherDrug(name, dose, true))}
+            onQuickDrug={(name, dose) => checkRepeat(name, () => viewModel.logOtherDrug(name, dose, dose !== null))}
           />
         )}
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
@@ -7365,7 +7444,10 @@ const SettingToggle: React.FC<{
 //============================================================================
 // PDF VIEWER
 //============================================================================
+// Charts are bundled images, so they open with no signal. The page can't pinch-zoom (user-scalable=no),
+// so a tap toggles between fitting the screen and twice the width, scrolled within the viewer.
 const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf, onClose }) => {
+  const [zoomed, setZoomed] = useState(false);
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
       <div className="flex justify-between items-center p-4 flex-shrink-0 bg-gray-900">
@@ -7377,20 +7459,13 @@ const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf,
           Done
         </button>
       </div>
-      <div className="flex-1 overflow-auto">
-        <object
-          data={pdf.pdfUrl}
-          type="application/pdf"
-          className="w-full h-full"
-          style={{ minHeight: "calc(100vh - 80px)" }}
-        >
-          <iframe
-            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.upstreamUrl ?? pdf.pdfUrl)}&embedded=true`}
-            title={pdf.title}
-            className="w-full h-full border-0"
-            style={{ minHeight: "calc(100vh - 80px)" }}
-          />
-        </object>
+      <div className="flex-1 overflow-auto bg-white">
+        <img
+          src={pdf.pdfUrl}
+          alt={pdf.title}
+          onClick={() => setZoomed((z) => !z)}
+          className={`block max-w-none ${zoomed ? "w-[200%] cursor-zoom-out" : "w-full cursor-zoom-in"}`}
+        />
       </div>
     </div>
   );
