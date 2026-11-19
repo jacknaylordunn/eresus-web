@@ -4,6 +4,7 @@ import { voicePromptPlayer } from '@/utils/voicePrompts';
 import VoicePromptButton from './VoicePromptButton';
 import SummaryView from './SummaryView';
 import { buildSummary } from '@/lib/arrestSummary';
+import Modal from './Modal';
 import { drugEntry } from '@/lib/repeatCheck';
 import { OtherDrugsSheet } from './ClinicalSheets';
 import {
@@ -1377,19 +1378,9 @@ const NLSEventLog: React.FC<{ events: NLSEvent[] }> = ({ events }) => (
 );
 
 // Modal
-const NLSModal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-center p-4 border-b border-border">
-          <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><XSquare size={24} /></button>
-        </div>
-        <div className="p-4 overflow-y-auto max-h-[70vh]">{children}</div>
-      </div>
-    </div>
-  );
-};
+// The same bottom sheet as the rest of the app: fits its content and sits low on a phone.
+const NLSModal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = (props) => (
+  <Modal {...props} />
+);
 
 export default NewbornLifeSupport;
