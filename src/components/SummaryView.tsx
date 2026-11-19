@@ -139,7 +139,7 @@ const SummaryView: React.FC<
             {s.drugsGiven.length === 0 ? (
               <p className="text-sm text-gray-500 dark:text-gray-400">None logged</p>
             ) : (
-              s.drugsGiven.map((event, i) => <Row key={i} label={event.message.replace(" Given", "")} value={s.time(event)} />)
+              s.drugsGiven.map((event, i) => <Row key={i} label={event.message.replace(/ [Gg]iven/, "")} value={s.time(event)} />)
             )}
           </div>
         ) : (

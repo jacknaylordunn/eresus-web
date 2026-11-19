@@ -2732,5 +2732,178 @@
    "time": null,
    "reason": null
   }
+ },
+ {
+  "heard": "push dose adrenaline 100",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline push-dose",
+     "dose": "100 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "500 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "one litre of saline",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "1 L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline 10 mls per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "10 ml/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rocuronium 100",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Rocuronium",
+     "dose": "100 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "fentanyl 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Fentanyl",
+     "dose": "50 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 10 micrograms per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "10 mcg/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 2 mg per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "2 mg/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "hartmanns 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Hartmann’s solution",
+     "dose": "500 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "whole blood 1 unit",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Whole blood",
+     "dose": "1 unit"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "atropine 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Atropine",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 100 mg fentanyl 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "100 mg"
+    },
+    {
+     "type": "otherDrug",
+     "drug": "Fentanyl",
+     "dose": "50 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
  }
 ]

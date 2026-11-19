@@ -4,6 +4,7 @@ import { voicePromptPlayer } from '@/utils/voicePrompts';
 import VoicePromptButton from './VoicePromptButton';
 import SummaryView from './SummaryView';
 import { buildSummary } from '@/lib/arrestSummary';
+import { drugEntry } from '@/lib/repeatCheck';
 import { OtherDrugsSheet } from './ClinicalSheets';
 import {
   Heart,
@@ -608,7 +609,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
       const appId = 'eresus-6e65e';
       const path = `/artifacts/${appId}/users/${userId}/logs`;
       const outcome = arrestState === NLSArrestState.Rosc ? 'ROSC' :
-                      arrestState === NLSArrestState.Ended ? 'Deceased' : 'Unknown';
+                      arrestState === NLSArrestState.Ended ? 'Resuscitation stopped' : 'Unknown';
       const logDoc = {
         startTime: Timestamp.fromDate(startTimeRef.current),
         totalDuration: totalArrestTime,
@@ -1069,7 +1070,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
                   onClick={() => { saveUndo(); setVascularAccess(true); logEvent("Vascular Access Secured"); }}
                   disabled={vascularAccess} height="h-12" fontSize="text-sm" />
                 <NLSActionButton color="bg-pink-600" icon={<Syringe size={16} />} label={`Adrenaline (${adrenalineCount})`}
-                  onClick={() => { saveUndo(); setAdrenalineCount(p => p + 1); logEvent(`Adrenaline dose ${adrenalineCount + 1} (10-30 mcg/kg IV)`, "drug"); }}
+                  onClick={() => { saveUndo(); setAdrenalineCount(p => p + 1); logEvent(drugEntry("Adrenaline", null, adrenalineCount + 1), "drug"); }}
                   height="h-12" fontSize="text-sm" />
                 <NLSActionButton color="bg-indigo-600" icon={<AirVent size={16} />} label="Intubation / SGA" 
                   onClick={() => setShowAirwayModal(true)}
@@ -1245,7 +1246,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
         newborn
         onSelect={(drug) => {
           saveUndo();
-          logEvent(`${drug} Given`, "drug");
+          logEvent(drugEntry(drug, null), "drug");
           setShowOtherDrugsModal(false);
         }}
       />

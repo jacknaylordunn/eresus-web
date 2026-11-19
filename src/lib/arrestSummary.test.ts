@@ -48,8 +48,26 @@ describe("newborn summary", () => {
   it("copies newborn milestones and drugs, not shocks or adrenaline counts", () => {
     expect(summary.copyText).toContain("Inflation breaths:");
     expect(summary.copyText).toContain("Compressions started:");
-    expect(summary.copyText).toContain("Drug: Glucose 10% Given");
+    expect(summary.copyText).toContain("Glucose 10% Given, ");
     expect(summary.copyText).not.toContain("Shocks:");
     expect(summary.copyText).toContain("Outcome: HR > 100, breathing");
+  });
+});
+
+describe("copied summary layout", () => {
+  it("reads as labelled sections with no bracketed doses", () => {
+    const events = [
+      { timestamp: 0, message: "Arrest Started at 10:00:00", type: "status" },
+      { timestamp: 60, message: "Adrenaline 1mg given, dose 1", type: "drug" },
+      { timestamp: 300, message: "Return of Spontaneous Circulation (ROSC)", type: "status" },
+    ];
+    const text = buildSummary({ ...base, events, adrenalineCount: 1 }).copyText;
+    expect(text.startsWith("CARDIAC ARREST SUMMARY\nDate: 18/11/2026")).toBe(true);
+    expect(text).toContain("\nKEY TIMES\n");
+    expect(text).toContain("\nTREATMENT\n");
+    expect(text).toContain("Adrenaline: 1, first at 10:01, T+01:00");
+    expect(text).toContain("Outcome: ROSC at 10:05, T+05:00");
+    expect(text).toContain("10:01 | T+01:00 | Adrenaline 1mg given, dose 1");
+    expect(text).toContain("Check against the ePR.");
   });
 });

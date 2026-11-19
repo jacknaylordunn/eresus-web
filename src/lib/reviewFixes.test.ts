@@ -140,7 +140,7 @@ describe("review fixes", () => {
     expect(summary.firstAdrenaline?.timestamp).toBe(20);
     expect(summary.demographics).toBe("6 months");
     expect(summary.timedFrom).toBe("eResus start");
-    expect(summary.copyText).toContain("TIMELINE (clock / T+ from eResus start)");
+    expect(summary.copyText).toContain("Clock | Time from eResus start | Entry");
   });
 
   it("times from the arrest being confirmed when time was added", () => {
@@ -159,9 +159,9 @@ describe("review fixes", () => {
       ),
     );
     expect(summary.initialRhythm).toBe("VF");
-    expect(summary.copyText).toContain("Shocks: 0 (incl. 3 stacked)");
+    expect(summary.copyText).toMatch(/Shocks: 0.*, including 3 stacked/);
     expect(summary.hasEntryMarkers).toBe(true);
-    expect(summary.copyText).toContain("(voice) = entered by voice;");
+    expect(summary.copyText).toContain("Entries marked voice, lock screen or Dynamic Island");
   });
 
   it("keeps infant ages in months from the dose dialog", () => {

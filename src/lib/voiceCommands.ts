@@ -143,7 +143,7 @@ const PHRASES: [string, Kind][] = [
   ...otherDrug(["ipratropium", "atrovent"], "Ipratropium bromide"),
   ...otherDrug(["alteplase"], "Alteplase"),
   ...otherDrug(["tenecteplase", "tnk"], "Tenecteplase"),
-  ...otherDrug(["normal saline", "sodium chloride", "saline bolus", "bag of saline", "bolus of saline"], "Sodium chloride 0.9%"),
+  ...otherDrug(["normal saline", "sodium chloride", "saline bolus", "bag of saline", "bolus of saline", "saline"], "Sodium chloride 0.9%"),
   ...otherDrug(["hartmann", "hartmanns", "hartmann is", "hartmann solution"], "Hartmann’s solution"),
   ...otherDrug(["packed red cells", "red cells", "unit of blood", "units of blood", "prbc", "prbcs"], "Packed red cells"),
   ...otherDrug(["whole blood"], "Whole blood"),
@@ -243,13 +243,37 @@ const UNITS: [string, string][] = [
   ["micrograms", "mcg"], ["microgram", "mcg"], ["mcg", "mcg"], ["ug", "mcg"], ["mics", "mcg"],
   ["joules", "J"], ["joule", "J"], ["j", "J"],
   ["grams", "g"], ["gram", "g"], ["millilitres", "ml"], ["milliliters", "ml"], ["mls", "ml"], ["ml", "ml"],
-  ["millimoles", "mmol"], ["millimole", "mmol"], ["mmol", "mmol"], ["units", "units"],
+  ["millimoles", "mmol"], ["millimole", "mmol"], ["mmol", "mmol"], ["units", "units"], ["unit", "units"],
+  ["litres", "L"], ["litre", "L"], ["liters", "L"], ["liter", "L"],
   ["gauge", "G"], ["g", "G"],
 ];
 
 const UNIT_FOR: Record<string, Kind["type"]> = {
-  mg: "drug", mcg: "drug", g: "drug", ml: "drug", mmol: "drug", units: "drug", J: "shock", kPa: "etco2", mmHg: "etco2", G: "access",
+  mg: "drug", mcg: "drug", g: "drug", ml: "drug", L: "drug", mmol: "drug", units: "drug", J: "shock", kPa: "etco2", mmHg: "etco2", G: "access",
 };
+// A weight-based dose keeps its "/kg": "10 micrograms per kilo" is 10 mcg/kg, never 10 mcg.
+const PER_KG = ["per kilogram", "per kilograms", "per kilo", "per kg", "a kilo", "kg"];
+const unitType = (unit: string) => UNIT_FOR[unit.replace("/kg", "")];
+
+// Said with no unit, these listed drugs are only ever given in one unit, so the number is the dose in it.
+// Drugs given in more than one unit (atropine, TXA, calcium) need the unit said.
+const DEFAULT_UNIT: Record<string, string> = {
+  "Adrenaline push-dose": "mcg",
+  "Sodium chloride 0.9%": "ml",
+  "Hartmann’s solution": "ml",
+  "Glucose 10%": "ml",
+  Fentanyl: "mcg",
+  Naloxone: "mcg",
+  Ketamine: "mg",
+  Midazolam: "mg",
+  Morphine: "mg",
+  Propofol: "mg",
+  Rocuronium: "mg",
+  Suxamethonium: "mg",
+};
+
+// "1 units" reads badly on a record.
+const formatDose = (value: number, unit: string) => `${formatNumber(value)} ${unit === "units" && value === 1 ? "unit" : unit}`;
 
 const TARGET_WORDS = new Set(["target", "targets", "aim", "aiming", "keep", "titrate", "titrating", "goal", "above", "below", "between", "range", "over"]);
 const UNSURE_WORDS = new Set(["query", "possible", "possibly", "suspected", "likely", "maybe", "probable", "questionable"]);
@@ -492,6 +516,16 @@ const findQuantities = (tokens: string[]): Quantity[] => {
         break;
       }
     }
+    if (unit && UNIT_FOR[unit] === "drug") {
+      for (const phrase of PER_KG) {
+        const matched = matchAt(tokens, i + length, phrase);
+        if (matched) {
+          unit += "/kg";
+          length += matched;
+          break;
+        }
+      }
+    }
     quantities.push({ value: Number(tokens[i]), unit, start: i, end: i + length });
   }
   return quantities;
@@ -583,6 +617,8 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       const length = matchAt(tokens, i, phrase);
       if (length && (!best || length > best.length)) best = { length, kind };
     }
+    // A flush isn't a fluid bolus: "saline flush" logs nothing.
+    if (best && tokens[i + best.length]?.startsWith("flush")) best = null;
     if (best) {
       mentions.push({ kind: best.kind, start: i, end: i + best.length, quantities: [] });
       i += best.length;
@@ -609,7 +645,9 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
     let best: { mention: Mention; gap: number } | null = null;
     for (const mention of mentions) {
       const type = mention.kind.type;
-      if (quantity.unit ? UNIT_FOR[quantity.unit] !== (type === "otherDrug" ? "drug" : type) : !["drug", "shock", "etco2"].includes(type)) continue;
+      const takesBareNumber =
+        ["drug", "shock", "etco2"].includes(type) || (type === "otherDrug" && DEFAULT_UNIT[(mention.kind as { drug: string }).drug] !== undefined);
+      if (quantity.unit ? unitType(quantity.unit) !== (type === "otherDrug" ? "drug" : type) : !takesBareNumber) continue;
       const gap = gapBetween(tokens, quantity, mention);
       if (gap > MAX_GAP[type] || (!quantity.unit && gap > 0)) continue;
       if (!best || gap < best.gap) best = { mention, gap };
@@ -674,7 +712,7 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
     switch (kind.type) {
       case "drug": {
         const q = m.quantities[0];
-        const dose = q ? `${formatNumber(q.value)} ${q.unit ?? "mg"}` : null;
+        const dose = q ? formatDose(q.value, q.unit ?? "mg") : null;
         if (m.count !== undefined && (isHandover || hasHistoryMarker || m.count > 1)) {
           if (!isHandover && !hasHistoryMarker) return nothing("countUnclear");
           // "adrenaline x2, last 4 minutes ago": the last dose has a time, the others don't.
@@ -778,8 +816,9 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
           if (!addGiven(kind.drug, 1)) return nothing("conflict");
           break;
         }
-        const q = m.quantities.find((q) => q.unit !== null);
-        const dose = q ? `${formatNumber(q.value)} ${q.unit}` : null;
+        const defaultUnit = DEFAULT_UNIT[kind.drug];
+        const q = m.quantities.find((q) => q.unit !== null) ?? (defaultUnit ? m.quantities[0] : undefined);
+        const dose = q ? formatDose(q.value, q.unit ?? defaultUnit) : null;
         const prior = actions.find((a) => a.type === "otherDrug" && a.drug === kind.drug) as
           | Extract<VoiceAction, { type: "otherDrug" }>
           | undefined;

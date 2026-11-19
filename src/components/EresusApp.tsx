@@ -104,7 +104,7 @@ import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
 import VoicePromptButton from "./VoicePromptButton";
 import { adrenalineDismissal, drugPrompts, promptHidesAfterAnalysis } from "@/lib/drugPrompts";
-import { loggedAt, repeatCheck, voiceRepeatRefusal } from "@/lib/repeatCheck";
+import { drugEntry, loggedAt, repeatCheck, voiceRepeatRefusal } from "@/lib/repeatCheck";
 import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
 import {
   checkVoiceCommandAvailability,
@@ -1867,8 +1867,8 @@ const useArrestViewModel = () => {
     setLastRhythmNonShockable(false);
     setHideAdrenalinePrompt(false);
     setHideAdrenalineDueWarning(false);
-    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
-    logEvent(`Adrenaline${dosageText} Given – Dose ${adrenalineCount + 1}`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Adrenaline", recorded, adrenalineCount + 1), EventType.Drug);
   };
 
   const logAmiodarone = (dosage: string | null = null, alwaysRecordDose = false) => {
@@ -1879,22 +1879,22 @@ const useArrestViewModel = () => {
       shockCountForAmiodarone1Ref.current = shockCount;
     }
     setHideAmiodaronePrompt(false);
-    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
-    logEvent(`Amiodarone${dosageText} Given – Dose ${amiodaroneCount + 1}`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Amiodarone", recorded, amiodaroneCount + 1), EventType.Drug);
   };
 
   const logLidocaine = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setLidocaineCount((c) => c + 1);
     setAntiarrhythmicGiven(AntiarrhythmicDrug.Lidocaine);
-    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
-    logEvent(`Lidocaine${dosageText} Given – Dose ${lidocaineCount + 1}`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Lidocaine", recorded, lidocaineCount + 1), EventType.Drug);
   };
 
   const logOtherDrug = (drug: string, dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
-    const dosageText = (showDosagePrompts || alwaysRecordDose) && dosage ? ` (${dosage})` : "";
-    logEvent(`${drug}${dosageText} Given`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry(drug, recorded), EventType.Drug);
   };
 
   // The first trauma procedure marks the arrest as traumatic; it can be switched off again.
@@ -2226,7 +2226,8 @@ const useArrestViewModel = () => {
         finalOutcome = "ROSC";
         break;
       case ArrestState.Ended:
-        finalOutcome = "Deceased";
+        // What happened, not a judgement the app can't make: the crew verifies death, not eResus.
+        finalOutcome = "Resuscitation stopped";
         break;
       default:
         // Reset before ROSC or a stop was logged: the crew knows the outcome, the log doesn't.
@@ -4812,6 +4813,10 @@ const VoiceListeningStatus: React.FC<{ holdHint?: string; className?: string }> 
   );
 };
 
+// Logs saved by older versions said "Deceased", "Complete" or "Incomplete"; shown in today's words (matches iOS).
+const displayOutcome = (stored: string): string =>
+  stored === "Deceased" || stored === "Complete" ? "Resuscitation stopped" : /Incomplete/.test(stored) ? "Unknown" : stored;
+
 // Screen State Views
 const IosAppStoreBanner: React.FC = () => {
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("eResusAppStoreBannerDismissed") === "true");
@@ -5120,7 +5125,7 @@ const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride", QuickDrug> = 
     title: "Push-dose adrenaline",
     drugName: "Adrenaline push-dose",
     group: "arrest",
-    doses: ["50 mcg IV/IO", "100 mcg IV/IO"],
+    doses: ["50 mcg", "100 mcg"],
     childDoses: [],
     message: "For hypotension after ROSC. Titrate to a systolic over 100.",
     childMessage: "Child: choose Other dose and enter the dose given.",
@@ -5129,8 +5134,8 @@ const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride", QuickDrug> = 
     title: "Sodium chloride 0.9%",
     drugName: "Sodium chloride 0.9%",
     group: "fluids",
-    doses: ["250 ml IV/IO", "500 ml IV/IO"],
-    childDoses: ["10 ml/kg IV/IO"],
+    doses: ["250 ml", "500 ml"],
+    childDoses: ["10 ml/kg"],
     message: "Fluid bolus to a systolic over 100, then reassess.",
     childMessage: "Fluid bolus, then reassess.",
   },
@@ -6544,7 +6549,7 @@ const LogbookView: React.FC = () => {
                   {log.startTime.toDate().toLocaleTimeString()}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {/Incomplete/.test(log.finalOutcome) ? "Unknown" : log.finalOutcome}
+                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {displayOutcome(log.finalOutcome)}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500">
                   Shocks: {log.shockCount ?? 0} | Adr: {log.adrenalineCount ?? 0} | Amio: {log.amiodaroneCount ?? 0} |

@@ -193,8 +193,8 @@ describe("summary", () => {
     const s = buildSummary({ ...input, events: reArrested });
     expect(s.outcome.kind).toBe("inProgress");
     expect(s.outcomeLabel).toBe("Re-arrested");
-    expect(s.copyText).toContain("First ROSC: 14:05 (T+05:00)");
-    expect(s.copyText).toContain("Re-arrest: 14:06 (T+06:40)");
+    expect(s.copyText).toContain("First ROSC: 14:05, T+05:00");
+    expect(s.copyText).toContain("Re-arrest: 14:06, T+06:40");
   });
 
   it("copies plain ASCII, 24-hour times and one antiarrhythmic", () => {
@@ -219,17 +219,17 @@ describe("summary", () => {
       patientGender: "Male",
     }).copyText;
     expect([...text].every((c) => c.charCodeAt(0) < 128)).toBe(true);
-    expect(text.startsWith("eRESUS ARREST SUMMARY 05/11/2026\nPt: 64 y Male\nArrest confirmed: ~13:50 (est)")).toBe(true);
-    expect(text).toContain("eResus started: 14:00 (T+10:00)");
-    expect(text).toContain("Outcome: ROSC 14:05 (T+15:00)");
-    expect(text).toContain("Adrenaline: 2 (first ~14:00, T+10)");
+    expect(text.startsWith("CARDIAC ARREST SUMMARY\nDate: 05/11/2026\nPatient: 64 y Male\nOutcome: ROSC at 14:05, T+15:00")).toBe(true);
+    expect(text).toContain("Arrest confirmed: ~13:50, estimated");
+    expect(text).toContain("eResus started: 14:00, T+10:00");
+    expect(text).toContain("Adrenaline: 2, first at ~14:00, T+10:00");
     expect(text).toContain("SpO2 96%");
     expect(text).toContain("Temperature 36.4 deg C");
-    expect(text).toContain("Conveying to: PPCI centre 14:08");
+    expect(text).toContain("Destination: PPCI centre, 14:08");
     expect(text).toContain("Adrenaline x2 before eResus, times unknown (est)");
     expect(text).not.toContain("Lidocaine");
     expect(text).not.toContain("Amiodarone");
-    expect(text).toContain("Verify against ePR");
+    expect(text).toContain("Check against the ePR");
     expect(/ (am|pm)\b/i.test(text)).toBe(false);
   });
 

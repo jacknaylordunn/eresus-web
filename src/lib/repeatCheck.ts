@@ -11,7 +11,8 @@ export interface LoggedEntry {
 
 const TRAUMA_PREFIX = "Trauma: ";
 
-// Entries for a drug or intervention, newest first: "Adrenaline (1mg) Given – Dose 2", "Tourniquet (voice)",
+// Entries for a drug or intervention, newest first: "Adrenaline 1mg given, dose 2", "Tourniquet (voice)",
+// and from older versions "Adrenaline (1mg) Given – Dose 2",
 // "Tranexamic acid before eResus, time unknown (estimated)". "Adrenaline" doesn't match "Adrenaline infusion".
 export const entries = <E extends LoggedEntry>(events: E[], name: string): E[] =>
   events.filter((event) => {
@@ -19,8 +20,19 @@ export const entries = <E extends LoggedEntry>(events: E[], name: string): E[] =
     if (rest.startsWith(TRAUMA_PREFIX)) rest = rest.slice(TRAUMA_PREFIX.length);
     if (!rest.startsWith(name)) return false;
     const tail = rest.slice(name.length);
-    return tail === "" || tail.startsWith(" (") || tail.startsWith(" Given") || tail.startsWith(" before eResus");
+    return (
+      tail === "" ||
+      tail.startsWith(" (") ||
+      tail.startsWith(" Given") ||
+      tail.startsWith(" given") ||
+      tail.startsWith(" before eResus") ||
+      /^ \d/.test(tail)
+    );
   });
+
+// A drug entry in plain words, as it reads on the record: "Adrenaline 1mg given, dose 2", "Ketamine given" (matches iOS).
+export const drugEntry = (name: string, dose: string | null, number?: number): string =>
+  `${[name, dose?.trim()].filter(Boolean).join(" ")} given${number !== undefined ? `, dose ${number}` : ""}`;
 
 export const lastEntry = <E extends LoggedEntry>(events: E[], name: string): E | undefined => entries(events, name)[0];
 
