@@ -5165,9 +5165,16 @@ const RoscView: React.FC<{
       />
 
       {voiceAvailable && (
-        // The ring isn't on this screen, so the microphone gets its own hold target.
+        // The ring isn't on this screen, so the microphone gets its own hold target, on the right where a
+        // right thumb reaches it.
         <div className="space-y-2">
           <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">{talking ? "Listening…" : "Hold to talk"}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”"}
+              </p>
+            </div>
             <div
               className={`flex h-[52px] w-[52px] shrink-0 select-none touch-none items-center justify-center rounded-full text-white motion-safe:transition-transform motion-safe:duration-200 ${
                 talking ? "bg-tone-danger motion-safe:animate-pulse" : "bg-tone-accent"
@@ -5175,12 +5182,6 @@ const RoscView: React.FC<{
               {...pushToTalk}
             >
               <Mic size={22} />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">{talking ? "Listening…" : "Hold to talk"}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”"}
-              </p>
             </div>
           </div>
           <VoiceListeningStatus holdHint="Hold the mic to talk." className="" />
