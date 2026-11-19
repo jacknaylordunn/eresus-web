@@ -5066,7 +5066,8 @@ const ActiveArrestContentView: React.FC<{
 
   return (
     <div className={`p-4 space-y-4 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
-      <div className="relative flex justify-center">
+      {/* Room between the header, the ring and Analyse Rhythm: 24 px each side (matches iOS). */}
+      <div className="relative flex justify-center pt-2 pb-2">
         <CPRTimerView onVoiceTranscript={props.onVoiceTranscript} />
         <button
           onClick={toggleMetronome}

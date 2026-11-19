@@ -835,7 +835,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
         {/* NLS Square Timer (matches iOS NLSSquareTimerView) */}
         {isActive && (
           <div className={`transition-opacity ${isStopped ? 'opacity-50 pointer-events-none' : ''}`}>
-            <div className="relative flex justify-center">
+            <div className="relative flex justify-center pt-2">
               <NLSSquareTimer time={cprTime} totalDuration={nlsCycleDuration} />
               <VoicePromptButton enabled={voicePrompts?.enabled ?? false} className="bottom-0 left-0" />
             </div>
