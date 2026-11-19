@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { TONE_CLASSES, type ButtonTone } from '@/lib/tones';
 import { voicePromptPlayer } from '@/utils/voicePrompts';
 import VoicePromptButton from './VoicePromptButton';
+import SummaryView from './SummaryView';
+import { buildSummary } from '@/lib/arrestSummary';
 import { OtherDrugsSheet } from './ClinicalSheets';
 import {
   Heart,
@@ -606,7 +608,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
       const appId = 'eresus-6e65e';
       const path = `/artifacts/${appId}/users/${userId}/logs`;
       const outcome = arrestState === NLSArrestState.Rosc ? 'ROSC' :
-                      arrestState === NLSArrestState.Ended ? 'Complete' : 'Incomplete';
+                      arrestState === NLSArrestState.Ended ? 'Deceased' : 'Unknown';
       const logDoc = {
         startTime: Timestamp.fromDate(startTimeRef.current),
         totalDuration: totalArrestTime,
@@ -621,10 +623,21 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
     } catch (e) { console.error("Error saving NLS log:", e); }
   };
 
+  // The same summary as every other arrest, laid out for a newborn (matches iOS).
+  const summaryInput = () => ({
+    events: events.map((e) => ({ timestamp: e.timestamp, message: e.message, type: e.category })),
+    totalTime: totalArrestTime,
+    startTime: startTimeRef.current,
+    shockCount: 0,
+    adrenalineCount,
+    amiodaroneCount: 0,
+    lidocaineCount: 0,
+    patientAge: "Newborn",
+    patientGender: null,
+  });
+
   const copySummary = () => {
-    const sorted = [...events].reverse();
-    const text = `eResus — Newborn Life Support Summary\nStart Time: ${startTimeRef.current?.toLocaleTimeString() ?? 'Unknown'}\nTotal Time: ${formatTime(totalArrestTime)}\nBirth Type: ${isPreterm ? 'Preterm (<32 weeks)' : 'Term/Near-term'}\nAdrenaline doses: ${adrenalineCount}\n\n--- Event Log ---\n${sorted.map(e => `[${formatTime(e.timestamp)}] ${e.message}`).join('\n')}`;
-    navigator.clipboard.writeText(text.trim()).catch(console.error);
+    navigator.clipboard.writeText(buildSummary(summaryInput()).copyText).catch(console.error);
     if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
   };
 
@@ -680,7 +693,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
           const logDocRef = await addDoc(collection(db, path), {
             startTime: Timestamp.fromDate(startTimeRef.current),
             totalDuration: totalArrestTime,
-            finalOutcome: 'NLS Incomplete (recovered)',
+            finalOutcome: 'Unknown (recovered)',
             userId, type: 'NLS', birthType,
           });
           const eventsRef = collection(db, `${path}/${logDocRef.id}/events`);
@@ -1162,32 +1175,7 @@ const NewbornLifeSupport: React.FC<NewbornLifeSupportProps> = ({ onBack, onTrans
       )}
 
       {/* ===== MODALS ===== */}
-      <NLSModal isOpen={showSummary} onClose={() => setShowSummary(false)} title="NLS Event Summary">
-        <div className="space-y-4">
-          <div className="space-y-1">
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              <strong>Start:</strong> {startTimeRef.current ? startTimeRef.current.toLocaleTimeString() : "Unknown"}
-            </p>
-            <p className="text-lg font-semibold text-gray-900 dark:text-white">Total Time: {formatTime(totalArrestTime)}</p>
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              Birth Type: {isPreterm ? 'Preterm' : 'Term'} | Adrenaline: {adrenalineCount}
-            </p>
-          </div>
-          <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
-            {[...events].reverse().map((e, i) => (
-              <div key={i} className="flex">
-                <span className="font-bold w-16 flex-shrink-0 text-tone-accent">[{formatTime(e.timestamp)}]</span>
-                <span className="ml-2 text-gray-800 dark:text-gray-200">{e.message}</span>
-              </div>
-            ))}
-          </div>
-          <button onClick={() => { copySummary(); setShowSummary(false); }}
-            className="w-full py-3 rounded-xl bg-tone-accent text-tone-on-accent font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform">
-            <Clipboard size={18} />
-            <span>Copy to Clipboard</span>
-          </button>
-        </div>
-      </NLSModal>
+      <SummaryView isOpen={showSummary} onClose={() => setShowSummary(false)} {...summaryInput()} />
 
       <NLSModal isOpen={showReset} onClose={() => setShowReset(false)} title="Reset NLS?">
         <div className="flex flex-col items-center text-center space-y-4">

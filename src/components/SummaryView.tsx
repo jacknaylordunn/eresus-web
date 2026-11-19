@@ -27,6 +27,21 @@ const Stat: React.FC<{ label: string; value: number }> = ({ label, value }) => (
   </div>
 );
 
+// With patient details or research on, the summary shows what was and wasn't recorded.
+const storedFlag = (key: string): boolean => {
+  try {
+    return JSON.parse(window.localStorage.getItem(key) ?? "false") === true;
+  } catch {
+    return false;
+  }
+};
+
+const recorded = (value: string | null | undefined): string => {
+  const text = value?.trim() ?? "";
+  if (!text) return "Not recorded";
+  return /^\d+$/.test(text) ? `${text} years` : text;
+};
+
 const SummaryView: React.FC<
   SummaryInput & { isOpen: boolean; onClose: () => void; typeColour?: (type: string) => string }
 > = ({ isOpen, onClose, typeColour, ...input }) => {
@@ -35,9 +50,10 @@ const SummaryView: React.FC<
     () => buildSummary(input),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [input.events, input.totalTime, input.startTime, input.shockCount, input.adrenalineCount, input.amiodaroneCount,
-      input.lidocaineCount, input.patientAge, input.patientGender],
+      input.lidocaineCount, input.patientAge, input.patientGender, input.isLive],
   );
   if (!isOpen) return null;
+  const showsPatientDetails = storedFlag("askForPatientInfo") || storedFlag("researchModeEnabled");
 
   const copy = () => {
     navigator.clipboard
@@ -52,9 +68,17 @@ const SummaryView: React.FC<
 
   const timed = (event: ArrestSummary["events"][number] | undefined) => (event ? `${s.time(event)}  ${s.minutesIn(event)}` : null);
   const keyTimes: [string, string | null][] = [
-    ["Initial rhythm", s.initialRhythm],
-    ["First shock", timed(s.firstShock)],
-    ["First adrenaline", timed(s.firstAdrenaline)],
+    ...(s.isNewborn
+      ? ([
+          ["Inflation breaths", timed(s.firstInflationBreaths)],
+          ["Ventilation started", timed(s.firstVentilation)],
+          ["Compressions started", timed(s.firstCompressions)],
+        ] as [string, string | null][])
+      : ([
+          ...(showsPatientDetails ? [] : [["Initial rhythm", s.initialRhythm]]),
+          ["First shock", timed(s.firstShock)],
+          ["First adrenaline", timed(s.firstAdrenaline)],
+        ] as [string, string | null][])),
     ["First IV / IO", timed(s.firstAccess)],
     ["First airway", timed(s.firstAirway)],
     ...(s.destination ? [[s.destination.message.slice("Conveying to: ".length), s.time(s.destination)] as [string, string]] : []),
@@ -74,35 +98,57 @@ const SummaryView: React.FC<
                   ? input.startTime.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
                   : "Unknown date"}
               </h3>
-              {s.demographics && <p className="text-sm text-gray-500 dark:text-gray-400">{s.demographics}</p>}
+              {!showsPatientDetails && s.demographics && <p className="text-sm text-gray-500 dark:text-gray-400">{s.demographics}</p>}
             </div>
             <span className={`px-2 py-1 rounded-lg text-xs font-black uppercase ${OUTCOME_CLASSES[s.outcome.kind]}`}>
               {s.outcomeLabel}
             </span>
           </div>
           <hr className="border-gray-200 dark:border-gray-600" />
-          {s.confirmedEvent && <Row label="Arrest confirmed" value={`${s.time(s.confirmedEvent)} est`} />}
-          {s.startedEvent && <Row label="eResus started" value={s.time(s.startedEvent)} />}
-          {s.reArrests.length > 0 && s.firstROSC && <Row label="First ROSC" value={s.time(s.firstROSC)} />}
+          {!s.isNewborn && s.confirmedEvent && <Row label="Arrest confirmed" value={`${s.time(s.confirmedEvent)} est`} />}
+          {s.startedEvent && <Row label={s.isNewborn ? "Birth / NLS started" : "eResus started"} value={s.time(s.startedEvent)} />}
+          {s.reArrests.length > 0 && s.firstROSC && (
+            <Row label={s.isNewborn ? "First HR > 100" : "First ROSC"} value={s.time(s.firstROSC)} />
+          )}
           {s.reArrests.map((event, i) => (
-            <Row key={i} label="Re-arrest" value={s.time(event)} />
+            <Row key={i} label={s.isNewborn ? "Stopped breathing" : "Re-arrest"} value={s.time(event)} />
           ))}
           {s.outcome.event && (
             <Row
-              label={s.outcome.kind === "rosc" ? "ROSC" : "Resuscitation stopped"}
+              label={s.outcomeEventLabel}
               value={s.time(s.outcome.event)}
               emphasis={outcomeEmphasis}
             />
           )}
           {s.vod && <Row label="Death verified" value={s.time(s.vod)} />}
-          <Row label={`Time from ${s.timedFrom}`} value={s.format(input.totalTime)} />
+          <Row label={s.isNewborn ? "Time from birth" : `Time from ${s.timedFrom}`} value={s.format(input.totalTime)} />
         </div>
 
-        <div className={`${CARD} flex`}>
-          <Stat label="Shocks" value={input.shockCount} />
-          <Stat label="Adrenaline" value={input.adrenalineCount} />
-          <Stat label={s.antiarrhythmic.name} value={s.antiarrhythmic.count} />
-        </div>
+        {showsPatientDetails && (
+          <div className={CARD}>
+            <h4 className={HEADING}>Patient</h4>
+            <Row label="Age" value={recorded(input.patientAge)} />
+            <Row label="Sex" value={recorded(input.patientGender)} />
+            {!s.isNewborn && <Row label="Initial rhythm" value={s.initialRhythm ?? "Not recorded"} />}
+          </div>
+        )}
+
+        {s.isNewborn ? (
+          <div className={CARD}>
+            <h4 className={HEADING}>Drugs</h4>
+            {s.drugsGiven.length === 0 ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400">None logged</p>
+            ) : (
+              s.drugsGiven.map((event, i) => <Row key={i} label={event.message.replace(" Given", "")} value={s.time(event)} />)
+            )}
+          </div>
+        ) : (
+          <div className={`${CARD} flex`}>
+            <Stat label="Shocks" value={input.shockCount} />
+            <Stat label="Adrenaline" value={input.adrenalineCount} />
+            <Stat label={s.antiarrhythmic.name} value={s.antiarrhythmic.count} />
+          </div>
+        )}
 
         {shownKeyTimes.length > 0 && (
           <div className={CARD}>

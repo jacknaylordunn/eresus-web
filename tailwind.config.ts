@@ -114,13 +114,19 @@ export default {
           from: { strokeDashoffset: "326.7" },
           to: { strokeDashoffset: "0" },
         },
+        // Inward, so the listening ring never spills past the CPR ring.
         "ptt-ripple": {
           from: { transform: "scale(1)", opacity: "0.35" },
-          to: { transform: "scale(1.18)", opacity: "0" },
+          to: { transform: "scale(0.8)", opacity: "0" },
         },
         "ptt-bump": {
-          from: { transform: "scale(1.08)", opacity: "0.45" },
+          from: { transform: "scale(0.93)", opacity: "0.45" },
           to: { transform: "scale(1)", opacity: "0.2" },
+        },
+        // The edge glow while hands-free has heard the wake word.
+        "edge-glow-spin": {
+          from: { "--edge-glow-angle": "0deg" },
+          to: { "--edge-glow-angle": "360deg" },
         },
       },
       animation: {
@@ -129,6 +135,7 @@ export default {
         "ptt-draw": "ptt-draw 0.35s ease-out both",
         "ptt-ripple": "ptt-ripple 1.4s ease-out infinite",
         "ptt-bump": "ptt-bump 0.3s ease-out both",
+        "edge-glow-spin": "edge-glow-spin 3s linear infinite",
       },
     },
   },

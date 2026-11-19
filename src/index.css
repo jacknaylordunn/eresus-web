@@ -176,3 +176,28 @@
     box-shadow: 0 0 0 4px rgb(var(--tone-alert) / 0.55);
   }
 }
+
+/* Wake word heard: a conic gradient shown only as a ring round the screen edge (matches iOS). */
+@property --edge-glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.eresus-edge-glow {
+  --edge-glow-width: 10px;
+  padding: var(--edge-glow-width);
+  background: conic-gradient(
+    from var(--edge-glow-angle),
+    rgb(var(--tone-danger)),
+    rgb(var(--tone-accent)),
+    rgb(var(--tone-tint)),
+    rgb(var(--tone-positive)),
+    rgb(var(--tone-danger))
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.eresus-edge-glow-thin {
+  --edge-glow-width: 3px;
+}

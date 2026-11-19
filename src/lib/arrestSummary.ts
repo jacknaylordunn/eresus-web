@@ -12,6 +12,8 @@ export interface SummaryInput {
   lidocaineCount: number;
   patientAge?: string | null;
   patientGender?: string | null;
+  // A saved log is finished: with no ROSC or stop recorded, its outcome is unknown, not in progress.
+  isLive?: boolean;
 }
 
 export type Outcome = "rosc" | "stopped" | "inProgress";
@@ -47,6 +49,11 @@ export const buildSummary = (input: SummaryInput) => {
     .map(({ event }) => event);
 
   const startedEvent = events.find((e) => e.message.startsWith("Arrest Started") || e.message.includes("Life Support Started"));
+  // Newborn life support: no shocks or antiarrhythmics, and the milestones are breaths, ventilation and compressions.
+  const isNewborn = events.some(
+    (e) => e.message.includes("Life Support Started") && (e.message.startsWith("Newborn") || e.message.startsWith("Preterm")),
+  );
+  const isLive = input.isLive ?? true;
 
   // Older logs have no stored clock time; theirs is worked out from the start, which is right unless paused.
   const clock = (event: LoggedEvent): Date | null => {
@@ -74,7 +81,22 @@ export const buildSummary = (input: SummaryInput) => {
   })();
 
   const outcomeLabel =
-    outcome.kind === "rosc" ? "ROSC" : outcome.kind === "stopped" ? "Resuscitation stopped" : reArrests.length === 0 ? "In progress" : "Re-arrested";
+    outcome.kind === "rosc"
+      ? isNewborn ? "Breathing" : "ROSC"
+      : outcome.kind === "stopped"
+        ? "Resuscitation stopped"
+        : !isLive
+          ? "Unknown"
+          : reArrests.length === 0 ? "In progress" : isNewborn ? "Stopped breathing" : "Re-arrested";
+  // What the outcome event is called in a row or the copied text.
+  const outcomeEventLabel = outcome.kind === "rosc" ? (isNewborn ? "HR > 100, breathing" : "ROSC") : "Resuscitation stopped";
+
+  const firstWith = (prefix: string) => events.find((e) => e.message.startsWith(prefix));
+  const firstInflationBreaths = firstWith("Moved to Airway & Inflation Breaths");
+  const firstVentilation = firstWith("Started Ventilation Breaths");
+  const firstCompressions = firstWith("Started Chest Compressions");
+  // Every drug logged, in order, for summaries where the arrest counters don't apply.
+  const drugsGiven = events.filter((e) => e.type === "drug");
 
   const rhythmEvent = events.find((e) => e.type === "rhythm");
   const initialRhythm = rhythmEvent
@@ -120,24 +142,36 @@ export const buildSummary = (input: SummaryInput) => {
     const date = s ? `${String(s.getDate()).padStart(2, "0")}/${String(s.getMonth() + 1).padStart(2, "0")}/${s.getFullYear()}` : "";
     lines.push(`eRESUS ARREST SUMMARY ${date}`.trim());
     if (demographics) lines.push(`Pt: ${demographics}`);
-    if (confirmedEvent) lines.push(`Arrest confirmed: ${time(confirmedEvent)} (est)`);
-    if (startedEvent) lines.push(`eResus started: ${hhmm(clock(startedEvent))} (T+${format(startedEvent.timestamp)})`);
+    if (isNewborn) {
+      if (startedEvent) lines.push(`Birth / NLS started: ${hhmm(clock(startedEvent))}`);
+    } else {
+      if (confirmedEvent) lines.push(`Arrest confirmed: ${time(confirmedEvent)} (est)`);
+      if (startedEvent) lines.push(`eResus started: ${hhmm(clock(startedEvent))} (T+${format(startedEvent.timestamp)})`);
+    }
+    const outcomeShort = outcome.kind === "rosc" ? (isNewborn ? "HR > 100, breathing" : "ROSC") : "TOR";
     const outcomeLine = () =>
       outcome.event
-        ? `Outcome: ${outcome.kind === "rosc" ? "ROSC" : "TOR"} ${time(outcome.event)} (T+${format(outcome.event.timestamp)})`
+        ? `Outcome: ${outcomeShort} ${time(outcome.event)} (T+${format(outcome.event.timestamp)})`
         : `Outcome: ${outcomeLabel}`;
     if (reArrests.length > 0 && firstROSC) {
       lines.push(`First ROSC: ${time(firstROSC)} (T+${format(firstROSC.timestamp)})`);
-      for (const event of reArrests) lines.push(`Re-arrest: ${time(event)} (T+${format(event.timestamp)})`);
+      for (const event of reArrests) lines.push(`${isNewborn ? "Stopped breathing" : "Re-arrest"}: ${time(event)} (T+${format(event.timestamp)})`);
     }
     lines.push(outcomeLine());
     if (vod) lines.push(`VOD: ${time(vod)}`);
-    if (initialRhythm) lines.push(`Initial rhythm: ${initialRhythm}`);
-    lines.push(
-      `Shocks: ${input.shockCount}` + (stackedShocks ? " (incl. 3 stacked)" : "") + (firstShock ? ` (first ${time(firstShock)})` : ""),
-    );
-    lines.push(`Adrenaline: ${input.adrenalineCount}` + (firstAdrenaline ? ` (first ${time(firstAdrenaline)}, ${minutesIn(firstAdrenaline)})` : ""));
-    if (antiarrhythmic.count > 0) lines.push(`${antiarrhythmic.name}: ${antiarrhythmic.count}`);
+    if (isNewborn) {
+      if (firstInflationBreaths) lines.push(`Inflation breaths: ${time(firstInflationBreaths)} (${minutesIn(firstInflationBreaths)})`);
+      if (firstVentilation) lines.push(`Ventilation started: ${time(firstVentilation)} (${minutesIn(firstVentilation)})`);
+      if (firstCompressions) lines.push(`Compressions started: ${time(firstCompressions)} (${minutesIn(firstCompressions)})`);
+      for (const event of drugsGiven) lines.push(`Drug: ${event.message} ${time(event)}`);
+    } else {
+      if (initialRhythm) lines.push(`Initial rhythm: ${initialRhythm}`);
+      lines.push(
+        `Shocks: ${input.shockCount}` + (stackedShocks ? " (incl. 3 stacked)" : "") + (firstShock ? ` (first ${time(firstShock)})` : ""),
+      );
+      lines.push(`Adrenaline: ${input.adrenalineCount}` + (firstAdrenaline ? ` (first ${time(firstAdrenaline)}, ${minutesIn(firstAdrenaline)})` : ""));
+      if (antiarrhythmic.count > 0) lines.push(`${antiarrhythmic.name}: ${antiarrhythmic.count}`);
+    }
     if (firstAccess) lines.push(`First IV/IO: ${time(firstAccess)}`);
     if (firstAirway) lines.push(`First airway: ${time(firstAirway)}`);
     if (destination) lines.push(`${destination.message} ${time(destination)}`);
@@ -145,7 +179,7 @@ export const buildSummary = (input: SummaryInput) => {
     if (hasEstimates) lines.push("Times marked ~/est were entered after the fact.");
     if (hasEntryMarkers) lines.push("(voice) = entered by voice; (lock screen)/(Dynamic Island) = tapped outside the app.");
     lines.push("");
-    lines.push(`TIMELINE (clock / T+ from ${timedFrom})`);
+    lines.push(`TIMELINE (clock / T+ from ${isNewborn ? "birth" : timedFrom})`);
     for (const event of events) lines.push(`${time(event)} (${format(event.timestamp)}) ${event.message}`);
     lines.push("");
     lines.push("Generated by eResus (scribe aid). Verify against ePR.");
@@ -167,6 +201,13 @@ export const buildSummary = (input: SummaryInput) => {
     preAlert,
     outcome,
     outcomeLabel,
+    outcomeEventLabel,
+    isNewborn,
+    isLive,
+    firstInflationBreaths,
+    firstVentilation,
+    firstCompressions,
+    drugsGiven,
     initialRhythm,
     firstShock,
     firstAdrenaline,

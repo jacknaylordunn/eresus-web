@@ -2229,7 +2229,8 @@ const useArrestViewModel = () => {
         finalOutcome = "Deceased";
         break;
       default:
-        finalOutcome = "Incomplete";
+        // Reset before ROSC or a stop was logged: the crew knows the outcome, the log doesn't.
+        finalOutcome = "Unknown";
     }
 
     const logData: any = {
@@ -2886,37 +2887,39 @@ const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> 
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Patient Info">
-      <div className="space-y-4">
-        <h3 className="text-tone-accent font-semibold">Patient Demographics</h3>
-        <div className="space-y-2">
+    // A short sheet: two answers, so the clock stays in view behind it (matches iOS).
+    <Modal isOpen={isOpen} onClose={handleSave} title="Patient Info">
+      <div className="space-y-3">
+        <label className="flex items-center gap-3">
+          <span className="w-9 text-sm text-gray-500 dark:text-gray-400">Age</span>
           <input
             type="number"
+            inputMode="numeric"
             value={patientAgeStr}
             onChange={(e) => setPatientAgeStr(e.target.value)}
-            placeholder="Approx Age (e.g. 45)"
-            className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white"
+            placeholder="Approx age, e.g. 45"
+            className="flex-1 h-11 px-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
           />
-        </div>
-        <div className="space-y-2">
-          <div className="flex justify-between items-center p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg">
-            <span className="text-gray-700 dark:text-gray-300">Gender</span>
-            <select
-              value={patientGenderStr}
-              onChange={(e) => setPatientGenderStr(e.target.value)}
-              className="bg-transparent text-gray-900 dark:text-white text-right"
-            >
-              <option value="">Unknown</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-              <option value="Other">Other</option>
-            </select>
+        </label>
+        <div className="flex items-center gap-3">
+          <span className="w-9 text-sm text-gray-500 dark:text-gray-400">Sex</span>
+          <div role="radiogroup" aria-label="Sex" className="flex-1 grid grid-cols-4 gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-700">
+            {[["Male", "Male"], ["Female", "Female"], ["Other", "Other"], ["", "Unknown"]].map(([value, label]) => (
+              <button
+                key={label}
+                role="radio"
+                aria-checked={patientGenderStr === value}
+                onClick={() => setPatientGenderStr(value)}
+                className={`h-9 rounded-md text-sm font-medium ${
+                  patientGenderStr === value ? "bg-white dark:bg-gray-500 text-gray-900 dark:text-white shadow-sm" : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          These details help ambulance trusts understand demographic differences in cardiac arrest outcomes.
-        </p>
-        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Done" tone="primary" height="h-12" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -4198,48 +4201,10 @@ const StateBadge: React.FC = () => {
   return <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colour}`}>{label}</span>;
 };
 
-// Time spent on the arrest before eResus was started. Three buttons while it's likely to be needed (before
-// Start and for the first few minutes), then one "+ Time" menu so they don't sit there all arrest.
+// Time spent on the arrest before eResus was started. Always the same three buttons, so they're where the crew
+// expects them whenever they're needed.
 const TimeOffsetButtons: React.FC<{ onAdd: (seconds: number) => void }> = ({ onAdd }) => {
-  const { arrestState, masterTime } = useArrest();
-  const [open, setOpen] = useState(false);
-  const isCompact = arrestState === ArrestState.Active && masterTime > 180;
   const chip = "h-8 rounded-full bg-tone-tint text-tone-on-tint text-xs font-semibold active:scale-95 transition-transform";
-
-  if (isCompact) {
-    return (
-      <div className="relative" onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={() => setOpen((o) => !o)}
-          aria-label="Add time before eResus"
-          aria-expanded={open}
-          className={`${chip} flex items-center gap-1 px-3`}
-        >
-          <Plus size={14} aria-hidden="true" />
-          Time
-        </button>
-        {open && (
-          <>
-            <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-30 w-56 rounded-xl shadow-lg overflow-hidden bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-              {[1, 5, 10].map((minutes) => (
-                <button
-                  key={minutes}
-                  onClick={() => {
-                    onAdd(minutes * 60);
-                    setOpen(false);
-                  }}
-                  className="block w-full text-left px-4 py-3 text-sm text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700"
-                >
-                  +{minutes} min before eResus
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
 
   return (
     <div className="flex items-center gap-1.5">
@@ -4688,7 +4653,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
     <div
       className={`relative w-52 h-52 ${
         voiceAvailable ? "select-none touch-none rounded-full motion-safe:transition-transform motion-safe:duration-200" : ""
-      } ${isPressed ? "motion-safe:scale-95" : ""}`}
+      } ${isPressed ? "motion-safe:scale-[0.94]" : ""}`}
       {...pushToTalk}
     >
       <svg className="w-full h-full" viewBox="0 0 120 120">
@@ -4752,8 +4717,12 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
           </>
         )}
       </div>
-      {voiceAvailable && (isHolding || listener.isPushToTalkActive) && (
-        <PushToTalkRing transcript={listener.transcript} failed={(micFailed || isHolding) && !listener.isPushToTalkActive} />
+      {/* Also when hands-free hears the wake word, so it's plain the command is being taken. */}
+      {voiceAvailable && (isHolding || listener.isPushToTalkActive || listener.heardWakeWord) && (
+        <PushToTalkRing
+          transcript={listener.transcript}
+          failed={(micFailed || isHolding) && !listener.isPushToTalkActive && !listener.heardWakeWord}
+        />
       )}
     </div>
   );
@@ -4762,7 +4731,7 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
 // The listening state of the ring (matches iOS). Browsers don't expose the recogniser's audio level,
 // so the halo bumps as each word arrives instead of following loudness.
 const PushToTalkRing: React.FC<{ transcript: string; failed?: boolean }> = ({ transcript, failed = false }) => (
-  <div className="absolute inset-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-90 motion-safe:duration-300">
+  <div className="absolute inset-[5%] motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-110 motion-safe:duration-300">
     <div className="absolute inset-0 rounded-full border-[10px] border-tone-danger motion-safe:animate-ptt-ripple motion-reduce:hidden" />
     <div
       key={transcript.split(" ").length}
@@ -4802,6 +4771,19 @@ const PushToTalkRing: React.FC<{ transcript: string; failed?: boolean }> = ({ tr
     </div>
   </div>
 );
+
+// A glow round the edge of the screen while hands-free has heard the wake word and is taking a command,
+// so it's obvious across the room that eResus is listening (matches iOS). Never blocks a tap.
+const WakeWordEdgeGlow: React.FC = () => {
+  const listener = useVoiceListener();
+  if (!listener.heardWakeWord) return null;
+  return (
+    <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-[60] motion-safe:animate-in motion-safe:fade-in duration-200">
+      <div className="eresus-edge-glow absolute inset-0 rounded-[40px] blur-md opacity-90 motion-safe:animate-edge-glow-spin" />
+      <div className="eresus-edge-glow eresus-edge-glow-thin absolute inset-0 rounded-[40px] motion-safe:animate-edge-glow-spin" />
+    </div>
+  );
+};
 
 const VoiceListeningStatus: React.FC<{ holdHint?: string; className?: string }> = ({
   holdHint = "Hold the ring to talk.",
@@ -5122,14 +5104,49 @@ const SectionTitle: React.FC<{ title: string }> = ({ title }) => (
   <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{title}</h3>
 );
 
+// Quick post-ROSC drugs (matches iOS QuickDrug). Doses follow JRCALC post-ROSC care; anything else goes
+// through the drug list. drugName is the drug list's name, so the log and last-given times match.
+interface QuickDrug {
+  title: string;
+  drugName: string;
+  group: DrugGroupKind;
+  doses: string[];
+  childDoses: string[];
+  message: string;
+  childMessage: string;
+}
+const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride", QuickDrug> = {
+  pushDoseAdrenaline: {
+    title: "Push-dose adrenaline",
+    drugName: "Adrenaline push-dose",
+    group: "arrest",
+    doses: ["50 mcg IV/IO", "100 mcg IV/IO"],
+    childDoses: [],
+    message: "For hypotension after ROSC. Titrate to a systolic over 100.",
+    childMessage: "Child: choose Other dose and enter the dose given.",
+  },
+  sodiumChloride: {
+    title: "Sodium chloride 0.9%",
+    drugName: "Sodium chloride 0.9%",
+    group: "fluids",
+    doses: ["250 ml IV/IO", "500 ml IV/IO"],
+    childDoses: ["10 ml/kg IV/IO"],
+    message: "Fluid bolus to a systolic over 100, then reassess.",
+    childMessage: "Fluid bolus, then reassess.",
+  },
+};
+
 const RoscView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onOpenDrugs: (focus: DrugGroupKind | null) => void;
   onShowEtco2: () => void;
   onVoiceTranscript?: (transcript: string) => void;
-}> = ({ onShowPdf, onOpenDrugs, onShowEtco2, onVoiceTranscript }) => {
+  // A common post-ROSC drug at a set dose, checked for a repeat like any other.
+  onQuickDrug: (name: string, dose: string) => void;
+}> = ({ onShowPdf, onOpenDrugs, onShowEtco2, onVoiceTranscript, onQuickDrug }) => {
   const {
     reArrest,
+    isPaediatric,
     postROSCTasks,
     toggleChecklistItemCompletion,
     events,
@@ -5141,8 +5158,10 @@ const RoscView: React.FC<{
   } = useArrest();
   const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
   const [showDestination, setShowDestination] = useState(false);
+  const [quickDrug, setQuickDrug] = useState<QuickDrug | null>(null);
   const listener = useVoiceListener();
   const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Hold to talk");
+  const paediatric = isPaediatric === true;
   const talking = voiceAvailable && listener.isPushToTalkActive;
 
   return (
@@ -5198,12 +5217,44 @@ const RoscView: React.FC<{
       <div className="space-y-2">
         <SectionTitle title="Medications" />
         <div className="grid grid-cols-2 gap-3">
+          {/* The two most often needed after ROSC, one tap and a dose away. */}
+          <ActionButton title="Push-dose Adrenaline" icon={<HeartPulse size={16} />} tone="primary" height="h-12" fontSize="text-sm" onClick={() => setQuickDrug(QUICK_DRUGS.pushDoseAdrenaline)} />
+          <ActionButton title="Sodium Chloride 0.9%" icon={<Droplet size={16} />} tone="primary" height="h-12" fontSize="text-sm" onClick={() => setQuickDrug(QUICK_DRUGS.sodiumChloride)} />
           <ActionButton title="Sedation / RSI..." icon={<Syringe size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("sedation")} />
           <ActionButton title="Fluids & Blood..." icon={<Droplet size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("fluids")} />
           <ActionButton title="Vasopressors..." icon={<HeartPulse size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("arrest")} />
           <ActionButton title="Other Meds..." icon={<Pill size={16} />} tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs(null)} />
         </div>
       </div>
+
+      {quickDrug && (
+        <Modal isOpen onClose={() => setQuickDrug(null)} title={quickDrug.title}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500 dark:text-gray-400">{paediatric ? quickDrug.childMessage : quickDrug.message}</p>
+            {(paediatric ? quickDrug.childDoses : quickDrug.doses).map((dose) => (
+              <ActionButton
+                key={dose}
+                title={dose}
+                tone="primary"
+                height="h-12"
+                onClick={() => {
+                  onQuickDrug(quickDrug.drugName, dose);
+                  setQuickDrug(null);
+                }}
+              />
+            ))}
+            <ActionButton
+              title="Other dose…"
+              tone="standard"
+              height="h-12"
+              onClick={() => {
+                setQuickDrug(null);
+                onOpenDrugs(quickDrug.group);
+              }}
+            />
+          </div>
+        </Modal>
+      )}
 
       {hasTraumaContext && <HOTTCard compact />}
 
@@ -6270,6 +6321,7 @@ const ArrestView: React.FC<{
             onOpenDrugs={openDrugs}
             onShowEtco2={() => setShowEtco2Modal(true)}
             onVoiceTranscript={handleVoiceTranscript}
+            onQuickDrug={(name, dose) => checkRepeat(name, () => viewModel.logOtherDrug(name, dose, true))}
           />
         )}
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
@@ -6302,6 +6354,8 @@ const ArrestView: React.FC<{
           onShowReset={() => setShowResetModal(true)}
         />
       )}
+
+      <WakeWordEdgeGlow />
 
       {/* Modals */}
       <SummaryView
@@ -6490,7 +6544,7 @@ const LogbookView: React.FC = () => {
                   {log.startTime.toDate().toLocaleTimeString()}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {log.finalOutcome}
+                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {/Incomplete/.test(log.finalOutcome) ? "Unknown" : log.finalOutcome}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500">
                   Shocks: {log.shockCount ?? 0} | Adr: {log.adrenalineCount ?? 0} | Amio: {log.amiodaroneCount ?? 0} |
@@ -6570,6 +6624,7 @@ const LogbookView: React.FC = () => {
           lidocaineCount={Math.max(selectedLog.lidocaineCount ?? 0, lidocaineDosesIn(selectedLogEvents))}
           patientAge={selectedLog.patientAge && selectedLog.patientAge !== "Unknown" ? selectedLog.patientAge : null}
           patientGender={selectedLog.patientGender && selectedLog.patientGender !== "Unknown" ? selectedLog.patientGender : null}
+          isLive={false}
           typeColour={(type) => getEventTypeColor(type as EventType)}
         />
       )}

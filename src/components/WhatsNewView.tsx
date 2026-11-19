@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BriefcaseMedical, Hand, Smartphone, Syringe, Timer } from "lucide-react";
+import { AudioWaveform, BriefcaseMedical, Hand, Palette, Smartphone, Syringe, Timer } from "lucide-react";
 
 // Bump when the pages change, so the tour shows once more after an update (matches iOS WhatsNewView).
 export const WHATS_NEW_VERSION = "1.3";
@@ -70,14 +70,31 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
       ],
     },
     {
+      icon: <Palette size={40} />,
+      title: "A different look",
+      lines: [
+        "A calmer colour palette throughout, in light and dark mode.",
+        "Colour means one thing each: red is act now, amber is due soon, green is in progress or done.",
+        "Bigger, clearer buttons and half-height popups, so the clock stays in view.",
+      ],
+    },
+    {
       icon: <Timer size={40} />,
       title: "The ring keeps time",
       lines: [
         "When a rhythm check is due the header turns red, and the next cycle carries on counting so you can see how late it is.",
-        "Spoken prompts say when a check or a drug is due. Mute them for a case with the speaker button.",
+        "The arrest clock, ToR guidance and summary all follow the same timings.",
+      ],
+    },
+    {
+      icon: <AudioWaveform size={40} />,
+      title: "Spoken prompts and voice",
+      lines: [
+        "Spoken prompts say when a rhythm check or a drug is due, in a natural recorded voice. Mute them for a case with the speaker button.",
         voiceCommandsEnabled
-          ? "Hold the ring and speak to log by voice: “adrenaline 1 mg”, “rhythm check VF, shock delivered”."
-          : "Voice commands can be switched on in Settings: hold the ring and speak to log.",
+          ? "Voice recognition: hold the ring and speak to log, such as “adrenaline 1 mg” or “rhythm check VF, shock delivered”. Hands-free mode listens for the wake word."
+          : "Voice recognition can be switched on in Settings: hold the ring and speak to log, or go hands-free with a wake word.",
+        "Keep eResus open on screen to hear prompts: browsers pause web apps in the background.",
       ],
     },
     {
