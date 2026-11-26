@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { AudioWaveform, BriefcaseMedical, Hand, Palette, Smartphone, Syringe, Timer } from "lucide-react";
+import { AudioWaveform, BriefcaseMedical, Hand, Palette, SlidersHorizontal, Smartphone, Syringe, Timer } from "lucide-react";
 
 // Bump when the pages change, so the tour shows once more after an update (matches iOS WhatsNewView).
-export const WHATS_NEW_VERSION = "1.3";
+export const WHATS_NEW_VERSION = "1.3.1";
 export const WHATS_NEW_KEY = "eResusLastSeenWhatsNew";
 
 export const hasSeenWhatsNew = (): boolean => {
@@ -25,14 +25,17 @@ interface Page {
   icon: React.ReactNode;
   title: string;
   lines: string[];
+  // The last page: the main switches, so an existing user can turn on what's new without hunting (matches iOS).
+  content?: React.ReactNode;
 }
 
 // A short tour of what changed. It never stands between the crew and Start: Skip is always in reach, and it
 // isn't shown while an arrest is running.
-const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceCommandsEnabled?: boolean }> = ({
+const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceCommandsEnabled?: boolean; setup?: React.ReactNode }> = ({
   isOpen,
   onClose,
   voiceCommandsEnabled = false,
+  setup,
 }) => {
   const [page, setPage] = useState(0);
   // Escape skips, like the Skip button.
@@ -114,6 +117,7 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
         "On iPhone, the eResus app also shows the arrest clock on the Lock Screen and in the Dynamic Island.",
       ],
     },
+    ...(setup ? [{ icon: <SlidersHorizontal size={40} />, title: "Set it up your way", lines: [], content: setup }] : []),
   ];
 
   const finish = () => {
@@ -139,6 +143,7 @@ const WhatsNewView: React.FC<{ isOpen: boolean; onClose: () => void; voiceComman
           {current.icon}
         </div>
         <h2 className="mt-5 text-3xl font-bold text-foreground">{current.title}</h2>
+        {current.content}
         <ul className="mt-5 space-y-3.5">
           {current.lines.map((line) => (
             <li key={line} className="flex gap-2.5 text-base text-foreground">

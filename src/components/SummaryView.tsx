@@ -121,7 +121,11 @@ const SummaryView: React.FC<
             />
           )}
           {s.vod && <Row label="Death verified" value={s.time(s.vod)} />}
-          <Row label={s.isNewborn ? "Time from birth" : `Time from ${s.timedFrom}`} value={s.format(input.totalTime)} />
+          {/* With no time added before eResus, the clock is simply how long the session ran (matches iOS). */}
+          <Row
+            label={s.isNewborn ? "Time from birth" : s.timedFrom === "eResus start" ? "Duration of session" : `Time from ${s.timedFrom}`}
+            value={s.format(input.totalTime)}
+          />
         </div>
 
         {showsPatientDetails && (

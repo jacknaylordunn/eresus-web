@@ -2905,5 +2905,147 @@
    "time": null,
    "reason": null
   }
+ },
+ {
+  "heard": "Shot given",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline shot given",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Packed red cells",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood loss",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "plasma given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Plasma",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "fluid bolus",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "patient re-arrested",
+  "expected": {
+   "actions": [
+    {
+     "type": "rearrest"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pre-alert given",
+  "expected": {
+   "actions": [
+    {
+     "type": "preAlert"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "LUCAS on",
+  "expected": {
+   "actions": [
+    {
+     "type": "note",
+     "text": "Mechanical CPR started"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "65 year old male",
+  "expected": {
+   "actions": [
+    {
+     "type": "patient",
+     "age": "65",
+     "sex": "Male"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "aged 70, female",
+  "expected": {
+   "actions": [
+    {
+     "type": "patient",
+     "age": "70",
+     "sex": "Female"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
  }
 ]

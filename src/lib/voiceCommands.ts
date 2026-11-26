@@ -21,7 +21,11 @@ export type VoiceAction =
   | { type: "otherDrug"; drug: string; dose: string | null } // from the Other Meds list, by its listed name
   | { type: "procedure"; procedure: string } // a trauma intervention; thoracostomy without a side is refused
   | { type: "trauma" } // treat as a traumatic arrest
-  | { type: "observation"; kind: ObservationKind; value: string }; // mostly post-ROSC
+  | { type: "observation"; kind: ObservationKind; value: string } // mostly post-ROSC
+  | { type: "rearrest" } // after ROSC, back into arrest
+  | { type: "preAlert" } // pre-alert given to the receiving hospital
+  | { type: "note"; text: string } // logged as said, e.g. "Mechanical CPR started"
+  | { type: "patient"; age: string | null; sex: string | null }; // "65 year old male"
 
 // shock, adrenaline, amiodarone, lidocaine, or an Other Meds drug or trauma intervention by name.
 export type GivenItem = string;
@@ -44,8 +48,11 @@ export interface VoiceParse {
 
 // Wake words for hands-free listening. Recognisers spell "eResus" in several ways.
 export const WAKE_WORDS = {
-  scribe: ["scribe"],
-  eresus: ["eresus", "e resus", "ee resus", "e rescues", "e rescue", "eresas"],
+  scribe: ["scribe", "scribes", "scrybe", "skribe"],
+  // How recognition writes "ee-resus" in practice. Never "a resus" or bare "resus", which come up in ordinary talk.
+  eresus: ["eresus", "e resus", "ee resus", "eee resus", "e reesus", "ee reesus", "e re sus", "e res us", "e rescues",
+    "e rescue", "eresas", "erisus", "e risus", "iresus", "i resus", "e recess", "ee recess", "e reces", "he resus",
+    "e reeses", "erie sus"],
 } as const;
 
 export type WakeWord = keyof typeof WAKE_WORDS;
@@ -57,6 +64,8 @@ export const VOICE_VOCABULARY = [
   "ETCO2", "kPa", "scribe", "eResus", "TXA", "tranexamic acid", "naloxone", "atropine", "calcium chloride",
   "sodium bicarbonate", "magnesium", "tenecteplase", "ketamine", "rocuronium", "pelvic binder", "tourniquet",
   "thoracostomy", "needle decompression", "sats", "BM", "blood pressure", "12 lead", "STEMI", "trauma",
+  "blood given", "plasma", "red cells", "whole blood", "fibrinogen", "saline", "shock given",
+  "re-arrested", "pre-alert", "LUCAS", "year old", "male", "female",
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -75,14 +84,18 @@ type Kind =
   | { type: "otherDrug"; drug: string }
   | { type: "procedure"; procedure: string }
   | { type: "trauma" }
-  | { type: "observation"; kind: SaidReading };
+  | { type: "observation"; kind: SaidReading }
+  | { type: "rearrest" }
+  | { type: "preAlert" }
+  | { type: "note"; text: string };
 
 const otherDrug = (phrases: string[], drug: string): [string, Kind][] => phrases.map((p) => [p, { type: "otherDrug", drug }]);
 const procedure = (phrases: string[], name: string): [string, Kind][] => phrases.map((p) => [p, { type: "procedure", procedure: name }]);
 const observation = (phrases: string[], kind: SaidReading): [string, Kind][] => phrases.map((p) => [p, { type: "observation", kind }]);
 
 const PHRASES: [string, Kind][] = [
-  ...["adrenaline", "adrenalin", "epinephrine", "epi", "adrenalines"].map((p): [string, Kind] => [p, { type: "drug", drug: "adrenaline" }]),
+  // "Adrenaline shot" is the drug, so its "shot" is never read as a shock.
+  ...["adrenaline", "adrenalin", "epinephrine", "epi", "adrenalines", "adrenaline shot"].map((p): [string, Kind] => [p, { type: "drug", drug: "adrenaline" }]),
   ...["amiodarone", "amio", "amiodarone's", "cordarone"].map((p): [string, Kind] => [p, { type: "drug", drug: "amiodarone" }]),
   ...["lidocaine", "lignocaine", "lido", "xylocaine"].map((p): [string, Kind] => [p, { type: "drug", drug: "lidocaine" }]),
   ...[
@@ -99,7 +112,9 @@ const PHRASES: [string, Kind][] = [
     (p): [string, Kind] => [p, { type: "rhythm", rhythm: "Non-shockable" }],
   ),
   // Not "shocking" (said before the shock, while standing clear) or bare "defib" ("defib pads on").
-  ...["shock", "shocks", "shocked", "shock delivered", "shock given", "delivered shock", "defibbed", "defibrillated"].map(
+  // "Shot given" is how recognition often hears "shock given" in a noisy room.
+  ...["shock", "shocks", "shocked", "shock delivered", "shock given", "delivered shock", "defibbed", "defibrillated",
+    "shot given", "shot delivered", "shots given"].map(
     (p): [string, Kind] => [p, { type: "shock" }],
   ),
   // Only unmistakable ROSC wording: pulse phrases are as often a question or a check in progress
@@ -145,9 +160,11 @@ const PHRASES: [string, Kind][] = [
   ...otherDrug(["tenecteplase", "tnk"], "Tenecteplase"),
   ...otherDrug(["normal saline", "sodium chloride", "saline bolus", "bag of saline", "bolus of saline", "saline"], "Sodium chloride 0.9%"),
   ...otherDrug(["hartmann", "hartmanns", "hartmann is", "hartmann solution"], "Hartmann’s solution"),
-  ...otherDrug(["packed red cells", "red cells", "unit of blood", "units of blood", "prbc", "prbcs"], "Packed red cells"),
+  // Never bare "blood": "blood loss" and "blood everywhere" are not a transfusion.
+  ...otherDrug(["packed red cells", "red cells", "unit of blood", "units of blood", "prbc", "prbcs", "blood given",
+    "blood transfused", "blood transfusion", "blood running", "blood going in", "blood up"], "Packed red cells"),
   ...otherDrug(["whole blood"], "Whole blood"),
-  ...otherDrug(["plasma", "ffp", "lyoplas"], "Plasma"),
+  ...otherDrug(["plasma", "ffp", "lyoplas", "plasmas", "freeze dried plasma", "fresh frozen plasma"], "Plasma"),
   ...otherDrug(["fibrinogen"], "Fibrinogen concentrate"),
   ...otherDrug(["txa", "t x a", "tranexamic", "tranexamic acid"], "Tranexamic acid"),
   ...otherDrug(["ketamine"], "Ketamine"),
@@ -183,6 +200,16 @@ const PHRASES: [string, Kind][] = [
     "Enhanced / critical care requested",
   ),
   ...["trauma arrest", "traumatic arrest", "traumatic cardiac arrest", "trauma cardiac arrest", "arrest due to trauma"].map((p): [string, Kind] => [p, { type: "trauma" }]),
+  ...["re arrest", "re arrested", "rearrest", "rearrested", "re arrests", "arrested again", "back in arrest", "lost output",
+    "lost the output", "lost output again"].map((p): [string, Kind] => [p, { type: "rearrest" }]),
+  ...["pre alert", "pre alert given", "prealert", "prealert given", "pre alerted", "pre alert done", "hospital pre alerted"].map(
+    (p): [string, Kind] => [p, { type: "preAlert" }],
+  ),
+  ...["lucas", "lucas on", "lucas device", "lucas device on", "mechanical cpr", "mechanical compressions", "autopulse", "auto pulse"].map(
+    (p): [string, Kind] => [p, { type: "note", text: "Mechanical CPR started" }],
+  ),
+  // A bolus of crystalloid, which JRCALC gives as sodium chloride 0.9%.
+  ...otherDrug(["fluid bolus", "fluids given", "fluids running", "fluid challenge", "fluids up"], "Sodium chloride 0.9%"),
 
   // Readings, mostly after ROSC.
   ...observation(["sats", "sat", "spo2", "sp o2", "saturations", "saturating", "o2 sats", "oxygen sats", "oxygen saturation"], "spo2"),
@@ -539,7 +566,7 @@ const gapBetween = (tokens: string[], a: { start: number; end: number }, b: { st
 
 const MAX_GAP: Record<Kind["type"], number> = {
   drug: 2, otherDrug: 2, shock: 2, etco2: 2, access: 4, analyse: 0, rhythm: 0, rosc: 0, undo: 0, airway: 0,
-  procedure: 0, trauma: 0, observation: 0,
+  procedure: 0, trauma: 0, observation: 0, rearrest: 0, preAlert: 0, note: 0,
 };
 
 const kindKey = (kind: Kind) => JSON.stringify(kind);
@@ -868,6 +895,15 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       case "trauma":
         if (!actions.some((a) => a.type === "trauma")) actions.push({ type: "trauma" });
         break;
+      case "rearrest":
+      case "preAlert":
+      case "note": {
+        // Something happening now, never history in a handover.
+        if (isHandover) break;
+        const action: VoiceAction = kind.type === "note" ? { type: "note", text: kind.text } : { type: kind.type };
+        if (!actions.some((a) => JSON.stringify(a) === JSON.stringify(action))) actions.push(action);
+        break;
+      }
       case "observation": {
         // Readings in a handover aren't current; leave them out.
         if (isHandover) break;
@@ -901,6 +937,10 @@ export const parseVoiceCommand = (transcript: string): VoiceParse => {
       }
     }
   }
+
+  // "65 year old male", "aged 70", "female": the patient's details, in a handover or on their own.
+  const patient = patientDetails(tokens);
+  if (patient) actions.push(patient);
 
   // A shock after a non-shockable rhythm makes no sense.
   const rhythm = rhythmIndex >= 0 ? (actions[rhythmIndex] as Extract<VoiceAction, { type: "rhythm" }>).rhythm : null;
@@ -1052,6 +1092,23 @@ const findLocation = (tokens: string[], m: Mention): string | null => {
 };
 
 // Hands-free mode: finds the wake word and returns what follows it, or null if it wasn't said.
+// Age only with a word that makes it an age, so "6 minutes" or "300 joules" never become one.
+const patientDetails = (tokens: string[]): VoiceAction | null => {
+  let age: string | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    if (!/^\d+$/.test(tokens[i])) continue;
+    const n = Number(tokens[i]);
+    if (n > 120) continue;
+    const saysYears = ["year", "years", "yr", "yrs"].includes(tokens[i + 1] ?? "") && tokens[i + 2] === "old";
+    if (saysYears || ["aged", "age"].includes(tokens[i - 1] ?? "")) {
+      age = String(n);
+      break;
+    }
+  }
+  const sex = tokens.includes("female") ? "Female" : tokens.includes("male") ? "Male" : null;
+  return age === null && sex === null ? null : { type: "patient", age, sex };
+};
+
 export const afterWakeWord = (transcript: string, wakeWord: WakeWord): string | null => {
   const tokens = normalise(transcript);
   for (let i = 0; i < tokens.length; i++) {

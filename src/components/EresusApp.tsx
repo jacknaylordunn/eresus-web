@@ -1899,6 +1899,19 @@ const useArrestViewModel = () => {
     completePostROSCTask(DESTINATION_TASK);
   };
 
+  // A line in the log as said, such as "Mechanical CPR started" by voice.
+  const logNote = (text: string) => {
+    saveUndoState();
+    logEvent(text, EventType.Status);
+  };
+
+  // Age and sex said aloud ("65 year old male"). Saved for undo like any other voice action.
+  const setPatientDetails = (age: string | null, sex: string | null) => {
+    saveUndoState();
+    if (age !== null) setPatientAgeStr(age);
+    if (sex !== null) setPatientGenderStr(sex);
+  };
+
   const latestObservation = (observation: ROSCObservation) => latestObservationIn(events, observation);
 
   // Allow multiple airway attempts (no longer restricted by airwayPlaced)
@@ -2786,6 +2799,8 @@ const useArrestViewModel = () => {
     setTraumaArrest,
     logObservation,
     logDestination,
+    logNote,
+    setPatientDetails,
     latestObservation,
     logAirwayPlaced: logAirwayPlacedFn,
     logVascularAccess,
@@ -4698,7 +4713,8 @@ const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void 
 // The listening state of the ring (matches iOS). Browsers don't expose the recogniser's audio level,
 // so the halo bumps as each word arrives instead of following loudness.
 const PushToTalkRing: React.FC<{ transcript: string; failed?: boolean }> = ({ transcript, failed = false }) => (
-  <div className="absolute inset-[5%] motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-110 motion-safe:duration-300">
+  // Exactly over the timer ring, so none of it shows round the microphone (matches iOS).
+  <div className="absolute inset-0 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
     <div className="absolute inset-0 rounded-full border-[10px] border-tone-danger motion-safe:animate-ptt-ripple motion-reduce:hidden" />
     <div
       key={transcript.split(" ").length}
@@ -6078,11 +6094,13 @@ const ArrestView: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewModel.isTraumaArrest]);
 
+  const bannerTouch = useRef<{ x: number; y: number } | null>(null);
   const showVoiceFeedback = (message: string, succeeded: boolean, undoDepth: number | null = null) => {
     const id = Date.now();
     setVoiceFeedback({ id, message, succeeded, undoDepth });
-    // Long enough to read and reach Undo mid-compressions; a refusal stays longer, as it needs acting on.
-    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), succeeded ? 12000 : 20000);
+    // Long enough to read and reach Undo mid-compressions, then out of the way; a tap or swipe clears it sooner.
+    const ms = undoDepth !== null ? 10000 : succeeded ? 5000 : 8000;
+    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), ms);
   };
 
   const handleVoiceTranscript = (transcript: string) => {
@@ -6187,7 +6205,7 @@ const ArrestView: React.FC<{
       return { summary: "undo" };
     }
     // Drugs, readings and interventions are also logged after ROSC; everything else needs an active arrest.
-    const worksAfterROSC = action.type === "otherDrug" || action.type === "observation" || action.type === "procedure";
+    const worksAfterROSC = ["otherDrug", "observation", "procedure", "rearrest", "preAlert", "note", "patient"].includes(action.type);
     const stateAllows = vm.arrestState === ArrestState.Active || (worksAfterROSC && vm.arrestState === ArrestState.Rosc);
     if (!stateAllows || vm.isTimerPaused) {
       return { failure: "Voice commands work during an active adult arrest." };
@@ -6283,6 +6301,19 @@ const ArrestView: React.FC<{
         if (vm.isTraumaArrest) return { summary: "traumatic arrest (already set)" };
         vm.performFromVoice(null, () => vm.setTraumaArrest(true));
         return { summary: "traumatic cardiac arrest mode selected" };
+      case "rearrest":
+        if (vm.arrestState !== ArrestState.Rosc) return { failure: "Re-arrest is only after ROSC." };
+        vm.performFromVoice(null, vm.reArrest);
+        return { summary: "re-arrest" };
+      case "preAlert":
+        vm.performFromVoice(null, () => vm.logDestination("Pre-alert given"));
+        return { summary: "pre-alert given" };
+      case "note":
+        vm.performFromVoice(null, () => vm.logNote(action.text));
+        return { summary: action.text.toLowerCase() };
+      case "patient":
+        vm.setPatientDetails(action.age, action.sex);
+        return { summary: [action.age && `age ${action.age}`, action.sex?.toLowerCase()].filter(Boolean).join(", ") };
       case "observation": {
         const { kind, value } = action;
         vm.performFromVoice(null, () => vm.logObservation(kind, value));
@@ -6414,16 +6445,27 @@ const ArrestView: React.FC<{
       </div>
 
       {voiceFeedback && viewModel.arrestState !== ArrestState.Pending && (
-        // Shows what was heard and what it did, with Undo one tap away.
+        // Shows what was heard and what it did, with Undo one tap away. A tap or a swipe puts it away.
         <div
-          className={`mx-3 mb-2 flex items-center gap-3 p-3 rounded-xl shadow text-sm ${
+          role="status"
+          onClick={() => setVoiceFeedback(null)}
+          onTouchStart={(e) => (bannerTouch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
+          onTouchEnd={(e) => {
+            const start = bannerTouch.current;
+            if (!start) return;
+            const dx = e.changedTouches[0].clientX - start.x;
+            const dy = e.changedTouches[0].clientY - start.y;
+            if (Math.abs(dx) > 60 || dy > 30) setVoiceFeedback(null);
+          }}
+          className={`mx-3 mb-2 flex items-center gap-3 p-3 rounded-xl shadow text-sm cursor-pointer ${
             voiceFeedback.succeeded ? "bg-tone-tint text-tone-on-tint" : "bg-tone-alert text-tone-on-alert"
           }`}
         >
           <span className="flex-grow">{voiceFeedback.message}</span>
           {voiceFeedback.undoDepth !== null && (
             <button
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 viewModel.undoToDepth(voiceFeedback.undoDepth!);
                 setVoiceFeedback(null);
               }}
@@ -7352,7 +7394,7 @@ const SettingsView: React.FC = () => {
       </div>
 
       <AuthView isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
-      <WhatsNewView isOpen={showWhatsNew} onClose={() => setShowWhatsNew(false)} voiceCommandsEnabled={voiceCommandsEnabled} />
+      <WhatsNewView isOpen={showWhatsNew} onClose={() => setShowWhatsNew(false)} voiceCommandsEnabled={voiceCommandsEnabled} setup={<WhatsNewQuickSetup />} />
     </div>
   );
 };
@@ -7415,6 +7457,58 @@ const SegmentedSetting: React.FC<{
     </div>
   </div>
 );
+
+// The switches most worth a look after updating, all also in Settings (matches iOS).
+const WhatsNewQuickSetup: React.FC = () => {
+  const {
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    showDosagePrompts,
+    setShowDosagePrompts,
+  } = useSettings();
+  const [message, setMessage] = useState<string | null>(null);
+  const word = voiceWakeWord === "eresus" ? "eResus" : "Scribe";
+
+  const toggleVoice = async (enable: boolean) => {
+    if (!enable) {
+      setVoiceCommandsEnabled(false);
+      return;
+    }
+    let status = await checkVoiceCommandAvailability();
+    if (status === "downloadable" || status === "downloading") {
+      setMessage("Downloading English (UK) speech recognition to this device…");
+      status = (await installVoiceCommandLanguage()) ? "available" : await checkVoiceCommandAvailability();
+    }
+    if (status === "available") {
+      setVoiceCommandsEnabled(true);
+      setMessage(null);
+    } else {
+      setMessage("This browser can't recognise speech on the device. Voice needs a recent Google Chrome, or the eResus iPhone app.");
+    }
+  };
+
+  return (
+    <div className="mt-5 space-y-5">
+      <SettingToggle label="Spoken prompts" enabled={voicePromptsEnabled} onChange={setVoicePromptsEnabled} description="Says when a rhythm check or drug is due." />
+      <SettingToggle label="Voice scribe" enabled={voiceCommandsEnabled} onChange={toggleVoice} description="Hold the CPR ring and speak to log." />
+      {voiceCommandsEnabled && (
+        <SettingToggle
+          label={`Hands-free “${word}”`}
+          enabled={voiceHandsFree}
+          onChange={setVoiceHandsFree}
+          description={`Say “${word}”, then the entry. Only during an arrest.`}
+        />
+      )}
+      <SettingToggle label="Dose calculator" enabled={showDosagePrompts} onChange={setShowDosagePrompts} description="Suggests doses by age and asks for the dose given." />
+      <p className={`text-sm ${message ? "text-tone-danger" : "text-muted-foreground"}`}>{message ?? "All of these are in Settings too."}</p>
+    </div>
+  );
+};
 
 const SettingToggle: React.FC<{
   label: string;
@@ -7697,6 +7791,7 @@ const AppContent: React.FC = () => {
           isOpen={showWhatsNewOnLaunch && arrestViewModel.arrestState === ArrestState.Pending}
           onClose={() => setShowWhatsNewOnLaunch(false)}
           voiceCommandsEnabled={voiceCommandsEnabled}
+          setup={<WhatsNewQuickSetup />}
         />
         <PatientInfoPromptView
           isOpen={arrestViewModel.showPatientInfoPrompt}
