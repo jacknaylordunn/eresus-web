@@ -97,6 +97,7 @@ import {
   Bandage,
   Play,
   Sparkles,
+  Mail,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
@@ -7377,6 +7378,19 @@ const SettingsView: React.FC = () => {
             </span>
             <ChevronRight size={18} className="text-gray-400" aria-hidden="true" />
           </button>
+          {/* Opens the mail app with the version filled in (matches iOS). Never add patient details or a log here. */}
+          <a
+            href={`mailto:it-support@aegismedicalsolutions.co.uk?subject=${encodeURIComponent("eResus feedback (web app v1.3)")}&body=${encodeURIComponent(
+              `\n\nPlease don't include patient details.\n${navigator.userAgent}`,
+            )}`}
+            className="w-full min-h-11 flex items-center justify-between text-gray-800 dark:text-gray-200"
+          >
+            <span className="flex items-center gap-2">
+              <Mail size={18} className="text-tone-accent" aria-hidden="true" />
+              Send Feedback
+            </span>
+            <ChevronRight size={18} className="text-gray-400" aria-hidden="true" />
+          </a>
         </div>
 
         {/* Developer Info */}
