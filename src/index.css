@@ -4,6 +4,25 @@
 
 @layer base {
   :root {
+    /* eResus palette: one calm sage tone. Red = hands off (rhythm check, shock, stop),
+       amber = a drug is due, green = good outcome, slate = a firm choice.
+       Values must match the iOS app (Theme.swift). */
+    --tone-tint: 230 239 233;
+    --tone-on-tint: 29 58 43;
+    --tone-accent: 46 107 78;
+    --tone-on-accent: 255 255 255;
+    --tone-alert: 242 179 61;
+    --tone-on-alert: 58 36 0;
+    --tone-danger: 198 54 44;
+    --tone-on-danger: 255 255 255;
+    /* Full-width red behind white text (rhythm check due): the light red in both modes for AA contrast. */
+    --tone-danger-solid: 198 54 44;
+    --tone-danger-tint: 249 227 224;
+    --tone-on-danger-tint: 156 39 31;
+    --tone-positive: 27 127 69;
+    --tone-on-positive: 255 255 255;
+    --tone-slate: 75 91 82;
+    --tone-on-slate: 255 255 255;
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
@@ -55,6 +74,21 @@
   }
 
   .dark {
+    --tone-tint: 30 42 35;
+    --tone-on-tint: 207 228 214;
+    --tone-accent: 63 140 104;
+    --tone-on-accent: 255 255 255;
+    --tone-alert: 242 179 61;
+    --tone-on-alert: 58 36 0;
+    --tone-danger: 216 70 59;
+    --tone-on-danger: 255 255 255;
+    --tone-danger-solid: 198 54 44;
+    --tone-danger-tint: 59 31 28;
+    --tone-on-danger-tint: 243 167 158;
+    --tone-positive: 36 137 79;
+    --tone-on-positive: 255 255 255;
+    --tone-slate: 90 107 97;
+    --tone-on-slate: 255 255 255;
     --background: 222 47% 11%;
     --foreground: 210 40% 98%;
     --card: 217 33% 17%;
@@ -108,4 +142,62 @@
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
   }
+}
+
+/* Highlighted buttons keep full colour and pulse a glow around them instead of fading,
+   so a critical button never drops in contrast mid-pulse. */
+@keyframes eresus-halo-danger {
+  0% { box-shadow: 0 0 0 0 rgb(var(--tone-danger) / 0.6); }
+  70% { box-shadow: 0 0 0 12px rgb(var(--tone-danger) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--tone-danger) / 0); }
+}
+
+@keyframes eresus-halo-alert {
+  0% { box-shadow: 0 0 0 0 rgb(var(--tone-alert) / 0.7); }
+  70% { box-shadow: 0 0 0 12px rgb(var(--tone-alert) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--tone-alert) / 0); }
+}
+
+.halo-danger {
+  animation: eresus-halo-danger 1.4s ease-out infinite;
+}
+
+.halo-alert {
+  animation: eresus-halo-alert 1.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .halo-danger {
+    animation: none;
+    box-shadow: 0 0 0 4px rgb(var(--tone-danger) / 0.45);
+  }
+  .halo-alert {
+    animation: none;
+    box-shadow: 0 0 0 4px rgb(var(--tone-alert) / 0.55);
+  }
+}
+
+/* Wake word heard: a conic gradient shown only as a ring round the screen edge (matches iOS). */
+@property --edge-glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.eresus-edge-glow {
+  --edge-glow-width: 10px;
+  padding: var(--edge-glow-width);
+  background: conic-gradient(
+    from var(--edge-glow-angle),
+    rgb(var(--tone-danger)),
+    rgb(var(--tone-accent)),
+    rgb(var(--tone-tint)),
+    rgb(var(--tone-positive)),
+    rgb(var(--tone-danger))
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.eresus-edge-glow-thin {
+  --edge-glow-width: 3px;
 }

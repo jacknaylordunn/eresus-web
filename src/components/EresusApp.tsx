@@ -8,7 +8,9 @@ import React, {
   lazy,
   Suspense,
   useCallback,
+  useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { initializeApp, FirebaseApp } from "firebase/app";
 import {
   getFirestore,
@@ -69,7 +71,7 @@ import {
   Circle,
   CheckCircle2,
   Bolt,
-  Timer,
+  BellOff,
   Volume2,
   VolumeX,
   AlertTriangle,
@@ -88,9 +90,76 @@ import {
   Droplet,
   Users,
   Shield,
+  AudioWaveform,
+  Ear,
+  Mic,
+  MicOff,
+  Bandage,
+  Play,
+  Sparkles,
+  Mail,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import NewbornLifeSupport from "./NewbornLifeSupport";
+import VoicePromptButton from "./VoicePromptButton";
+import { adrenalineDismissal, drugPrompts, promptHidesAfterAnalysis } from "@/lib/drugPrompts";
+import { drugEntry, loggedAt, repeatCheck, voiceRepeatRefusal } from "@/lib/repeatCheck";
+import { formatNumber, parseVoiceCommand, type GivenItem, type VoiceAction, type VoiceTime, type WakeWord } from "@/lib/voiceCommands";
+import {
+  checkVoiceCommandAvailability,
+  installVoiceCommandLanguage,
+  voiceCommandListener,
+} from "@/utils/voiceCommandListener";
+import { VOICE_PROMPTS, type VoicePrompt, voicePromptPlayer } from "@/utils/voicePrompts";
+import { decodeSession, encodeSession, parseStateData, type SessionSnapshot } from "@/lib/sessionFormat";
+import { HIGHLIGHT_CLASSES, TONE_CLASSES, type ButtonHighlight, type ButtonTone } from "@/lib/tones";
+import WhatsNewView, { hasSeenWhatsNew, markWhatsNewSeen } from "./WhatsNewView";
+import Modal from "./Modal";
+import SummaryView from "./SummaryView";
+import {
+  DestinationSheet,
+  HOTTCard,
+  ObservationButton,
+  ObservationSheet,
+  OtherDrugsSheet,
+  RepeatPromptModal,
+  SomaticCriteriaSection,
+  TraumaSheet,
+} from "./ClinicalSheets";
+import {
+  ageTextForCategory,
+  areDrugPromptsQuietened as promptsQuietenedFromLog,
+  checklistToggleEntry,
+  clockFor,
+  completeTask,
+  currentRhythm as currentRhythmFrom,
+  currentRhythmLine,
+  isPaediatric as isPaediatricFrom,
+  meetsTarget,
+  TOR_ADULT_EXCLUSIONS,
+  torCaution as torCautionFrom,
+  TRAUMA_MARKS_ARREST,
+  DESTINATION_TASK,
+  doseNote as checkDose,
+  hhmm,
+  isTraumaArrest as traumaFromLog,
+  hasTraumaContext as traumaContextFromLog,
+  traumaModeWasSwitchedOff,
+  isTraumaProcedureName,
+  latestObservation as latestObservationIn,
+  observationEntry,
+  POST_ROSC_TASKS,
+  recentOtherDrugs,
+  ROSC_OBSERVATION_ORDER,
+  ROSC_OBSERVATIONS,
+  TRAUMA_OFF_ENTRY,
+  TRAUMA_ON_ENTRY,
+  traumaEntryText,
+  traumaInterventionCount as traumaCountIn,
+  type DrugGroupKind,
+  type ROSCObservation,
+} from "@/lib/arrestRecord";
+import { buildSummary } from "@/lib/arrestSummary";
 
 //============================================================================
 // GLOBAL FIREBASE CONFIG & APP ID
@@ -125,7 +194,22 @@ export interface Event {
   timestamp: number;
   message: string;
   type: EventType;
+  // Seconds since 1970 when it happened, kept as logged: the arrest clock stops while paused, so clock
+  // times can't be worked out from it afterwards. Missing on logs from older builds.
+  clock?: number;
 }
+
+// The message is the record: entries logged after the fact carry "(estimated)" (before any "(voice)").
+export const isEstimated = (message: string) => message.includes("(estimated)");
+export const CONFIRMED_ENTRY_PREFIXES = ["Cardiac arrest confirmed ~", "Born ~"];
+const isConfirmedEntry = (event: Event) =>
+  event.type === EventType.Status && CONFIRMED_ENTRY_PREFIXES.some((prefix) => event.message.startsWith(prefix));
+// Seconds between the arrest being confirmed and eResus being started, read from the log's own entry.
+export const timeBeforeStart = (events: { message: string }[]): number => {
+  const entry = events.find((e) => CONFIRMED_ENTRY_PREFIXES.some((prefix) => e.message.startsWith(prefix)));
+  const minutes = entry ? Number(entry.message.split("~")[1]?.split(" ")[0]) : 0;
+  return Number.isFinite(minutes) ? minutes * 60 : 0;
+};
 
 export enum ArrestState {
   Pending = "PENDING",
@@ -237,6 +321,7 @@ export interface UndoState {
   patientAgeCategory: PatientAgeCategory | null;
   hideAdrenalinePrompt?: boolean;
   hideAmiodaronePrompt?: boolean;
+  hideAdrenalineDueWarning?: boolean;
   lastRhythmNonShockable?: boolean;
   airwayAdjunct?: AirwayAdjunctType | null;
   roscTime?: number | null;
@@ -245,13 +330,13 @@ export interface UndoState {
   torTime?: number | null;
   vodTime?: number | null;
   vodChecklist?: ChecklistItem[];
+  cprCycleStartTime?: number;
+  stackedShockExtra?: number;
 }
 
 export interface PDFIdentifiable {
   id: string;
   pdfUrl: string;
-  /** Original cross-origin URL (for fallback viewers like Google Docs) */
-  upstreamUrl?: string;
   title: string;
 }
 
@@ -289,7 +374,17 @@ const useAppSettings = () => {
   const [metronomeBPM, setMetronomeBPM] = useAppStorage("metronomeBPM", 110);
   const [appearanceMode, setAppearanceMode] = useAppStorage<AppearanceMode>("appearanceMode", AppearanceMode.System);
   const [showDosagePrompts, setShowDosagePrompts] = useAppStorage("showDosagePrompts", false);
-  const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", true);
+  const [voicePromptsEnabled, setVoicePromptsEnabled] = useAppStorage("voicePromptsEnabled", true);
+  const [voicePromptsToneOnly, setVoicePromptsToneOnly] = useAppStorage("voicePromptsToneOnly", false);
+  const [rhythmCheckWarning, setRhythmCheckWarning] = useAppStorage("rhythmCheckWarning", 15); // 0 = off
+  const [promptRhythmCheck, setPromptRhythmCheck] = useAppStorage("promptRhythmCheck", true);
+  const [promptAdrenaline, setPromptAdrenaline] = useAppStorage("promptAdrenaline", true);
+  const [promptAntiarrhythmic, setPromptAntiarrhythmic] = useAppStorage("promptAntiarrhythmic", true);
+  const [etco2Unit, setEtco2Unit] = useAppStorage<"kPa" | "mmHg">("etco2Unit", "kPa");
+  const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useAppStorage("voiceCommandsEnabled", false);
+  const [voiceHandsFree, setVoiceHandsFree] = useAppStorage("voiceHandsFree", false);
+  const [voiceWakeWord, setVoiceWakeWord] = useAppStorage<WakeWord>("voiceWakeWord", "scribe");
+  const [researchModeEnabled, setResearchModeEnabled] = useAppStorage("researchModeEnabled", false);
   const [hasRespondedToResearchTerms, setHasRespondedToResearchTerms] = useAppStorage(
     "hasRespondedToResearchTerms",
     false,
@@ -386,6 +481,26 @@ const useAppSettings = () => {
     setAppearanceMode,
     showDosagePrompts,
     setShowDosagePrompts,
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voicePromptsToneOnly,
+    setVoicePromptsToneOnly,
+    rhythmCheckWarning,
+    setRhythmCheckWarning,
+    promptRhythmCheck,
+    setPromptRhythmCheck,
+    promptAdrenaline,
+    setPromptAdrenaline,
+    promptAntiarrhythmic,
+    setPromptAntiarrhythmic,
+    etco2Unit,
+    setEtco2Unit,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    setVoiceWakeWord,
     researchModeEnabled,
     setResearchModeEnabled,
     hasRespondedToResearchTerms,
@@ -404,8 +519,13 @@ const useSettings = () => useContext(AppSettingsContext)!;
 
 // Age conversion helpers (two-way sync between demographics and drug calculator)
 const ageStringToCategory = (ageStr: string): PatientAgeCategory | null => {
-  const age = parseInt(ageStr);
-  if (isNaN(age) || age < 0) return null;
+  const trimmed = ageStr.trim();
+  // "6 months" from the dose dialog is that category, not 6 years.
+  const exact = allPatientAgeCategories.find((cat) => cat === trimmed);
+  if (exact) return exact;
+  // Only a bare number is years (as iOS Int(ageStr)); other text isn't guessed at.
+  if (!/^\d+$/.test(trimmed)) return null;
+  const age = Number(trimmed);
   if (age >= 12) return PatientAgeCategory.Adult;
   if (age === 11) return PatientAgeCategory.ElevenYears;
   if (age === 10) return PatientAgeCategory.TenYears;
@@ -421,61 +541,10 @@ const ageStringToCategory = (ageStr: string): PatientAgeCategory | null => {
   return PatientAgeCategory.PostBirthToOneMonth;
 };
 
-const categoryToAgeString = (cat: PatientAgeCategory): string => {
-  switch (cat) {
-    case PatientAgeCategory.Adult:
-      return "";
-    case PatientAgeCategory.ElevenYears:
-      return "11";
-    case PatientAgeCategory.TenYears:
-      return "10";
-    case PatientAgeCategory.NineYears:
-      return "9";
-    case PatientAgeCategory.EightYears:
-      return "8";
-    case PatientAgeCategory.SevenYears:
-      return "7";
-    case PatientAgeCategory.SixYears:
-      return "6";
-    case PatientAgeCategory.FiveYears:
-      return "5";
-    case PatientAgeCategory.FourYears:
-      return "4";
-    case PatientAgeCategory.ThreeYears:
-      return "3";
-    case PatientAgeCategory.TwoYears:
-      return "2";
-    case PatientAgeCategory.EighteenMonths:
-      return "1";
-    case PatientAgeCategory.TwelveMonths:
-      return "1";
-    case PatientAgeCategory.NineMonths:
-      return "0";
-    case PatientAgeCategory.SixMonths:
-      return "0";
-    case PatientAgeCategory.ThreeMonths:
-      return "0";
-    case PatientAgeCategory.OneMonth:
-      return "0";
-    case PatientAgeCategory.PostBirthToOneMonth:
-      return "0";
-    case PatientAgeCategory.AtBirth:
-      return "0";
-    default:
-      return "";
-  }
-};
-
-const isPatientPaediatric = (ageStr: string, ageCategory: PatientAgeCategory | null): boolean => {
-  if (ageCategory && ageCategory !== PatientAgeCategory.Adult) return true;
-  const age = parseInt(ageStr);
-  return !isNaN(age) && age < 16;
-};
-
 const AppConstants = {
   reversibleCausesTemplate: (): ChecklistItem[] => [
     { id: "hypoxia", name: "Hypoxia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "hypovolemia", name: "Hypovolemia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
+    { id: "hypovolemia", name: "Hypovolaemia", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
     {
       id: "hypo-hyperkalaemia",
       name: "Hypo/Hyperkalaemia",
@@ -494,24 +563,8 @@ const AppConstants = {
     { id: "thrombosis", name: "Thrombosis", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
   ],
 
-  postROSCTasksTemplate: (): ChecklistItem[] => [
-    {
-      id: "ventilation",
-      name: "Optimise Ventilation & Oxygenation",
-      isCompleted: false,
-      hypothermiaStatus: HypothermiaStatus.None,
-    },
-    { id: "ecg", name: "12-Lead ECG", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    {
-      id: "hypotension",
-      name: "Treat Hypotension (SBP < 90)",
-      isCompleted: false,
-      hypothermiaStatus: HypothermiaStatus.None,
-    },
-    { id: "glucose", name: "Check Blood Glucose", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "temp", name: "Consider Temperature Control", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-    { id: "causes", name: "Identify & Treat Causes", isCompleted: false, hypothermiaStatus: HypothermiaStatus.None },
-  ],
+  postROSCTasksTemplate: (): ChecklistItem[] =>
+    POST_ROSC_TASKS.map((task) => ({ ...task, isCompleted: false, hypothermiaStatus: HypothermiaStatus.None })),
 
   postMortemTasksTemplate: (): ChecklistItem[] => [
     {
@@ -575,56 +628,6 @@ const AppConstants = {
     },
   ],
 
-  otherDrugs: [
-    "Adenosine",
-    "Adrenaline 1:1000",
-    "Adrenaline 1:10,000",
-    "Amiodarone (Further Dose)",
-    "Atropine",
-    "Calcium chloride",
-    "Glucose",
-    "Hartmann's solution",
-    "Magnesium sulphate",
-    "Midazolam",
-    "Naloxone",
-    "Potassium chloride",
-    "Sodium bicarbonate",
-    "Sodium chloride",
-    "Tranexamic acid",
-  ].sort(),
-
-  pdfAlgorithms: [
-    {
-      id: "adult",
-      // Same-origin proxy path served by service worker (offline-cacheable).
-      // SW maps this to the upstream Resus Council PDF URL.
-      pdfUrl: "/cached-pdf/adult.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20ALS%20algorithm%202025.pdf",
-      title: "Adult ALS",
-    },
-    {
-      id: "paeds",
-      pdfUrl: "/cached-pdf/paeds.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Paediatric%20advanced%20life%20support%20algorithm%202025.pdf",
-      title: "Paediatric ALS",
-    },
-    {
-      id: "newborn",
-      pdfUrl: "/cached-pdf/newborn.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Newborn%20life%20support%20algorithm%202025.pdf",
-      title: "Newborn LS",
-    },
-    {
-      id: "post",
-      pdfUrl: "/cached-pdf/post.pdf",
-      upstreamUrl:
-        "https://www.resus.org.uk/sites/default/files/2025-10/Adult%20post-resuscitation%20care%202025.pdf",
-      title: "Post Arrest Care",
-    },
-  ],
 };
 
 //============================================================================
@@ -993,7 +996,7 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
     return (
       <div className="flex items-center justify-center h-screen bg-background">
         <img
-          src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+          src="/icons/icon-512.png"
           alt="eResus"
           className="w-24 h-24 rounded-2xl animate-pulse"
         />
@@ -1050,58 +1053,14 @@ const removeFromOfflineLogQueue = (index: number) => {
 
 const ARREST_SESSION_KEY = "eresus_arrest_session";
 
-// Helper to extract real-world clock time from event messages
-const extractRealWorldTime = (events: Event[], searchPatterns: string[]): string | null => {
-  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        // Try to extract HH:MM from the message
-        const timeMatch = event.message.match(/(\d{1,2}:\d{2}:\d{2})/);
-        if (timeMatch) {
-          // Return HH:MM format
-          const parts = timeMatch[1].split(":");
-          return `${parts[0]}:${parts[1]}`;
-        }
-        // If no clock time in message, return the arrest-relative time
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
-
-const extractFirstEventTime = (events: Event[], searchPatterns: string[], startTime: Date | null): string | null => {
-  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        if (startTime) {
-          const eventDate = new Date(startTime.getTime() + event.timestamp * 1000);
-          return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
-        }
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
-
-const extractLastEventTime = (events: Event[], searchPatterns: string[], startTime: Date | null): string | null => {
-  const sorted = [...events].sort((a, b) => b.timestamp - a.timestamp);
-  for (const event of sorted) {
-    for (const pattern of searchPatterns) {
-      if (event.message.toLowerCase().includes(pattern.toLowerCase())) {
-        if (startTime) {
-          const eventDate = new Date(startTime.getTime() + event.timestamp * 1000);
-          return `${String(eventDate.getHours()).padStart(2, "0")}:${String(eventDate.getMinutes()).padStart(2, "0")}`;
-        }
-        return TimeFormatter.format(event.timestamp);
-      }
-    }
-  }
-  return null;
-};
+// Lidocaine doses in a log: one "Given" entry per dose, plus "Lidocaine ×2 before eResus" entries.
+export const lidocaineDosesIn = (events: { message: string }[]): number =>
+  events.reduce((total, e) => {
+    const message = e.message.toLowerCase();
+    if (message.includes("lidocaine") && message.includes("given")) return total + 1;
+    const before = e.message.match(/^Lidocaine ×(\d+) before eResus/);
+    return before ? total + Number(before[1]) : total;
+  }, 0);
 
 const useArrestViewModel = () => {
   const { db, userId, user } = useFirebase();
@@ -1110,9 +1069,19 @@ const useArrestViewModel = () => {
     adrenalineInterval,
     showDosagePrompts,
     researchModeEnabled,
+    hasRespondedToResearchTerms,
     askForPatientInfo,
     userOrganization,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    rhythmCheckWarning,
+    promptRhythmCheck,
+    promptAdrenaline,
+    promptAntiarrhythmic,
+    etco2Unit,
   } = useSettings();
+  // Nothing is uploaded until the user has actively opted in, even if a stored or cloud-synced flag says otherwise.
+  const researchActive = researchModeEnabled && hasRespondedToResearchTerms;
 
   const savedSession = useRef<any>(null);
   const didRestore = useRef(false);
@@ -1136,11 +1105,16 @@ const useArrestViewModel = () => {
   );
   const [masterTime, setMasterTime] = useState<number>(0);
   const [cprTime, setCprTime] = useState<number>(cprCycleDuration);
+  // How long the rhythm check has been due, or null. While due, cprTime counts down the next cycle (matches iOS).
+  const [rhythmCheckOverdue, setRhythmCheckOverdue] = useState<number | null>(null);
   const [timeOffset, setTimeOffset] = useState<number>(s?.timeOffset ?? 0);
   const [uiState, setUiState] = useState<UIState>(s?.uiState ?? UIState.Default);
   const [events, setEvents] = useState<Event[]>(s?.events ?? []);
 
   const [shockCount, setShockCount] = useState(s?.shockCount ?? 0);
+  // 2 when the first shocks were three stacked shocks: RCUK counts them as one shock for drug timing.
+  const [stackedShockExtra, setStackedShockExtra] = useState<number>(s?.stackedShockExtra ?? 0);
+  const drugTimingShockCount = shockCount - stackedShockExtra;
   const [adrenalineCount, setAdrenalineCount] = useState(s?.adrenalineCount ?? 0);
   const [amiodaroneCount, setAmiodaroneCount] = useState(s?.amiodaroneCount ?? 0);
   const [lidocaineCount, setLidocaineCount] = useState(s?.lidocaineCount ?? 0);
@@ -1191,56 +1165,150 @@ const useArrestViewModel = () => {
 
   const [hideAdrenalinePrompt, setHideAdrenalinePrompt] = useState(false);
   const [hideAmiodaronePrompt, setHideAmiodaronePrompt] = useState(false);
+  const [hideAdrenalineDueWarning, setHideAdrenalineDueWarning] = useState(false);
   const [lastRhythmNonShockable, setLastRhythmNonShockable] = useState(false);
-  const [roscTime, setRoscTime] = useState<number | null>(null);
+  const [roscTime, setRoscTime] = useState<number | null>(s?.roscTime ?? null);
   const [airwayAdjunct, setAirwayAdjunct] = useState<AirwayAdjunctType | null>(null);
 
   // Computed
   const totalArrestTime = useMemo(() => masterTime + timeOffset, [masterTime, timeOffset]);
+  // JRCALC ToR timing runs from when the first ambulance resource (crew or CFR) confirmed the arrest,
+  // which includes any time entered as before eResus was started.
+  const resuscitationTime = totalArrestTime;
   const canUndo = undoHistory.length > 0;
 
   const isAdrenalineAvailable = useMemo(() => {
     return reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus !== HypothermiaStatus.Severe;
   }, [reversibleCauses]);
 
-  // Amiodarone and Lidocaine are now always available (can be pressed anytime during arrest)
-  const isAmiodaroneAvailable = true;
-  const isLidocaineAvailable = true;
+  // Once one antiarrhythmic is chosen the other is blocked, and amiodarone is withheld in severe
+  // hypothermia along with adrenaline (matches iOS).
+  const isAmiodaroneAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && isAdrenalineAvailable;
+  // Like amiodarone and adrenaline, withheld in severe hypothermia (RCUK: below 30 °C; matches iOS).
+  const isLidocaineAvailable = antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone && isAdrenalineAvailable;
+
+  const currentAdrenalineInterval =
+    reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus === HypothermiaStatus.Moderate
+      ? adrenalineInterval * 2
+      : adrenalineInterval;
 
   const timeUntilAdrenaline = useMemo(() => {
     const lastAdrenalineTime = lastAdrenalineTimeRef.current;
     if (lastAdrenalineTime === null) return null;
-    const hypothermiaStatus = reversibleCauses.find((item) => item.name === "Hypothermia")?.hypothermiaStatus;
-    const interval = hypothermiaStatus === HypothermiaStatus.Moderate ? adrenalineInterval * 2 : adrenalineInterval;
-    const timeSince = totalArrestTime - lastAdrenalineTime;
-    return interval - timeSince;
-  }, [totalArrestTime, reversibleCauses, adrenalineInterval]);
+    return currentAdrenalineInterval - (totalArrestTime - lastAdrenalineTime);
+  }, [totalArrestTime, currentAdrenalineInterval]);
 
-  const shouldShowAmiodaroneReminder = useMemo(() => {
-    const shockCountDose1 = shockCountForAmiodarone1Ref.current;
-    if (shockCountDose1 === null) return false;
-    return amiodaroneCount === 1 && shockCount >= shockCountDose1 + 2 && !hideAmiodaronePrompt;
-  }, [amiodaroneCount, shockCount, hideAmiodaronePrompt]);
+  // Adrenaline was given before eResus but nobody knows when. There's no timer to run, so the screen asks;
+  // if nobody answers, the next rhythm check treats it as due rather than staying silent.
+  const isLastAdrenalineTimeUnknown = adrenalineCount > 0 && lastAdrenalineTimeRef.current === null && isAdrenalineAvailable;
 
-  const shouldShowAmiodaroneFirstDosePrompt = useMemo(() => {
-    return shockCount >= 3 && amiodaroneCount === 0 && !hideAmiodaronePrompt;
-  }, [shockCount, amiodaroneCount, hideAmiodaronePrompt]);
+  // Traumatic arrest: HOTT comes before drugs, so drug reminders stay quiet. Read from the log, so it survives
+  // a reload, an undo and a transfer (matches iOS).
+  const isTraumaArrest = useMemo(() => traumaFromLog(events), [events]);
+  const hasTraumaContext = useMemo(() => traumaContextFromLog(events), [events]);
+  // Drug reminders are quiet from the trauma entry until HOTT is marked as addressed or it's not trauma.
+  const areDrugPromptsQuietened = useMemo(() => promptsQuietenedFromLog(events), [events]);
+  const traumaInterventionCount = useMemo(() => traumaCountIn(events), [events]);
 
-  const shouldShowAdrenalinePrompt = useMemo(() => {
-    if (!isAdrenalineAvailable || hideAdrenalinePrompt) return false;
-    if (timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0) return false;
-    if (adrenalineCount === 0) {
-      if (shockCount >= 3) return true;
-      if (lastRhythmNonShockable) return true;
-    }
-    return false;
-  }, [
-    shockCount,
-    adrenalineCount,
+  // Which drug buttons are lit and the line under each title (src/lib/drugPrompts.ts; matches iOS).
+  const {
+    shouldShowAdrenalinePrompt,
+    isAdrenalineDue,
+    isAdrenalineHighlighted,
+    shouldShowAmiodaroneFirstDosePrompt,
+    shouldShowAmiodaroneReminder,
+    isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+  } = drugPrompts({
     isAdrenalineAvailable,
+    areDrugPromptsQuietened,
     hideAdrenalinePrompt,
+    hideAdrenalineDueWarning,
+    hideAmiodaronePrompt,
     timeUntilAdrenaline,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount,
+    shockCount,
+    drugTimingShockCount,
+    shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
     lastRhythmNonShockable,
+    antiarrhythmicGiven,
+  });
+
+  // "Not now" on a lit Adrenaline button.
+  const dismissAdrenalinePrompt = () => {
+    if (adrenalineDismissal({ shouldShowAdrenalinePrompt }) === "prompt") setHideAdrenalinePrompt(true);
+    else setHideAdrenalineDueWarning(true);
+  };
+
+  const isRhythmCheckDue =
+    arrestState === ArrestState.Active && uiState === UIState.Default && rhythmCheckOverdue !== null;
+
+  // Spoken prompts fire when the matching on-screen prompt appears, so voice and display never disagree.
+  const activePromptsRef = useRef<Set<VoicePrompt>>(new Set());
+  useEffect(() => {
+    if (arrestState !== ArrestState.Active || isTimerPaused) {
+      activePromptsRef.current = new Set();
+      return;
+    }
+
+    const current = new Set<VoicePrompt>();
+    if (uiState === UIState.Default) {
+      if (isRhythmCheckDue) {
+        current.add("rhythm_check_due");
+      } else if (rhythmCheckWarning > 0 && cprTime <= rhythmCheckWarning) {
+        current.add("prepare_rhythm_check");
+      }
+    }
+    if (shouldShowAdrenalinePrompt) current.add("consider_adrenaline");
+    if (isAdrenalineDue) current.add("adrenaline_due");
+    if (shouldShowAmiodaroneFirstDosePrompt) current.add("consider_amiodarone");
+    if (shouldShowAmiodaroneReminder) current.add("consider_amiodarone_second");
+    if (shouldShowLidocaineReminder) current.add("consider_lidocaine_second");
+
+    const enabled: Record<VoicePrompt, boolean> = {
+      rhythm_check_due: promptRhythmCheck,
+      reassess_newborn: promptRhythmCheck,
+      prepare_rhythm_check: rhythmCheckWarning > 0,
+      adrenaline_due: promptAdrenaline,
+      consider_adrenaline: promptAdrenaline,
+      consider_amiodarone: promptAntiarrhythmic,
+      consider_amiodarone_second: promptAntiarrhythmic,
+      consider_lidocaine_second: promptAntiarrhythmic,
+    };
+    // Hidden (another app in front, or the screen off): nothing can be heard, so leave the prompts to be
+    // announced when the page is next on screen rather than marking them as said.
+    if (document.visibilityState === "hidden") return;
+    // Only announce prompts that have just appeared, in priority order.
+    if (voicePromptsEnabled) {
+      for (const prompt of VOICE_PROMPTS) {
+        if (current.has(prompt) && !activePromptsRef.current.has(prompt) && enabled[prompt]) {
+          voicePromptPlayer.play(prompt, voicePromptsToneOnly);
+        }
+      }
+    }
+    activePromptsRef.current = current;
+  }, [
+    arrestState,
+    isRhythmCheckDue,
+    isTimerPaused,
+    uiState,
+    cprTime,
+    shouldShowAdrenalinePrompt,
+    isAdrenalineDue,
+    shouldShowAmiodaroneFirstDosePrompt,
+    shouldShowAmiodaroneReminder,
+    shouldShowLidocaineReminder,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    rhythmCheckWarning,
+    promptRhythmCheck,
+    promptAdrenaline,
+    promptAntiarrhythmic,
   ]);
 
   // Session Persistence
@@ -1255,6 +1323,7 @@ const useArrestViewModel = () => {
       uiState,
       events,
       shockCount,
+      stackedShockExtra,
       adrenalineCount,
       amiodaroneCount,
       lidocaineCount,
@@ -1271,10 +1340,17 @@ const useArrestViewModel = () => {
       patientAgeStr,
       patientGenderStr,
       initialRhythm,
+      roscTime,
       torTime,
       vodTime,
       vodChecklist,
       vodConfirmed,
+      // A reload while paused mustn't add the paused time to the arrest and ToR clocks (matches iOS).
+      isTimerPaused,
+      pauseStartTime: pauseStartTimeRef.current?.toISOString() ?? null,
+      hideAmiodaronePrompt,
+      hideAdrenalineDueWarning,
+      lastRhythmNonShockable,
     };
     try {
       localStorage.setItem(ARREST_SESSION_KEY, JSON.stringify(session));
@@ -1287,6 +1363,7 @@ const useArrestViewModel = () => {
     uiState,
     events,
     shockCount,
+    stackedShockExtra,
     adrenalineCount,
     amiodaroneCount,
     lidocaineCount,
@@ -1299,10 +1376,15 @@ const useArrestViewModel = () => {
     patientAgeStr,
     patientGenderStr,
     initialRhythm,
+    roscTime,
     torTime,
     vodTime,
     vodChecklist,
     vodConfirmed,
+    isTimerPaused,
+    hideAmiodaronePrompt,
+    hideAdrenalineDueWarning,
+    lastRhythmNonShockable,
   ]);
 
   // Session recovery
@@ -1315,6 +1397,7 @@ const useArrestViewModel = () => {
     setUiState(s.uiState ?? UIState.Default);
     setEvents(s.events ?? []);
     setShockCount(s.shockCount ?? 0);
+    setStackedShockExtra(s.stackedShockExtra ?? 0);
     setAdrenalineCount(s.adrenalineCount ?? 0);
     setAmiodaroneCount(s.amiodaroneCount ?? 0);
     setLidocaineCount(s.lidocaineCount ?? 0);
@@ -1327,14 +1410,22 @@ const useArrestViewModel = () => {
     setPatientAgeStr(s.patientAgeStr ?? "");
     setPatientGenderStr(s.patientGenderStr ?? "");
     setInitialRhythm(s.initialRhythm ?? null);
+    setRoscTime(s.roscTime ?? null);
     setTorTime(s.torTime ?? null);
     setVodTime(s.vodTime ?? null);
     setVodChecklist(s.vodChecklist ?? AppConstants.vodChecklistTemplate());
     setVodConfirmed(s.vodConfirmed ?? false);
 
+    setHideAmiodaronePrompt(s.hideAmiodaronePrompt ?? false);
+    setHideAdrenalineDueWarning(s.hideAdrenalineDueWarning ?? false);
+    setLastRhythmNonShockable(s.lastRhythmNonShockable ?? false);
     if (s.startTime) {
       startTimeRef.current = new Date(s.startTime);
-      const elapsed = (Date.now() - new Date(s.startTime).getTime()) / 1000;
+      // Paused: the clock stays where it stopped, and resuming later drops the paused time as usual.
+      const pausedAt = s.isTimerPaused && s.pauseStartTime ? new Date(s.pauseStartTime) : null;
+      pauseStartTimeRef.current = pausedAt;
+      setIsTimerPaused(pausedAt !== null);
+      const elapsed = ((pausedAt?.getTime() ?? Date.now()) - new Date(s.startTime).getTime()) / 1000;
       setMasterTime(elapsed);
     }
     cprCycleStartTimeRef.current = s.cprCycleStartTime ?? 0;
@@ -1376,9 +1467,80 @@ const useArrestViewModel = () => {
     }
   };
 
+  // The first event an action logs is marked "(voice)" so the record shows how it was entered.
+  const nextEventFromVoiceRef = useRef(false);
+  // Set while acting on a spoken time ("adrenaline at 14:52"); events and timers use it instead of now.
+  const eventTimeOverrideRef = useRef<number | null>(null);
+  const performFromVoice = (time: number | null, action: () => void) => {
+    nextEventFromVoiceRef.current = true;
+    eventTimeOverrideRef.current = time;
+    action();
+    nextEventFromVoiceRef.current = false;
+    eventTimeOverrideRef.current = null;
+  };
+
+  // Now on the total-time scale, read from the clock rather than state so it is exact to the second.
+  const liveTotalTime = () => {
+    if (!startTimeRef.current) return totalArrestTime;
+    const until = isTimerPaused && pauseStartTimeRef.current ? pauseStartTimeRef.current.getTime() : Date.now();
+    return (until - startTimeRef.current.getTime()) / 1000 + timeOffset;
+  };
+
+  // When the current action happened, on the total-time scale. Usually now; earlier for a spoken time.
+  const actionTime = () => eventTimeOverrideRef.current ?? liveTotalTime();
+
+  // The moment a spoken time refers to. Null if it's in the future.
+  const dateFor = (time: VoiceTime, now: Date = new Date()): Date | null => {
+    let date: Date;
+    if ("secondsAgo" in time) {
+      date = new Date(now.getTime() - time.secondsAgo * 1000);
+    } else {
+      const [h, m] = time.clock.split(":").map(Number);
+      if (isNaN(h) || isNaN(m)) return null;
+      // "2:52" said in the afternoon means 14:52: take the most recent matching time.
+      const hours = time.twelveHour ? [h % 12, (h % 12) + 12] : [h];
+      const latest = now.getTime() + 60_000;
+      const candidates = hours
+        .flatMap((hour) => {
+          const today = new Date(now);
+          today.setHours(hour, m, 0, 0);
+          return [today.getTime(), today.getTime() - 86_400_000];
+        })
+        .filter((t) => t <= latest);
+      if (candidates.length === 0) return null;
+      date = new Date(Math.max(...candidates));
+    }
+    return date.getTime() <= now.getTime() + 60_000 ? date : null;
+  };
+
+  // Converts a spoken time to the total-time scale. Null if it's in the future or before the arrest began.
+  const arrestTime = (time: VoiceTime, now: Date = new Date()): number | null => {
+    const date = dateFor(time, now);
+    if (!date) return null;
+    const current = actionTime();
+    const total = current - (now.getTime() - date.getTime()) / 1000;
+    if (total < 0) return null;
+    return Math.min(total, current);
+  };
+
   const logEvent = (message: string, type: EventType) => {
-    const newEvent: Event = { timestamp: totalArrestTime, message, type };
-    setEvents((prevEvents) => [newEvent, ...prevEvents]);
+    const fromVoice = nextEventFromVoiceRef.current;
+    nextEventFromVoiceRef.current = false;
+    const timestamp = eventTimeOverrideRef.current ?? totalArrestTime;
+    // Anything not logged at the moment it happened is an estimate, and the record says so.
+    let finalMessage = message;
+    if (eventTimeOverrideRef.current !== null && !isEstimated(message)) finalMessage += " (estimated)";
+    if (fromVoice) finalMessage += " (voice)";
+    // Back-dated entries: the same distance before now as on the arrest clock.
+    const liveTotal = arrestState === ArrestState.Ended ? timestamp : liveTotalTime();
+    const clock = eventTimeOverrideRef.current === null ? Date.now() / 1000 : clockFor(timestamp, liveTotal);
+    const newEvent: Event = { timestamp, message: finalMessage, type, clock };
+    // Newest first; a back-dated entry goes into its place in the timeline.
+    setEvents((prevEvents) => {
+      const index = prevEvents.findIndex((event) => event.timestamp <= timestamp);
+      if (index === -1) return [...prevEvents, newEvent];
+      return [...prevEvents.slice(0, index), newEvent, ...prevEvents.slice(index)];
+    });
     HapticManager.impact();
   };
 
@@ -1406,6 +1568,7 @@ const useArrestViewModel = () => {
       patientAgeCategory,
       hideAdrenalinePrompt,
       hideAmiodaronePrompt,
+      hideAdrenalineDueWarning,
       lastRhythmNonShockable,
       airwayAdjunct,
       roscTime,
@@ -1414,25 +1577,40 @@ const useArrestViewModel = () => {
       torTime,
       vodTime,
       vodChecklist,
+      cprCycleStartTime: cprCycleStartTimeRef.current,
+      stackedShockExtra,
     };
     setUndoHistory((prev) => [...prev, currentState]);
   };
 
   const undo = () => {
     if (undoHistory.length === 0) return;
-    const lastState = undoHistory[undoHistory.length - 1];
     setUndoHistory((prev) => prev.slice(0, -1));
+    applyUndoState(undoHistory[undoHistory.length - 1]);
+  };
 
+  // Reverts everything done since undoDepth was `depth`, e.g. all the actions from one spoken phrase.
+  const undoToDepth = (depth: number) => {
+    if (depth < 0 || depth >= undoHistory.length) return;
+    setUndoHistory((prev) => prev.slice(0, depth));
+    applyUndoState(undoHistory[depth]);
+  };
+
+  const applyUndoState = (lastState: UndoState) => {
     setArrestState(lastState.arrestState);
     setMasterTime(lastState.masterTime);
     setCprTime(lastState.cprTime);
     setTimeOffset(lastState.timeOffset);
     setEvents(lastState.events);
     setShockCount(lastState.shockCount);
+    setStackedShockExtra(lastState.stackedShockExtra ?? 0);
     setAdrenalineCount(lastState.adrenalineCount);
     setAmiodaroneCount(lastState.amiodaroneCount);
     setLidocaineCount(lastState.lidocaineCount);
     lastAdrenalineTimeRef.current = lastState.lastAdrenalineTime;
+    if (lastState.cprCycleStartTime !== undefined) {
+      cprCycleStartTimeRef.current = lastState.cprCycleStartTime;
+    }
     setAntiarrhythmicGiven(lastState.antiarrhythmicGiven);
     shockCountForAmiodarone1Ref.current = lastState.shockCountForAmiodarone1;
     setAirwayPlaced(lastState.airwayPlaced);
@@ -1444,6 +1622,7 @@ const useArrestViewModel = () => {
     setPatientAgeCategory(lastState.patientAgeCategory);
     setHideAdrenalinePrompt(lastState.hideAdrenalinePrompt ?? false);
     setHideAmiodaronePrompt(lastState.hideAmiodaronePrompt ?? false);
+    setHideAdrenalineDueWarning(lastState.hideAdrenalineDueWarning ?? false);
     setLastRhythmNonShockable(lastState.lastRhythmNonShockable ?? false);
     setAirwayAdjunct(lastState.airwayAdjunct ?? null);
     setRoscTime(lastState.roscTime ?? null);
@@ -1468,20 +1647,56 @@ const useArrestViewModel = () => {
     setIsTimerPaused(true);
     pauseStartTimeRef.current = new Date();
     stopTimer();
+    voicePromptPlayer.stopAll();
     logEvent("Arrest Timer Paused", EventType.Status);
   };
 
   const resumeArrest = () => {
     saveUndoState();
     setIsTimerPaused(false);
+    let pausedText = "";
     if (pauseStartTimeRef.current && startTimeRef.current) {
       const pausedDuration = Date.now() - pauseStartTimeRef.current.getTime();
       startTimeRef.current = new Date(startTimeRef.current.getTime() + pausedDuration);
+      // The pause isn't in the arrest time, so the record says how long it was (matches iOS).
+      pausedText = ` (paused ${TimeFormatter.format(pausedDuration / 1000)}; not counted in arrest, cycle or drug times)`;
     }
     pauseStartTimeRef.current = null;
     startTimer();
-    logEvent("Arrest Timer Resumed", EventType.Status);
+    logEvent(`Arrest Timer Resumed${pausedText}`, EventType.Status);
   };
+
+  // Keep the screen on for the whole case; an auto-lock mid-arrest hides the cycle timer and prompts.
+  // The browser drops the lock whenever the page is hidden, so it is re-requested on return.
+  useEffect(() => {
+    if (arrestState !== ArrestState.Active && arrestState !== ArrestState.Rosc) return;
+    if (!("wakeLock" in navigator)) return;
+
+    let sentinel: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    const requestLock = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          lock.release();
+        } else {
+          sentinel = lock;
+        }
+      } catch {
+        // Refused (e.g. low battery mode); the app still works, the screen may just dim.
+      }
+    };
+
+    requestLock();
+    document.addEventListener("visibilitychange", requestLock);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", requestLock);
+      sentinel?.release();
+    };
+  }, [arrestState]);
 
   // Timer Lifecycle
   useEffect(() => {
@@ -1495,15 +1710,20 @@ const useArrestViewModel = () => {
 
   useEffect(() => {
     if (arrestState === ArrestState.Active && uiState === UIState.Default) {
-      const newCprTime = cprCycleDuration - (totalArrestTime - cprCycleStartTimeRef.current);
-      setCprTime((prevCprTime) => {
-        if (newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
-        if (prevCprTime > 0 && newCprTime <= 0) HapticManager.notification("warning");
-        if (newCprTime < 0) return 0;
-        return newCprTime;
-      });
+      // The cycle start stays where the last check left it until the next check, so how late the check is
+      // can always be worked out; the ring shows the next cycle counting down meanwhile.
+      const elapsed = totalArrestTime - cprCycleStartTimeRef.current;
+      const due = elapsed >= cprCycleDuration;
+      const newCprTime = due ? cprCycleDuration - (elapsed % cprCycleDuration) : cprCycleDuration - elapsed;
+      if (due && rhythmCheckOverdue === null) HapticManager.notification("warning");
+      if (!due && newCprTime <= 10 && newCprTime > 0) HapticManager.impact("light");
+      setRhythmCheckOverdue(due ? elapsed - cprCycleDuration : null);
+      setCprTime(newCprTime);
+    } else if (uiState !== UIState.Default) {
+      setRhythmCheckOverdue(null);
     }
-  }, [totalArrestTime, arrestState, uiState, cprCycleDuration]);
+    // events: an undo restores the cycle start (a ref), so the overdue time is worked out again even while paused.
+  }, [totalArrestTime, arrestState, uiState, cprCycleDuration, events, rhythmCheckOverdue]);
 
   useEffect(() => {
     setCprTime(cprCycleDuration);
@@ -1512,6 +1732,9 @@ const useArrestViewModel = () => {
   // Core Actions
   const startArrest = (priorEvents?: Event[], priorTimeOffset?: number, priorStartTime?: Date) => {
     saveUndoState();
+    voicePromptPlayer.unlock();
+    // A mute from the last case shouldn't silently carry into the next one.
+    voicePromptPlayer.setMutedForCase(false);
 
     if (priorStartTime) {
       startTimeRef.current = priorStartTime;
@@ -1522,18 +1745,20 @@ const useArrestViewModel = () => {
       cprCycleStartTimeRef.current = elapsed + (priorTimeOffset ?? 0);
     } else {
       startTimeRef.current = new Date();
-      cprCycleStartTimeRef.current = 0;
+      // Downtime can be entered before Start, so the first cycle begins at the current total time.
+      cprCycleStartTimeRef.current = timeOffset;
+      // Time added before Start counts back from the Start tap, which is now.
+      setEvents((prev) =>
+        prev.map((e) => (isConfirmedEntry(e) ? { ...e, clock: Date.now() / 1000 - timeOffset } : e)),
+      );
     }
 
     setArrestState(ArrestState.Active);
     setInitialRhythm(null);
-    logEvent(
-      `${priorStartTime ? "Transitioned to Paediatric ALS" : "Arrest Started"} at ${new Date().toLocaleTimeString()}`,
-      EventType.Status,
-    );
+    logEvent(`${priorStartTime ? "Transitioned to Paediatric ALS" : "Arrest Started"} at ${hhmm(new Date())}`, EventType.Status);
 
     if (!priorStartTime) {
-      if (researchModeEnabled || askForPatientInfo) {
+      if (researchActive || askForPatientInfo) {
         setShowPatientInfoPrompt(true);
       }
     }
@@ -1541,10 +1766,15 @@ const useArrestViewModel = () => {
 
   const analyseRhythm = () => {
     saveUndoState();
-    setHideAdrenalinePrompt(false);
+    // "Not now" lasts until the next rhythm check, not the rest of the arrest.
+    const hides = promptHidesAfterAnalysis();
+    setHideAdrenalinePrompt(hides.hideAdrenalinePrompt);
+    setHideAdrenalineDueWarning(hides.hideAdrenalineDueWarning);
     setLastRhythmNonShockable(false);
     setUiState(UIState.Analyzing);
     logEvent("Rhythm analysis. Pausing CPR.", EventType.Analysis);
+    // After the analysis entry, so a "(voice)" mark goes on the right one.
+    if (isLastAdrenalineTimeUnknown) markLastAdrenalineTime(null);
   };
 
   const logRhythm = (rhythm: string, isShockable: boolean) => {
@@ -1562,36 +1792,51 @@ const useArrestViewModel = () => {
     }
   };
 
-  const deliverShock = () => {
+  const deliverShock = (energy: string | null = null) => {
     saveUndoState();
     setShockCount((c) => c + 1);
     setHideAdrenalinePrompt(false);
     setHideAmiodaronePrompt(false);
-    logEvent(`Shock ${shockCount + 1} Delivered`, EventType.Shock);
+    const energyText = energy ? ` (${energy})` : "";
+    logEvent(`Shock ${shockCount + 1} Delivered${energyText}`, EventType.Shock);
+    resumeCPR();
+  };
+
+  // RCUK 2025: for a witnessed, monitored VF/pVT arrest with a defibrillator immediately available,
+  // up to three stacked shocks may be given. They count as the first shock for drug timing.
+  const deliverStackedShocks = () => {
+    if (shockCount !== 0) return;
+    saveUndoState();
+    setShockCount(3);
+    setStackedShockExtra(2);
+    setHideAdrenalinePrompt(false);
+    setHideAmiodaronePrompt(false);
+    logEvent("3 Stacked Shocks Delivered (count as one for drug timing)", EventType.Shock);
     resumeCPR();
   };
 
   const resumeCPR = () => {
     if (!startTimeRef.current) return;
-    const currentMasterTime = (Date.now() - startTimeRef.current.getTime()) / 1000;
-    const currentTotalArrestTime = currentMasterTime + timeOffset;
     setUiState(UIState.Default);
-    cprCycleStartTimeRef.current = currentTotalArrestTime;
+    cprCycleStartTimeRef.current = actionTime();
     setCprTime(cprCycleDuration);
     logEvent("Resuming CPR.", EventType.Cpr);
   };
 
-  const logAdrenaline = (dosage: string | null = null) => {
+  // alwaysRecordDose: a dose that was spoken is recorded even when dosage prompts are switched off.
+  const logAdrenaline = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setAdrenalineCount((c) => c + 1);
-    lastAdrenalineTimeRef.current = totalArrestTime;
+    // A dose logged late ("adrenaline at 14:52") mustn't restart the timer from before a later dose.
+    lastAdrenalineTimeRef.current = Math.max(lastAdrenalineTimeRef.current ?? actionTime(), actionTime());
     setLastRhythmNonShockable(false);
     setHideAdrenalinePrompt(false);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
-    logEvent(`Adrenaline${dosageText} Given – Dose ${adrenalineCount + 1}`, EventType.Drug);
+    setHideAdrenalineDueWarning(false);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Adrenaline", recorded, adrenalineCount + 1), EventType.Drug);
   };
 
-  const logAmiodarone = (dosage: string | null = null) => {
+  const logAmiodarone = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setAmiodaroneCount((c) => c + 1);
     setAntiarrhythmicGiven(AntiarrhythmicDrug.Amiodarone);
@@ -1599,23 +1844,76 @@ const useArrestViewModel = () => {
       shockCountForAmiodarone1Ref.current = shockCount;
     }
     setHideAmiodaronePrompt(false);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
-    logEvent(`Amiodarone${dosageText} Given – Dose ${amiodaroneCount + 1}`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Amiodarone", recorded, amiodaroneCount + 1), EventType.Drug);
   };
 
-  const logLidocaine = (dosage: string | null = null) => {
+  const logLidocaine = (dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
     setLidocaineCount((c) => c + 1);
     setAntiarrhythmicGiven(AntiarrhythmicDrug.Lidocaine);
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
-    logEvent(`Lidocaine${dosageText} Given – Dose ${lidocaineCount + 1}`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry("Lidocaine", recorded, lidocaineCount + 1), EventType.Drug);
   };
 
-  const logOtherDrug = (drug: string, dosage: string | null = null) => {
+  const logOtherDrug = (drug: string, dosage: string | null = null, alwaysRecordDose = false) => {
     saveUndoState();
-    const dosageText = showDosagePrompts && dosage ? ` (${dosage})` : "";
-    logEvent(`${drug}${dosageText} Given`, EventType.Drug);
+    const recorded = showDosagePrompts || alwaysRecordDose ? dosage : null;
+    logEvent(drugEntry(drug, recorded), EventType.Drug);
   };
+
+  // The first trauma procedure marks the arrest as traumatic; it can be switched off again.
+  const logTraumaProcedure = (procedure: string) => {
+    saveUndoState();
+    // Requesting critical care happens in medical arrests too, and after ROSC nothing should quieten prompts.
+    if (
+      !isTraumaArrest &&
+      !traumaModeWasSwitchedOff(events) &&
+      arrestState === ArrestState.Active &&
+      TRAUMA_MARKS_ARREST.has(procedure)
+    ) {
+      logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    }
+    logEvent(traumaEntryText(procedure), EventType.Airway);
+  };
+
+  const setTraumaArrest = (isTrauma: boolean) => {
+    if (isTrauma === isTraumaArrest) return;
+    saveUndoState();
+    logEvent(isTrauma ? TRAUMA_ON_ENTRY : TRAUMA_OFF_ENTRY, EventType.Status);
+  };
+
+  const completePostROSCTask = (name: string) => {
+    if (arrestState === ArrestState.Rosc) setPostROSCTasks((tasks) => completeTask(tasks, name));
+  };
+
+  const logObservation = (observation: ROSCObservation, value: string) => {
+    saveUndoState();
+    logEvent(observationEntry(observation, value), observation === "etco2" ? EventType.Etco2 : EventType.Status);
+    // A reading off target leaves the target unticked: a tick must mean it's achieved, not just measured.
+    if (meetsTarget(observation, value)) completePostROSCTask(ROSC_OBSERVATIONS[observation].checklistItem);
+  };
+
+  const logDestination = (text: string) => {
+    saveUndoState();
+    logEvent(text, EventType.Status);
+    completePostROSCTask(DESTINATION_TASK);
+  };
+
+  // A line in the log as said, such as "Mechanical CPR started" by voice.
+  const logNote = (text: string) => {
+    saveUndoState();
+    logEvent(text, EventType.Status);
+  };
+
+  // Age and sex said aloud ("65 year old male"). Saved for undo like any other voice action.
+  const setPatientDetails = (age: string | null, sex: string | null) => {
+    saveUndoState();
+    if (age !== null) setPatientAgeStr(age);
+    if (sex !== null) setPatientGenderStr(sex);
+  };
+
+  const latestObservation = (observation: ROSCObservation) => latestObservationIn(events, observation);
 
   // Allow multiple airway attempts (no longer restricted by airwayPlaced)
   const logAirwayPlacedFn = (type?: AirwayAdjunctType) => {
@@ -1641,18 +1939,23 @@ const useArrestViewModel = () => {
     logEvent(parts[0], EventType.VascularAccess);
   };
 
-  const logEtco2 = (value: string) => {
+  const logEtco2 = (value: string, spokenUnit: "kPa" | "mmHg" | null = null) => {
+    // Some keyboards produce a comma as the decimal separator.
+    const reading = Number(value.replace(",", "."));
+    if (!value || isNaN(reading) || reading <= 0) return;
     saveUndoState();
-    if (value && !isNaN(Number(value)) && Number(value) > 0) {
-      logEvent(`ETCO2: ${value} mmHg`, EventType.Etco2);
-    }
+    const unit = spokenUnit ?? etco2Unit;
+    const formatted = unit === "kPa" ? reading.toFixed(1) : String(Math.round(reading));
+    logEvent(`ETCO2: ${formatted} ${unit}`, EventType.Etco2);
+    completePostROSCTask(ROSC_OBSERVATIONS.etco2.checklistItem);
   };
 
   const achieveROSC = () => {
     saveUndoState();
     setArrestState(ArrestState.Rosc);
     setUiState(UIState.Default);
-    setRoscTime(totalArrestTime);
+    setRoscTime(actionTime());
+    voicePromptPlayer.stopAll();
     logEvent("Return of Spontaneous Circulation (ROSC)", EventType.Status);
   };
 
@@ -1662,7 +1965,8 @@ const useArrestViewModel = () => {
     setArrestState(ArrestState.Ended);
     setTorTime(totalArrestTime);
     stopTimer();
-    logEvent(`Termination of Resuscitation (TOR) at ${new Date().toLocaleTimeString()}`, EventType.Status);
+    voicePromptPlayer.stopAll();
+    logEvent("Termination of Resuscitation (TOR)", EventType.Status);
   };
 
   // VOD = Verification of Death (after 5-min observation)
@@ -1670,7 +1974,7 @@ const useArrestViewModel = () => {
     saveUndoState();
     setVodTime(totalArrestTime);
     setVodConfirmed(true);
-    logEvent(`Verification of Death (VOD) confirmed at ${new Date().toLocaleTimeString()}`, EventType.Status);
+    logEvent("Verification of Death (VOD) Confirmed", EventType.Status);
   };
 
   // Toggle VOD checklist items
@@ -1700,9 +2004,135 @@ const useArrestViewModel = () => {
   };
 
   const addTimeOffset = (seconds: number) => {
+    setTimeBeforeStart(timeOffset + seconds);
+  };
+
+  // How long before the Start tap the first ambulance resource confirmed the arrest. Everything already
+  // recorded keeps its real moment, so it all moves by the same amount. Returns false, changing nothing,
+  // if that would put an entry before 00:00 (matches iOS).
+  const setTimeBeforeStart = (offset: number): boolean => {
+    const newOffset = Math.max(0, offset);
+    const delta = newOffset - timeOffset;
+    if (delta === 0) return true;
+    const kept = events.filter((e) => !isConfirmedEntry(e));
+    if (kept.length > 0 && Math.min(...kept.map((e) => e.timestamp)) + delta < 0) return false;
+    if (cprCycleStartTimeRef.current + delta < 0) return false;
+
     saveUndoState();
-    setTimeOffset((t) => t + seconds);
-    logEvent(`Time offset added: +${seconds / 60} min`, EventType.Status);
+    setTimeOffset(newOffset);
+    cprCycleStartTimeRef.current += delta;
+    if (lastAdrenalineTimeRef.current !== null) lastAdrenalineTimeRef.current += delta;
+    setRoscTime((t) => (t === null ? t : t + delta));
+    setTorTime((t) => (t === null ? t : t + delta));
+    setVodTime((t) => (t === null ? t : t + delta));
+    setEvents((prev) => {
+      const shifted = prev.filter((e) => !isConfirmedEntry(e)).map((e) => ({ ...e, timestamp: e.timestamp + delta }));
+      if (newOffset > 0) {
+        // Its clock time is the Start tap's, less the time added.
+        const started = shifted.find((e) => e.message.startsWith("Arrest Started") || e.message.includes("Life Support Started"));
+        const clock =
+          started?.clock !== undefined ? started.clock - started.timestamp : Date.now() / 1000 - newOffset;
+        shifted.push({
+          timestamp: 0,
+          message: `Cardiac arrest confirmed ~${Math.round(newOffset / 60)} min before eResus was started (estimated)`,
+          type: EventType.Status,
+          clock,
+        });
+      }
+      return shifted;
+    });
+    return true;
+  };
+
+  // Shocks and drugs given before eResus, times unknown, recorded at the moment eResus was started.
+  // Several at once share one undo step. Returns false if it conflicts with the antiarrhythmic already recorded.
+  const logBeforeStart = (counts: Partial<Record<GivenItem, number>>): boolean => {
+    const shocks = counts.shock ?? 0;
+    const adrenaline = counts.adrenaline ?? 0;
+    const amiodarone = counts.amiodarone ?? 0;
+    const lidocaine = counts.lidocaine ?? 0;
+    if (amiodarone > 0 && (antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine || lidocaine > 0)) return false;
+    if (lidocaine > 0 && antiarrhythmicGiven === AntiarrhythmicDrug.Amiodarone) return false;
+    if (shocks + adrenaline + amiodarone + lidocaine === 0) return true;
+    if (arrestState !== ArrestState.Active) return false;
+
+    saveUndoState();
+    const entries: [string, EventType][] = [];
+    if (shocks > 0) {
+      setShockCount((c) => c + shocks);
+      setHideAdrenalinePrompt(false);
+      setHideAmiodaronePrompt(false);
+      // Amiodarone recorded before the shocks was timed from too few shocks; now the count is known.
+      const anchor = shockCountForAmiodarone1Ref.current;
+      if (amiodarone === 0 && amiodaroneCount > 0 && anchor !== null && anchor < 3 + stackedShockExtra) {
+        shockCountForAmiodarone1Ref.current = Math.min(3 + stackedShockExtra, shockCount + shocks);
+      }
+      entries.push([shocks === 1 ? "1 shock" : `${shocks} shocks`, EventType.Shock]);
+    }
+    if (adrenaline > 0) {
+      setAdrenalineCount((c) => c + adrenaline);
+      entries.push([`Adrenaline ×${adrenaline}`, EventType.Drug]);
+    }
+    if (amiodarone > 0) {
+      setAmiodaroneCount((c) => c + amiodarone);
+      setAntiarrhythmicGiven(AntiarrhythmicDrug.Amiodarone);
+      // RCUK: the first dose follows the 3rd shock. If fewer shocks are known the count is probably
+      // incomplete, so time the next dose from now rather than waiting for shocks that already happened.
+      if (shockCountForAmiodarone1Ref.current === null) {
+        const totalShocks = shockCount + shocks;
+        shockCountForAmiodarone1Ref.current = totalShocks - stackedShockExtra >= 3 ? 3 + stackedShockExtra : totalShocks;
+      }
+      entries.push([`Amiodarone ×${amiodarone}`, EventType.Drug]);
+    }
+    if (lidocaine > 0) {
+      setLidocaineCount((c) => c + lidocaine);
+      setAntiarrhythmicGiven(AntiarrhythmicDrug.Lidocaine);
+      entries.push([`Lidocaine ×${lidocaine}`, EventType.Drug]);
+    }
+    for (const [message, type] of entries) logAtStart(`${message} before eResus, times unknown (estimated)`, type);
+    return true;
+  };
+
+  // A drug or trauma intervention from before eResus, said in a handover. Recorded at the start, time unknown.
+  const logOtherBeforeStart = (name: string): boolean => {
+    if (arrestState !== ArrestState.Active) return false;
+    saveUndoState();
+    const isProcedure = isTraumaProcedureName(name);
+    if (!isTraumaArrest && !traumaModeWasSwitchedOff(events) && TRAUMA_MARKS_ARREST.has(name)) {
+      logEvent(TRAUMA_ON_ENTRY, EventType.Status);
+    }
+    logAtStart(`${name} before eResus, time unknown (estimated)`, isProcedure ? EventType.Airway : EventType.Drug);
+    return true;
+  };
+
+  // A rhythm from before eResus: recorded only, it doesn't start a rhythm check or advise a shock.
+  const logEarlierRhythm = (rhythm: string) => {
+    saveUndoState();
+    if (initialRhythm === null) setInitialRhythm(rhythm);
+    logAtStart(`Rhythm before eResus: ${rhythm} (estimated)`, EventType.Rhythm);
+  };
+
+  const setLastAdrenaline = (minutesAgo: number | null) => {
+    if (!isLastAdrenalineTimeUnknown) return;
+    saveUndoState();
+    markLastAdrenalineTime(minutesAgo);
+  };
+
+  const markLastAdrenalineTime = (minutesAgo: number | null) => {
+    if (minutesAgo !== null) {
+      lastAdrenalineTimeRef.current = actionTime() - minutesAgo * 60;
+      logEvent(`Last adrenaline ~${minutesAgo} min ago (estimated)`, EventType.Status);
+    } else {
+      lastAdrenalineTimeRef.current = actionTime() - currentAdrenalineInterval;
+      logEvent("Last adrenaline time unknown: treated as due now", EventType.Status);
+    }
+  };
+
+  const logAtStart = (message: string, type: EventType) => {
+    const previous = eventTimeOverrideRef.current;
+    eventTimeOverrideRef.current = timeOffset;
+    logEvent(message, type);
+    eventTimeOverrideRef.current = previous;
   };
 
   const toggleChecklistItemCompletion = (item: ChecklistItem) => {
@@ -1714,8 +2144,9 @@ const useArrestViewModel = () => {
     setPostROSCTasks(updateList);
     setPostMortemTasks(updateList);
 
-    const status = !item.isCompleted ? "checked" : "unchecked";
-    logEvent(`${item.name} ${status}`, EventType.Cause);
+    // Plain words for the record: "checked" could be read as "excluded" or "target achieved".
+    const isCause = reversibleCauses.some((cause) => cause.name === item.name);
+    logEvent(checklistToggleEntry(item.name, !item.isCompleted, isCause), EventType.Cause);
   };
 
   const setHypothermiaStatus = (status: HypothermiaStatus) => {
@@ -1730,86 +2161,36 @@ const useArrestViewModel = () => {
     logEvent(`Hypothermia status set to: ${status}`, EventType.Cause);
   };
 
+  // RCUK 2025: consider IO if IV access isn't achieved within two attempts.
+  // Counts the iOS wording too, since transferred sessions can contain either.
+  const failedIVAttempts = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          (e.message.startsWith("Vascular Access (IV)") && e.message.endsWith("Failed")) ||
+          (e.message.startsWith("IV Access") && e.message.endsWith("- Unsuccessful")),
+      ).length,
+    [events],
+  );
+
   // Dynamically count lidocaine from events (fixes iOS parity issue)
-  const dynamicLidocaineCount = useMemo(() => {
-    return events.filter(
-      (e) => e.message.toLowerCase().includes("lidocaine") && e.message.toLowerCase().includes("given"),
-    ).length;
-  }, [events]);
+  const dynamicLidocaineCount = useMemo(() => lidocaineDosesIn(events), [events]);
+
+  const summaryInput = () => ({
+    events,
+    totalTime: totalArrestTime,
+    startTime: startTimeRef.current,
+    shockCount,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount: Math.max(lidocaineCount, dynamicLidocaineCount),
+    patientAge: patientAgeStr || null,
+    patientGender: patientGenderStr || null,
+  });
 
   const copySummaryToClipboard = () => {
-    const startText = startTimeRef.current
-      ? `${String(startTimeRef.current.getHours()).padStart(2, "0")}:${String(startTimeRef.current.getMinutes()).padStart(2, "0")}`
-      : "Unknown";
-    const dateText = startTimeRef.current
-      ? startTimeRef.current.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-      : "Unknown";
-
-    const demoText =
-      patientAgeStr || patientGenderStr
-        ? `${patientAgeStr ? `${patientAgeStr} y/o` : ""} ${patientGenderStr || ""}`.trim()
-        : "";
-
-    // Extract real-world times
-    const firstIVIO = extractFirstEventTime(
-      events,
-      ["vascular access", "iv access", "io access"],
-      startTimeRef.current,
-    );
-    const firstAirway = extractFirstEventTime(events, ["advanced airway"], startTimeRef.current);
-    const firstAdrenaline = extractFirstEventTime(events, ["adrenaline"], startTimeRef.current);
-    const lastAdrenaline = extractLastEventTime(events, ["adrenaline"], startTimeRef.current);
-
-    const roscText =
-      roscTime !== null
-        ? startTimeRef.current
-          ? `ROSC at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + roscTime * 1000);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `ROSC at: ${TimeFormatter.format(roscTime)}`
-        : null;
-    const torText =
-      torTime !== null
-        ? startTimeRef.current
-          ? `TOR at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + torTime * 1000);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `TOR at: ${TimeFormatter.format(torTime)}`
-        : null;
-    const vodText =
-      vodTime !== null
-        ? startTimeRef.current
-          ? `VOD at: ${(() => {
-              const d = new Date(startTimeRef.current.getTime() + vodTime * 1000);
-              return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-            })()}`
-          : `VOD at: ${TimeFormatter.format(vodTime)}`
-        : null;
-
-    const summaryText = `eResus Event Summary
-
-${dateText}
-${demoText ? demoText + "\n" : ""}Start Time: ${startText}
-${roscText ? roscText + "\n" : ""}${torText ? torText + "\n" : ""}${vodText ? vodText + "\n" : ""}Total Duration: ${TimeFormatter.format(totalArrestTime)}
-
-CRITICAL INTERVENTIONS (REAL-WORLD TIME)
-Initial Rhythm: ${initialRhythm || "None"}
-First IV / IO: ${firstIVIO || "None"}
-First Airway: ${firstAirway || "None"}
-
-Last Adrenaline: ${lastAdrenaline || "None"}
-
-Shocks: ${shockCount}  |  Adrenaline: ${adrenalineCount}  |  Amiodarone: ${amiodaroneCount}  |  Lidocaine: ${Math.max(lidocaineCount, dynamicLidocaineCount)}
-
---- Event Log ---
-${[...events]
-  .sort((a, b) => a.timestamp - b.timestamp)
-  .map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`)
-  .join("\n")}`;
     navigator.clipboard
-      .writeText(summaryText.trim())
+      .writeText(buildSummary(summaryInput()).copyText)
       .then(() => HapticManager.notification("success"))
       .catch((err) => console.error("Failed to copy summary: ", err));
   };
@@ -1823,10 +2204,12 @@ ${[...events]
         finalOutcome = "ROSC";
         break;
       case ArrestState.Ended:
-        finalOutcome = "Deceased";
+        // What happened, not a judgement the app can't make: the crew verifies death, not eResus.
+        finalOutcome = "Resuscitation stopped";
         break;
       default:
-        finalOutcome = "Incomplete";
+        // Reset before ROSC or a stop was logged: the crew knows the outcome, the log doesn't.
+        finalOutcome = "Unknown";
     }
 
     const logData: any = {
@@ -1846,9 +2229,20 @@ ${[...events]
       initialRhythm: initialRhythm || null,
       organization: userOrganization || null,
       isSynced: false,
+      timeBeforeStart: timeBeforeStart(events),
+      // 3: event times count from when the arrest was confirmed, including time before eResus was started.
+      // Sessions from older builds added "downtime" that may have been before arrival (matches iOS).
+      timingVersion: events.some((e) => e.message.startsWith("Time offset added")) ? 2 : 3,
     };
 
-    const eventsCopy = events.map(e => ({ timestamp: e.timestamp, message: e.message, type: e.type }));
+    // Clock times stay in the user's own logbook; the research copy below leaves them out, as iOS does.
+    const eventsCopy = events.map((e) => ({
+      timestamp: e.timestamp,
+      message: e.message,
+      type: e.type,
+      estimated: isEstimated(e.message),
+      ...(e.clock !== undefined ? { clock: e.clock } : {}),
+    }));
 
     if (!navigator.onLine) {
       // Queue for later sync
@@ -1856,7 +2250,7 @@ ${[...events]
         logData,
         events: eventsCopy,
         userId,
-        researchModeEnabled,
+        researchModeEnabled: researchActive,
         queuedAt: Date.now(),
       });
       console.log("Offline: arrest log queued for sync");
@@ -1879,7 +2273,7 @@ ${[...events]
         await addDoc(eventsCollectionRef, event);
       }
 
-      if (researchModeEnabled) {
+      if (researchActive) {
         try {
           const researchData: any = {
             startTime: Timestamp.fromDate(startTimeRef.current),
@@ -1895,6 +2289,8 @@ ${[...events]
             organization: userOrganization || "Unknown",
             uid: userId,
             timestamp: serverTimestamp(),
+            timeBeforeStart: logData.timeBeforeStart,
+            timingVersion: logData.timingVersion,
           };
           if (roscTime !== null) researchData.roscTime = roscTime;
           if (torTime !== null) researchData.torTime = torTime;
@@ -1907,6 +2303,7 @@ ${[...events]
               timestamp: event.timestamp,
               message: event.message,
               type: event.type,
+              estimated: isEstimated(event.message),
             });
           }
 
@@ -1922,7 +2319,7 @@ ${[...events]
         logData,
         events: eventsCopy,
         userId,
-        researchModeEnabled,
+        researchModeEnabled: researchActive,
         queuedAt: Date.now(),
       });
       HapticManager.notification("warning");
@@ -1945,6 +2342,7 @@ ${[...events]
     setUiState(UIState.Default);
     setEvents([]);
     setShockCount(0);
+    setStackedShockExtra(0);
     setAdrenalineCount(0);
     setAmiodaroneCount(0);
     setLidocaineCount(0);
@@ -1962,6 +2360,7 @@ ${[...events]
     setPostMortemTasks(AppConstants.postMortemTasksTemplate());
     setHideAdrenalinePrompt(false);
     setHideAmiodaronePrompt(false);
+    setHideAdrenalineDueWarning(false);
     setLastRhythmNonShockable(false);
     setAirwayAdjunct(null);
     setRoscTime(null);
@@ -2015,6 +2414,8 @@ ${[...events]
               organization: entry.logData.organization || "Unknown",
               uid: entry.userId,
               timestamp: serverTimestamp(),
+              // Logs queued by older builds have no timing version; leave it off rather than guess.
+              ...(entry.logData.timingVersion ? { timeBeforeStart: entry.logData.timeBeforeStart ?? 0, timingVersion: entry.logData.timingVersion } : {}),
             };
             if (entry.logData.roscTime !== null) researchData.roscTime = entry.logData.roscTime;
             if (entry.logData.torTime !== null) researchData.torTime = entry.logData.torTime;
@@ -2026,6 +2427,7 @@ ${[...events]
                 timestamp: event.timestamp,
                 message: event.message,
                 type: event.type,
+                estimated: isEstimated(event.message),
               });
             }
             await updateDoc(doc(db, logsCollectionPath, logDocRef.id), { isSynced: true });
@@ -2057,7 +2459,7 @@ ${[...events]
     // Always try to flush the localStorage queue first
     await flushOfflineLogQueue();
 
-    if (!researchModeEnabled || !user) return;
+    if (!researchActive || !user) return;
     try {
       const logsCollectionPath = `/artifacts/${appId}/users/${userId}/logs`;
       const q = query(collection(db, logsCollectionPath), where("isSynced", "==", false));
@@ -2100,7 +2502,7 @@ ${[...events]
     } catch (e) {
       console.error("Error sweeping offline logs:", e);
     }
-  }, [db, userId, user, researchModeEnabled, flushOfflineLogQueue]);
+  }, [db, userId, user, researchActive, flushOfflineLogQueue]);
 
   useEffect(() => {
     syncOfflineLogs();
@@ -2121,162 +2523,57 @@ ${[...events]
   }, [syncOfflineLogs]);
 
   // QR Session Transfer
-  const generateTransferState = () => {
-    return {
-      arrestState,
-      masterTime,
-      cprTime,
-      timeOffset,
-      events,
-      shockCount,
-      adrenalineCount,
-      amiodaroneCount,
-      lidocaineCount,
-      airwayPlaced,
-      antiarrhythmicGiven,
-      reversibleCauses,
-      postROSCTasks,
-      postMortemTasks,
-      patientAgeCategory,
-      uiState,
-      hideAdrenalinePrompt,
-      hideAmiodaronePrompt,
-      lastRhythmNonShockable,
-      airwayAdjunct,
-      roscTime,
-      isTimerPaused,
-      startTime: startTimeRef.current?.toISOString() ?? null,
-      cprCycleStartTime: cprCycleStartTimeRef.current,
-      lastAdrenalineTime: lastAdrenalineTimeRef.current,
-      shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
-      initialRhythm,
-      patientAgeStr,
-      patientGenderStr,
-      torTime,
-      vodTime,
-      vodChecklist,
-      vodConfirmed,
-    };
-  };
-
-  const bytesToUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
-
-  const utf8ToBase64 = (str: string): string => {
-    const bytes = new TextEncoder().encode(str);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  };
-
-  // UTF-8 safe base64 decoder for legacy string transfers
-  const base64ToUtf8 = (str: string): string => {
-    const binary = atob(str);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytesToUtf8(bytes);
-  };
-
-  const isUUID = (value: unknown): value is string =>
-    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-
-  const deterministicUUID = (seed: string): string => {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = Math.imul(31, hash) + seed.charCodeAt(i) | 0;
-    }
-    const hex = Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8);
-    return `${hex}-0000-4000-8000-000000000000`;
-  };
-
-  const normalizeChecklistForiOS = (items: any[] = []): any[] =>
-    items.map((item, index) => ({
-      id: isUUID(item.id) ? item.id : deterministicUUID(`${item.name ?? "item"}-${item.id ?? index}`),
-      name: item.name ?? "",
-      isCompleted: item.isCompleted ?? false,
-      hypothermiaStatus: item.hypothermiaStatus ?? "none",
-    }));
-
-  const normalizeEventTypeForiOS = (type: string): string => {
-    const supported = new Set(["status", "cpr", "shock", "analysis", "rhythm", "drug", "airway", "etco2", "cause"]);
-    return supported.has(type) ? type : "status";
-  };
-
-  const normalizeEventsForiOS = (items: any[] = []): any[] =>
-    items.map((event, index) => ({
-      id: isUUID(event.id) ? event.id : (crypto.randomUUID?.() ?? deterministicUUID(`event-${index}-${event.timestamp ?? 0}`)),
-      timestamp: event.timestamp ?? 0,
-      message: event.message ?? "",
-      type: normalizeEventTypeForiOS(event.type ?? "status"),
-    }));
-
-  const convertToiOSTransferFormat = (state: any): Bytes => {
-    // iOS reads Firestore stateData as Swift Data, then JSONDecoder decodes UndoState.
-    // JSONEncoder encodes Date as Apple reference-date seconds and Data as base64.
-    const APPLE_EPOCH = Date.UTC(2001, 0, 1);
-    let iosStartTime: number | null = null;
-    if (state.startTime) {
-      const d = new Date(state.startTime);
-      iosStartTime = (d.getTime() - APPLE_EPOCH) / 1000;
-    }
-
-    const eventsJson = JSON.stringify(normalizeEventsForiOS(state.events ?? []));
-    const eventsData = utf8ToBase64(eventsJson);
-
-    const iosUiState = typeof state.uiState === "string"
-      ? { [state.uiState]: {} }
-      : state.uiState ?? { default: {} };
-
-    const iosState: any = {
-      arrestState: state.arrestState ?? "ACTIVE",
-      arrestType: "GENERAL",
-      isPreterm: false,
-      nlsState: "initialAssessment",
-      masterTime: state.masterTime ?? 0,
-      cprTime: state.cprTime ?? 0,
-      timeOffset: state.timeOffset ?? 0,
-      nlsCycleDuration: 60,
-      isRhythmCheckDue: false,
-      eventsData,
-      shockCount: state.shockCount ?? 0,
-      adrenalineCount: state.adrenalineCount ?? 0,
-      amiodaroneCount: state.amiodaroneCount ?? 0,
-      lidocaineCount: state.lidocaineCount ?? 0,
-      lastAdrenalineTime: state.lastAdrenalineTime ?? null,
-      antiarrhythmicGiven: state.antiarrhythmicGiven ?? "none",
-      shockCountForAmiodarone1: state.shockCountForAmiodarone1 ?? null,
-      airwayPlaced: state.airwayPlaced ?? false,
-      reversibleCauses: normalizeChecklistForiOS(state.reversibleCauses ?? []),
-      postROSCTasks: normalizeChecklistForiOS(state.postROSCTasks ?? []),
-      postMortemTasks: normalizeChecklistForiOS(state.postMortemTasks ?? []),
-      nlsPretermTasks: [],
-      startTime: iosStartTime,
-      uiState: iosUiState,
-      patientAgeCategory: state.patientAgeCategory ?? null,
-      hideAdrenalinePrompt: state.hideAdrenalinePrompt ?? false,
-      hideAmiodaronePrompt: state.hideAmiodaronePrompt ?? false,
-      lastRhythmNonShockable: state.lastRhythmNonShockable ?? false,
-      airwayAdjunct: state.airwayAdjunct ?? "unspecified",
-      roscTime: state.roscTime ?? null,
-      isTimerPaused: state.isTimerPaused ?? false,
-      pauseStartTime: null,
-      initialRhythm: state.initialRhythm ?? null,
-      patientAgeStr: state.patientAgeStr ?? "",
-      patientGenderStr: state.patientGenderStr ?? "",
-    };
-
-    return Bytes.fromUint8Array(new TextEncoder().encode(JSON.stringify(iosState)));
-  };
+  const generateTransferState = (): SessionSnapshot => ({
+    arrestState,
+    masterTime,
+    cprTime,
+    timeOffset,
+    events,
+    shockCount,
+    stackedShockExtra,
+    adrenalineCount,
+    amiodaroneCount,
+    lidocaineCount,
+    airwayPlaced,
+    antiarrhythmicGiven,
+    reversibleCauses,
+    postROSCTasks,
+    postMortemTasks,
+    patientAgeCategory,
+    uiState,
+    hideAdrenalinePrompt,
+    hideAmiodaronePrompt,
+    lastRhythmNonShockable,
+    airwayAdjunct,
+    roscTime,
+    isTimerPaused,
+    startTime: startTimeRef.current,
+    cprCycleStartTime: cprCycleStartTimeRef.current,
+    isRhythmCheckDue,
+    rhythmCheckDueAt: isRhythmCheckDue ? cprCycleStartTimeRef.current + cprCycleDuration : null,
+    lastAdrenalineTime: lastAdrenalineTimeRef.current,
+    shockCountForAmiodarone1: shockCountForAmiodarone1Ref.current,
+    initialRhythm,
+    patientAgeStr,
+    patientGenderStr,
+    torTime,
+    vodTime,
+    vodChecklist,
+    vodConfirmed,
+  });
 
   const hostSessionTransfer = async (): Promise<string | null> => {
     try {
       const state = generateTransferState();
-      const transferId = String(Math.floor(100000 + Math.random() * 900000));
-      // Write stateData as Firestore Bytes/Blob so iOS can read it as Swift Data
-      const encodedStateData = convertToiOSTransferFormat(state);
+      // Pick a code that isn't already in use, so two crews transferring at once can't overwrite each other.
+      let transferId: string | null = null;
+      for (let attempt = 0; attempt < 5 && !transferId; attempt++) {
+        const candidate = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
+        if (!(await getDoc(doc(db, "transfers", candidate))).exists()) transferId = candidate;
+      }
+      if (!transferId) return null;
+      // Firestore Bytes, which iOS reads as Data. See docs/session-format.md.
+      const encodedStateData = Bytes.fromUint8Array(new TextEncoder().encode(encodeSession(state)));
       await setDoc(doc(db, "transfers", transferId), {
         stateData: encodedStateData,
         createdAt: serverTimestamp(),
@@ -2315,116 +2612,71 @@ ${[...events]
         return { success: false, error: "This transfer code has expired. Generate a new code and try again." };
       }
 
-      // stateData can be:
-      // - Firestore Bytes/Blob (current iOS-compatible format)
-      // - base64 string (legacy compatibility)
-      // - plain JSON string (older PWA transfers)
-      let rawStateData = data.stateData;
-      if (rawStateData instanceof Bytes) {
-        rawStateData = bytesToUtf8(rawStateData.toUint8Array());
-      } else if (typeof rawStateData === "string" && !rawStateData.startsWith("{") && !rawStateData.startsWith("[")) {
-        try {
-          rawStateData = base64ToUtf8(rawStateData);
-        } catch {
-          // Not valid base64, try parsing as-is
-        }
-      }
-      const state = JSON.parse(rawStateData);
+      // stateData is Bytes (current), or a JSON or base64 string from older builds.
+      const rawStateData = data.stateData;
+      const stateText =
+        rawStateData instanceof Bytes ? new TextDecoder().decode(rawStateData.toUint8Array()) : String(rawStateData);
+      const wire = parseStateData(stateText);
 
-      // --- Normalize iOS format to PWA format ---
-
-      // 1. startTime: iOS uses Apple reference date (seconds since Jan 1, 2001)
-      //    PWA uses ISO date string. Detect and convert.
-      const APPLE_EPOCH = Date.UTC(2001, 0, 1); // Jan 1 2001 in ms
-      let normalizedStartTime: Date | null = null;
-      if (state.startTime != null) {
-        if (typeof state.startTime === "number") {
-          // Apple reference date: convert to JS Date
-          normalizedStartTime = new Date(APPLE_EPOCH + state.startTime * 1000);
-        } else if (typeof state.startTime === "string") {
-          normalizedStartTime = new Date(state.startTime);
-        }
+      // The web app has no newborn transfer support yet. Refuse rather than silently treating it as ALS,
+      // and leave the code valid so it can still be received on an iPhone or iPad.
+      if (wire.arrestType === "NEWBORN") {
+        return {
+          success: false,
+          error:
+            "This is a newborn life support session. It can't be opened in the web app yet. Receive it on an iPhone or iPad with eResus instead.",
+        };
       }
 
-      // 2. events: iOS base64-encodes as eventsData, PWA uses events array
-      let normalizedEvents: any[] = state.events ?? [];
-      if (!state.events && state.eventsData) {
-        try {
-          const decoded = base64ToUtf8(state.eventsData);
-          normalizedEvents = JSON.parse(decoded);
-        } catch {
-          console.warn("Failed to decode iOS eventsData");
-          normalizedEvents = [];
-        }
-      }
+      const session = decodeSession(wire, cprCycleDuration);
 
-      // 3. uiState: iOS uses object {"default":{}}, PWA uses string "default"
-      let normalizedUiState = state.uiState;
-      if (typeof state.uiState === "object" && state.uiState !== null) {
-        // Extract the key name from the iOS enum-style object
-        const keys = Object.keys(state.uiState);
-        if (keys.length > 0) {
-          normalizedUiState = keys[0]; // "default" | "analyzing" | "shockAdvised"
-        }
-      }
-
-      // 4. arrestState: iOS may use lowercase, normalize
-      const normalizedArrestState =
-        typeof state.arrestState === "string" ? state.arrestState.toUpperCase() : state.arrestState;
-
-      // Stop any existing timer first
       stopTimer();
+      startTimeRef.current = session.startTime;
+      cprCycleStartTimeRef.current = session.cprCycleStartTime;
+      lastAdrenalineTimeRef.current = session.lastAdrenalineTime;
+      shockCountForAmiodarone1Ref.current = session.shockCountForAmiodarone1;
 
-      // Set the start time ref FIRST so the timer can use it
-      if (normalizedStartTime) {
-        startTimeRef.current = normalizedStartTime;
-      }
-      cprCycleStartTimeRef.current = state.cprCycleStartTime ?? 0;
-      lastAdrenalineTimeRef.current = state.lastAdrenalineTime ?? null;
-      shockCountForAmiodarone1Ref.current = state.shockCountForAmiodarone1 ?? null;
+      // The sender's masterTime is stale by the time it arrives, so recompute from the start time.
+      const realElapsed = session.startTime ? (Date.now() - session.startTime.getTime()) / 1000 : session.masterTime;
 
-      // Calculate the current real elapsed time from original start
-      const realElapsed = startTimeRef.current
-        ? (Date.now() - startTimeRef.current.getTime()) / 1000
-        : state.masterTime;
-
-      // Add a transfer event with the correct timestamp
       const transferEvent: Event = {
-        timestamp: realElapsed,
+        timestamp: realElapsed + session.timeOffset,
         message: "Session Transferred from another device",
         type: EventType.Status,
+        clock: Date.now() / 1000,
       };
 
-      // Set ALL state at once
-      setArrestState(normalizedArrestState);
+      setArrestState(session.arrestState as ArrestState);
       setMasterTime(realElapsed);
-      setCprTime(state.cprTime);
-      setTimeOffset(state.timeOffset);
-      setEvents([...normalizedEvents, transferEvent]);
-      setShockCount(state.shockCount);
-      setAdrenalineCount(state.adrenalineCount);
-      setAmiodaroneCount(state.amiodaroneCount);
-      setLidocaineCount(state.lidocaineCount);
-      setAirwayPlaced(state.airwayPlaced);
-      setAntiarrhythmicGiven(state.antiarrhythmicGiven);
-      setReversibleCauses(state.reversibleCauses);
-      setPostROSCTasks(state.postROSCTasks);
-      setPostMortemTasks(state.postMortemTasks);
-      setPatientAgeCategory(state.patientAgeCategory);
-      setUiState(normalizedUiState);
-      setHideAdrenalinePrompt(state.hideAdrenalinePrompt ?? false);
-      setHideAmiodaronePrompt(state.hideAmiodaronePrompt ?? false);
-      setLastRhythmNonShockable(state.lastRhythmNonShockable ?? false);
-      setAirwayAdjunct(state.airwayAdjunct ?? null);
-      setRoscTime(state.roscTime ?? null);
-      setIsTimerPaused(state.isTimerPaused ?? false);
-      setInitialRhythm(state.initialRhythm ?? null);
-      setPatientAgeStr(state.patientAgeStr ?? "");
-      setPatientGenderStr(state.patientGenderStr ?? "");
-      setTorTime(state.torTime ?? null);
-      setVodTime(state.vodTime ?? null);
-      setVodChecklist(state.vodChecklist ?? AppConstants.vodChecklistTemplate());
-      setVodConfirmed(state.vodConfirmed ?? false);
+      setCprTime(session.cprTime);
+      setTimeOffset(session.timeOffset);
+      setEvents([transferEvent, ...(session.events as Event[])]);
+      setShockCount(session.shockCount);
+      setStackedShockExtra(session.stackedShockExtra);
+      setAdrenalineCount(session.adrenalineCount);
+      setAmiodaroneCount(session.amiodaroneCount);
+      setLidocaineCount(session.lidocaineCount);
+      setAirwayPlaced(session.airwayPlaced);
+      setAntiarrhythmicGiven(session.antiarrhythmicGiven as AntiarrhythmicDrug);
+      setReversibleCauses(session.reversibleCauses as ChecklistItem[]);
+      setPostROSCTasks(session.postROSCTasks as ChecklistItem[]);
+      setPostMortemTasks(session.postMortemTasks as ChecklistItem[]);
+      setPatientAgeCategory(session.patientAgeCategory as PatientAgeCategory | null);
+      setUiState(session.uiState as UIState);
+      setHideAdrenalinePrompt(session.hideAdrenalinePrompt);
+      setHideAmiodaronePrompt(session.hideAmiodaronePrompt);
+      setHideAdrenalineDueWarning(false);
+      setLastRhythmNonShockable(session.lastRhythmNonShockable);
+      setAirwayAdjunct(session.airwayAdjunct as AirwayAdjunctType | null);
+      setRoscTime(session.roscTime);
+      setIsTimerPaused(session.isTimerPaused);
+      setInitialRhythm(session.initialRhythm);
+      setPatientAgeStr(session.patientAgeStr);
+      setPatientGenderStr(session.patientGenderStr);
+      setTorTime(session.torTime);
+      setVodTime(session.vodTime);
+      setVodChecklist((session.vodChecklist as ChecklistItem[] | null) ?? AppConstants.vodChecklistTemplate());
+      setVodConfirmed(session.vodConfirmed);
       setUndoHistory([]);
 
       // Delete the transfer document
@@ -2436,8 +2688,8 @@ ${[...events]
 
       // Start timer if arrest is active and not paused
       if (
-        (state.arrestState === ArrestState.Active || state.arrestState === ArrestState.Rosc) &&
-        !state.isTimerPaused
+        (session.arrestState === ArrestState.Active || session.arrestState === ArrestState.Rosc) &&
+        !session.isTimerPaused
       ) {
         // Use setTimeout to ensure state has settled before starting timer
         setTimeout(() => startTimer(), 50);
@@ -2498,6 +2750,13 @@ ${[...events]
 
     // Computed
     totalArrestTime,
+    resuscitationTime,
+    isRhythmCheckDue,
+    rhythmCheckOverdue: isRhythmCheckDue ? rhythmCheckOverdue : null,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
+    failedIVAttempts,
     canUndo,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
@@ -2506,6 +2765,21 @@ ${[...events]
     shouldShowAmiodaroneReminder,
     shouldShowAdrenalinePrompt,
     shouldShowAmiodaroneFirstDosePrompt,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+    dismissAdrenalinePrompt,
+    isTraumaArrest,
+    hasTraumaContext,
+    areDrugPromptsQuietened,
+    isPaediatric: isPaediatricFrom(
+      patientAgeCategory === null ? null : patientAgeCategory === PatientAgeCategory.Adult,
+      patientAgeStr,
+    ),
+    currentRhythm: currentRhythmFrom(events),
+    torCaution: torCautionFrom(reversibleCauses),
+    traumaInterventionCount,
+    summaryInput,
 
     // Recovery
     showRecoveryPrompt,
@@ -2522,6 +2796,13 @@ ${[...events]
     logAmiodarone,
     logLidocaine,
     logOtherDrug,
+    logTraumaProcedure,
+    setTraumaArrest,
+    logObservation,
+    logDestination,
+    logNote,
+    setPatientDetails,
+    latestObservation,
     logAirwayPlaced: logAirwayPlacedFn,
     logVascularAccess,
     logEtco2,
@@ -2537,11 +2818,25 @@ ${[...events]
     setPatientAgeCategory,
     performReset,
     undo,
+    undoToDepth,
+    undoDepth: undoHistory.length,
     copySummaryToClipboard,
     pauseArrest,
     resumeArrest,
     setHideAdrenalinePrompt,
     setHideAmiodaronePrompt,
+    deliverStackedShocks,
+    stackedShockExtra,
+    performFromVoice,
+    drugTimingShockCount,
+    arrestTime,
+    dateFor,
+    setTimeBeforeStart,
+    logBeforeStart,
+    logOtherBeforeStart,
+    logEarlierRhythm,
+    setLastAdrenaline,
+    isLastAdrenalineTimeUnknown,
     // v1.2 transfer
     hostSessionTransfer,
     receiveSessionTransfer,
@@ -2556,37 +2851,6 @@ const useArrest = () => useContext(ArrestContext)!;
 //============================================================================
 // MODAL COMPONENTS
 //============================================================================
-
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-  title: string;
-}
-
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-auto overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-            <XSquare size={24} />
-          </button>
-        </div>
-        <div className="p-4 overflow-y-auto max-h-[70vh]">{children}</div>
-      </div>
-    </div>
-  );
-};
 
 // Patient Info Prompt (with two-way age sync)
 const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
@@ -2604,37 +2868,39 @@ const PatientInfoPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> 
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Patient Info">
-      <div className="space-y-4">
-        <h3 className="text-blue-600 dark:text-blue-400 font-semibold">Patient Demographics</h3>
-        <div className="space-y-2">
+    // A short sheet: two answers, so the clock stays in view behind it (matches iOS).
+    <Modal isOpen={isOpen} onClose={handleSave} title="Patient Info">
+      <div className="space-y-3">
+        <label className="flex items-center gap-3">
+          <span className="w-9 text-sm text-gray-500 dark:text-gray-400">Age</span>
           <input
             type="number"
+            inputMode="numeric"
             value={patientAgeStr}
             onChange={(e) => setPatientAgeStr(e.target.value)}
-            placeholder="Approx Age (e.g. 45)"
-            className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white"
+            placeholder="Approx age, e.g. 45"
+            className="flex-1 h-11 px-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
           />
-        </div>
-        <div className="space-y-2">
-          <div className="flex justify-between items-center p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg">
-            <span className="text-gray-700 dark:text-gray-300">Gender</span>
-            <select
-              value={patientGenderStr}
-              onChange={(e) => setPatientGenderStr(e.target.value)}
-              className="bg-transparent text-gray-900 dark:text-white text-right"
-            >
-              <option value="">Unknown</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-              <option value="Other">Other</option>
-            </select>
+        </label>
+        <div className="flex items-center gap-3">
+          <span className="w-9 text-sm text-gray-500 dark:text-gray-400">Sex</span>
+          <div role="radiogroup" aria-label="Sex" className="flex-1 grid grid-cols-4 gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-700">
+            {[["Male", "Male"], ["Female", "Female"], ["Other", "Other"], ["", "Unknown"]].map(([value, label]) => (
+              <button
+                key={label}
+                role="radio"
+                aria-checked={patientGenderStr === value}
+                onClick={() => setPatientGenderStr(value)}
+                className={`h-9 rounded-md text-sm font-medium ${
+                  patientGenderStr === value ? "bg-white dark:bg-gray-500 text-gray-900 dark:text-white shadow-sm" : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          These details help ambulance trusts understand demographic differences in cardiac arrest outcomes.
-        </p>
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Done" tone="primary" height="h-12" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -2676,7 +2942,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   return (
     <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
-        <BarChart3 size={64} className="text-blue-500 mx-auto" />
+        <BarChart3 size={64} className="text-tone-accent mx-auto" />
         <h2 className="text-2xl font-bold text-center text-gray-900 dark:text-white">Help Advance Science</h2>
         <p className="text-sm text-center text-gray-600 dark:text-gray-400">
           eResus is partnering with researchers to track the effectiveness of interventions. By enrolling, your app will
@@ -2686,7 +2952,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
           href="https://tech.aegismedicalsolutions.co.uk/eresus/data-policy"
           target="_blank"
           rel="noopener noreferrer"
-          className="block text-center text-sm text-blue-600 dark:text-blue-400 underline"
+          className="block text-center text-sm text-tone-accent underline"
         >
           Read the Data Collection Policy & Agreement
         </a>
@@ -2713,7 +2979,7 @@ const ResearchConsentView: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             setHasRespondedToResearchTerms(true);
             onClose();
           }}
-          className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+          className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
         >
           Enroll & Accept Terms
         </button>
@@ -2780,7 +3046,7 @@ const SessionTransferModal: React.FC<{ isOpen: boolean; onClose: () => void }> =
             <ActionButton
               title="Receive from Another Device"
               icon={<QrCode size={18} />}
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={() => setMode("receive")}
             />
@@ -2823,7 +3089,7 @@ const SessionTransferModal: React.FC<{ isOpen: boolean; onClose: () => void }> =
             {receiveError && <p className="text-sm text-red-500 text-center">{receiveError}</p>}
             <ActionButton
               title={isReceiving ? "Receiving..." : "Receive Session"}
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={handleReceive}
               disabled={receiveCode.length !== 6 || isReceiving}
@@ -2909,7 +3175,7 @@ const EditLogPatientInfoModal: React.FC<{
             </p>
           </div>
         )}
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -2979,7 +3245,7 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
         <div className="flex flex-col items-center space-y-3">
           <img
-            src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+            src="/icons/icon-512.png"
             alt="eResus"
             className="w-20 h-20 rounded-2xl shadow-lg"
           />
@@ -2989,14 +3255,14 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
           </p>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
+        <div className="bg-tone-tint rounded-xl p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-tone-accent">
             {info.device}
           </p>
           <ol className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
             {info.steps.map((step, i) => (
               <li key={i} className="flex items-start space-x-2.5">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center mt-0.5">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-tone-accent text-white text-xs font-bold flex items-center justify-center mt-0.5">
                   {i + 1}
                 </span>
                 <span>{step}</span>
@@ -3007,7 +3273,7 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
 
         <button
           onClick={onClose}
-          className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+          className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
         >
           Continue to App
         </button>
@@ -3035,7 +3301,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
         <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
             <img
-              src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+              src="/icons/icon-512.png"
               alt="eResus"
               className="w-16 h-16 mx-auto rounded-2xl shadow-lg"
             />
@@ -3045,7 +3311,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
             </p>
             <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300">
               <div className="flex items-start space-x-3">
-                <RotateCw size={18} className="text-blue-500 mt-0.5 shrink-0" />
+                <RotateCw size={18} className="text-tone-accent mt-0.5 shrink-0" />
                 <p>
                   <strong>Sync across devices</strong> - access your arrest logs from any phone, tablet, or computer.
                 </p>
@@ -3066,7 +3332,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
             </div>
             <button
               onClick={() => setShowAuthModal(true)}
-              className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold active:scale-95 transition-transform"
+              className="w-full py-3 rounded-xl bg-tone-accent text-white font-bold active:scale-95 transition-transform"
             >
               Sign Up / Sign In
             </button>
@@ -3090,8 +3356,13 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
 // NEW: Vascular Access Modal (Log IV/IO)
 // ============================================================================
 const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const { logVascularAccess } = useArrest();
+  const { logVascularAccess, failedIVAttempts } = useArrest();
   const [accessType, setAccessType] = useState<"IV" | "IO">("IV");
+
+  // RCUK 2025: after two failed IV attempts, default to IO.
+  useEffect(() => {
+    if (isOpen) setAccessType(failedIVAttempts >= 2 ? "IO" : "IV");
+  }, [isOpen, failedIVAttempts]);
   const [location, setLocation] = useState("");
   const [gauge, setGauge] = useState("");
   const [successful, setSuccessful] = useState(true);
@@ -3107,7 +3378,13 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Log Vascular Access">
       <div className="space-y-4">
-        <h3 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Access Details</h3>
+        {failedIVAttempts >= 2 && (
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-tone-tint text-tone-on-tint text-sm">
+            <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+            <span>{failedIVAttempts} IV attempts unsuccessful. Consider IO access.</span>
+          </div>
+        )}
+        <h3 className="text-tone-accent font-semibold text-sm">Access Details</h3>
         <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
           {/* IV/IO Toggle */}
           <div className="flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
@@ -3137,14 +3414,14 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             type="text"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            placeholder="Location (e.g. Left AC, Tibia) - Optional"
+            placeholder="Location, e.g. left AC"
             className="w-full p-3 bg-transparent border-b border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none"
           />
           <input
             type="text"
             value={gauge}
             onChange={(e) => setGauge(e.target.value)}
-            placeholder="Gauge (e.g. 18G, Pink) - Optional"
+            placeholder="Gauge, e.g. 18G"
             className="w-full p-3 bg-transparent border-b border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none"
           />
           <div className="flex justify-between items-center">
@@ -3162,7 +3439,7 @@ const VascularAccessModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
             </button>
           </div>
         </div>
-        <ActionButton title="Save" backgroundColor="bg-blue-600" foregroundColor="text-white" onClick={handleSave} />
+        <ActionButton title="Save" backgroundColor="bg-tone-accent" foregroundColor="text-white" onClick={handleSave} />
       </div>
     </Modal>
   );
@@ -3176,9 +3453,34 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
   onClose,
   onConfirmTOR,
 }) => {
-  const { totalArrestTime, patientAgeStr, patientAgeCategory, initialRhythm } = useArrest();
+  const { resuscitationTime, timeOffset, initialRhythm, hasTraumaContext, isPaediatric: recordedPaediatric, currentRhythm, torCaution } =
+    useArrest();
+  // Null when nobody has recorded an age: then both sets of guidance show until Adult or Child is picked here.
+  const [chosenPaediatric, setChosenPaediatric] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isOpen) setChosenPaediatric(null);
+  }, [isOpen]);
+  const knownPaediatric = recordedPaediatric ?? chosenPaediatric;
+  const isPaediatric = knownPaediatric ?? false;
+  const thresholdTime = isPaediatric ? 3600 : 2700; // 60 mins vs 45 mins
 
-  const isPaediatric = isPatientPaediatric(patientAgeStr, patientAgeCategory);
+  // JRCALC ToR rests on the rhythm now, persisting despite ALS, not the first one seen.
+  const rhythmCard = (title: string, matches: string[], text: string, titleClass = "") => {
+    const highlighted = currentRhythm !== null && matches.includes(currentRhythm);
+    return (
+      <div className={highlighted ? "p-3 border-2 border-tone-accent rounded-lg bg-tone-tint" : ""}>
+        <p className={`font-bold ${titleClass}`}>
+          {title}
+          {highlighted && (
+            <span className="ml-2 text-xs bg-tone-accent text-white px-2 py-0.5 rounded-full uppercase font-bold">
+              Current rhythm
+            </span>
+          )}
+        </p>
+        <p className="mt-1">{text}</p>
+      </div>
+    );
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Clinical Guidance">
@@ -3186,79 +3488,102 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         <div className="text-center space-y-2">
           <AlertTriangle size={48} className="text-orange-500 mx-auto" />
           <h3 className="text-xl font-bold text-gray-900 dark:text-white">Termination of Resuscitation</h3>
-          <p className="text-gray-600 dark:text-gray-400">Current Duration: {TimeFormatter.format(totalArrestTime)}</p>
+          <p
+            className={`font-semibold ${resuscitationTime >= thresholdTime ? "text-red-600 dark:text-red-400" : "text-gray-700 dark:text-gray-300"}`}
+          >
+            Resuscitation time: {timeOffset > 0 ? "~" : ""}
+            {TimeFormatter.format(resuscitationTime)}
+          </p>
+          {/* With no time added, the clock started with eResus, so say that rather than claim more. */}
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {timeOffset > 0
+              ? `Timed from when arrest was confirmed, including about ${Math.round(timeOffset / 60)} min before eResus.`
+              : "Timed from when eResus was started. Add earlier time with +1, +5 or +10."}
+          </p>
         </div>
 
-        <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-            JRCALC Guidelines ({isPaediatric ? "Paediatric" : "Adult"})
-          </h4>
+        {recordedPaediatric === null && (
+          <div
+            role="radiogroup"
+            aria-label="Patient"
+            aria-description="No age recorded. Shows the guidance for the patient."
+            className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-700"
+          >
+            {[
+              { label: "Adult", value: false },
+              { label: "Child (under 13)", value: true },
+            ].map(({ label, value }) => (
+              <button
+                key={label}
+                role="radio"
+                aria-checked={chosenPaediatric === value}
+                onClick={() => setChosenPaediatric(value)}
+                className={`min-h-11 rounded-lg text-sm font-semibold ${
+                  chosenPaediatric === value
+                    ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow"
+                    : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
-          {isPaediatric ? (
+        {torCaution && (
+          <div className="flex items-start gap-2 p-4 rounded-xl bg-tone-alert text-tone-on-alert text-sm font-semibold">
+            <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>{torCaution}</span>
+          </div>
+        )}
+
+        {knownPaediatric !== false && (
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              JRCALC Child
+            </h4>
             <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200">
-              <p className="font-semibold">Paediatric / Infant Arrest</p>
-              <p>
-                All paediatric cardiac arrests should be conveyed to the Emergency Department unless there is a clear
-                reason not to (e.g. DNACPR, expected death).
-              </p>
-              <p>
-                Consider continuing resuscitation for at least <strong>60 minutes</strong> from the time of arrest.
-              </p>
-              <p>Contact paediatric specialist for advice early.</p>
+              {/* Same wording as the iOS ToR sheet. */}
+              <ul className="space-y-2">
+                <li>
+                  • Consider termination after <strong>60 minutes</strong> of resuscitation.
+                </li>
+                <li>
+                  • Ceasing resuscitation on scene should only be considered if senior clinicians are present or senior
+                  advice has been sought.
+                </li>
+                <li>• The child must still be conveyed to an ED unless a care plan states otherwise.</li>
+                <li>
+                  • Resuscitation should always be continued in hypothermia, suspected overdose or poisoning, and pregnancy.
+                </li>
+              </ul>
             </div>
-          ) : (
+          </div>
+        )}
+
+        {knownPaediatric !== true && (
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              JRCALC Adult
+            </h4>
             <div className="space-y-4 text-sm text-gray-800 dark:text-gray-200">
-              {/* Asystole guidance */}
-              <div
-                className={`${initialRhythm === "Asystole" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold">
-                  Asystole
-                  {initialRhythm === "Asystole" && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  Discontinue at any point if inappropriate. At 45 mins, cessation is appropriate unless there is a
-                  compelling reason to continue.
-                </p>
-              </div>
-
-              {/* PEA guidance */}
-              <div
-                className={`${initialRhythm === "PEA" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold">
-                  PEA
-                  {initialRhythm === "PEA" && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  At 45 mins, consider cessation if rate &lt;40 bpm and QRS width &gt;120msecs. Otherwise, seek advice.
-                </p>
-              </div>
-
-              {/* VF/VT guidance */}
-              <div
-                className={`${initialRhythm === "VF" || initialRhythm === "VT" ? "p-3 border-2 border-blue-500 rounded-lg bg-blue-50 dark:bg-blue-900/20" : ""}`}
-              >
-                <p className="font-bold text-blue-600 dark:text-blue-400">
-                  VF / VT
-                  {(initialRhythm === "VF" || initialRhythm === "VT") && (
-                    <span className="ml-2 text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase font-bold">
-                      Logged Initial Rhythm
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1">
-                  Follow local pathway for refractory arrest. Seek advice at 45 mins. Cessation may be appropriate.
-                </p>
-              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{currentRhythmLine(currentRhythm, initialRhythm)}</p>
+              {rhythmCard(
+                "Asystole",
+                ["Asystole"],
+                "Discontinue at any point if inappropriate. At 45 mins, cessation is appropriate unless there is a compelling reason to continue.",
+              )}
+              {rhythmCard(
+                "PEA",
+                ["PEA"],
+                "At 45 mins, consider cessation if rate <40 bpm and QRS width >120msecs. Otherwise, seek advice.",
+              )}
+              {rhythmCard(
+                "VF / VT",
+                ["VF", "VT"],
+                "Follow local pathway for refractory arrest. Seek advice at 45 mins. Cessation may be appropriate.",
+                "text-tone-accent",
+              )}
 
               <hr className="border-gray-300 dark:border-gray-600" />
 
@@ -3270,15 +3595,22 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
                   <li>Sustained (&gt;10 mins) then re-arrest: Discuss with a senior clinician.</li>
                 </ul>
               </div>
+              <p className="text-xs font-semibold">{TOR_ADULT_EXCLUSIONS}</p>
+              <details>
+                <summary className="cursor-pointer text-sm font-semibold text-tone-accent">JRCALC termination of resus flowchart</summary>
+                <img src={GUIDELINES.jrcalcAdultArrest.pdfUrl} alt="JRCALC termination of resuscitation flowchart" className="mt-2 w-full rounded-lg bg-white" />
+              </details>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* The same ToR rules apply to traumatic arrest (JRCALC); the somatic criteria are met more often. */}
+        {isOpen && <SomaticCriteriaSection isPaediatric={isPaediatric} initiallyExpanded={hasTraumaContext} />}
 
         <ActionButton
-          title="Confirm TOR (Stop CPR)"
+          title="Confirm ToR"
+          tone="danger"
           icon={<Shield size={18} />}
-          backgroundColor="bg-red-600"
-          foregroundColor="text-white"
           onClick={() => {
             onConfirmTOR();
             onClose();
@@ -3286,8 +3618,8 @@ const TORGuidanceModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfi
         />
         <ActionButton
           title="Cancel & Continue Resuscitation"
-          backgroundColor="bg-blue-50 dark:bg-blue-900/30"
-          foregroundColor="text-blue-600 dark:text-blue-400"
+          backgroundColor="bg-tone-tint"
+          foregroundColor="text-tone-accent"
           onClick={onClose}
         />
       </div>
@@ -3383,171 +3715,6 @@ const PLIIEModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen
   );
 };
 
-// ============================================================================
-// SUMMARY VIEW (Redesigned to match iOS)
-// ============================================================================
-const SummaryView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const {
-    events,
-    startTime,
-    shockCount,
-    adrenalineCount,
-    amiodaroneCount,
-    lidocaineCount,
-    totalArrestTime,
-    roscTime,
-    copySummaryToClipboard,
-    initialRhythm,
-    patientAgeStr,
-    patientGenderStr,
-    torTime,
-    vodTime,
-    dynamicLidocaineCount,
-  } = useArrest();
-  const [copied, setCopied] = useState(false);
-
-  const sortedEvents = useMemo(() => [...events].sort((a, b) => a.timestamp - b.timestamp), [events]);
-
-  const handleCopy = () => {
-    copySummaryToClipboard();
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Real-world clock times
-  const startTimeStr = startTime
-    ? `${String(startTime.getHours()).padStart(2, "0")}:${String(startTime.getMinutes()).padStart(2, "0")}`
-    : "Unknown";
-  const dateStr = startTime
-    ? startTime.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-    : "Unknown";
-
-  const getRealWorldTime = (offsetSeconds: number | null): string | null => {
-    if (offsetSeconds === null || !startTime) return null;
-    const d = new Date(startTime.getTime() + offsetSeconds * 1000);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
-
-  const firstIVIO = extractFirstEventTime(events, ["vascular access", "iv access", "io access"], startTime);
-  const firstAirway = extractFirstEventTime(events, ["advanced airway"], startTime);
-  const firstAdrenaline = extractFirstEventTime(events, ["adrenaline"], startTime);
-  const lastAdrenaline = extractLastEventTime(events, ["adrenaline"], startTime);
-
-  const demoText =
-    patientAgeStr || patientGenderStr
-      ? `${patientAgeStr ? `${patientAgeStr} y/o` : ""} ${patientGenderStr || ""}`.trim()
-      : "";
-
-  const effectiveLidocaine = Math.max(lidocaineCount, dynamicLidocaineCount);
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Event Summary">
-      <div className="flex flex-col space-y-4">
-        {/* Date & Demographics */}
-        <div className="space-y-1">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-white">{dateStr}</h3>
-          {demoText && (
-            <p className="text-blue-600 dark:text-blue-400 font-semibold flex items-center space-x-2">
-              <UserIcon size={16} />
-              <span>{demoText}</span>
-            </p>
-          )}
-        </div>
-
-        {/* Times */}
-        <div className="space-y-1 text-sm">
-          <p className="text-gray-700 dark:text-gray-300">Start Time: {startTimeStr}</p>
-          {roscTime !== null && (
-            <p className="text-green-600 dark:text-green-400 font-semibold">ROSC at: {getRealWorldTime(roscTime)}</p>
-          )}
-          {torTime !== null && <p className="text-red-500 font-semibold">TOR at: {getRealWorldTime(torTime)}</p>}
-          {vodTime !== null && <p className="text-red-500 font-semibold">VOD at: {getRealWorldTime(vodTime)}</p>}
-          <p className="text-gray-700 dark:text-gray-300">Total Duration: {TimeFormatter.format(totalArrestTime)}</p>
-        </div>
-
-        {/* Critical Interventions */}
-        <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl space-y-2">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-            Critical Interventions (Real-World Time)
-          </h4>
-          <div className="space-y-1 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">Initial Rhythm:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{initialRhythm || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">First IV / IO:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{firstIVIO || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">First Airway:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{firstAirway || "None"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-700 dark:text-gray-300">Last Adrenaline:</span>
-              <span className="font-bold text-gray-900 dark:text-white">{lastAdrenaline || "None"}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats Row */}
-        <div className="flex justify-around py-3">
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{shockCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Shocks</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{adrenalineCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Adrenaline</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{amiodaroneCount}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Amiodarone</p>
-          </div>
-          <div className="text-center">
-            <span className="text-2xl font-bold text-gray-900 dark:text-white">{effectiveLidocaine}</span>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Lidocaine</p>
-          </div>
-        </div>
-
-        {/* Event Log */}
-        <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
-          <h4 className="font-bold text-gray-900 dark:text-white mb-2">Event Log</h4>
-          <div className="space-y-2 max-h-60 overflow-y-auto font-mono text-sm">
-            {sortedEvents.map((event, index) => (
-              <div key={index} className="flex">
-                <span className={`font-bold w-16 flex-shrink-0 ${getEventTypeColor(event.type)}`}>
-                  [{TimeFormatter.format(event.timestamp)}]
-                </span>
-                <span className="ml-2 text-gray-800 dark:text-gray-200">{event.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex space-x-3">
-          <ActionButton
-            title="Done"
-            backgroundColor="bg-gray-200 dark:bg-gray-700"
-            foregroundColor="text-gray-800 dark:text-gray-200"
-            onClick={onClose}
-          />
-          <button
-            onClick={handleCopy}
-            className={`flex-1 flex items-center justify-center space-x-2 h-14 rounded-xl font-semibold shadow-md transition-all duration-300 active:scale-95 ${
-              copied ? "bg-green-600 text-white" : "bg-blue-600 text-white"
-            }`}
-          >
-            {copied ? <Check size={18} /> : <Clipboard size={18} />}
-            <span>{copied ? "Copied!" : "Copy"}</span>
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-};
-
 const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { performReset } = useArrest();
   const isOffline = !navigator.onLine;
@@ -3569,7 +3736,7 @@ const ResetModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
         <ActionButton
           title="Copy, Save & Reset"
           icon={<Clipboard size={18} />}
-          backgroundColor="bg-blue-600"
+          backgroundColor="bg-tone-accent"
           foregroundColor="text-white"
           onClick={() => {
             performReset(true, true);
@@ -3610,20 +3777,17 @@ const HypothermiaModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
         </p>
         <ActionButton
           title="Severe (< 30°C)"
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Severe)}
         />
         <ActionButton
           title="Moderate (30-35°C)"
-          backgroundColor="bg-orange-500"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Moderate)}
         />
         <ActionButton
           title="Clear / Normothermic"
-          backgroundColor="bg-green-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={() => onConfirm(HypothermiaStatus.Normothermic)}
         />
       </div>
@@ -3631,31 +3795,21 @@ const HypothermiaModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   );
 };
 
-const OtherDrugsModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  onSelectDrug: (drug: DrugToLog) => void;
-}> = ({ isOpen, onClose, onSelectDrug }) => {
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Log Other Medication">
-      <div className="flex flex-col space-y-2">
-        {AppConstants.otherDrugs.map((drug) => (
-          <button
-            key={drug}
-            onClick={() => onSelectDrug({ type: "other", name: drug })}
-            className="w-full text-left p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white"
-          >
-            {drug}
-          </button>
-        ))}
-      </div>
-    </Modal>
-  );
-};
-
 const Etco2ModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { logEtco2 } = useArrest();
+  const { etco2Unit, setEtco2Unit } = useSettings();
   const [value, setValue] = useState("");
+
+  const reading = Number(value.replace(",", "."));
+  const [min, max] = etco2Unit === "kPa" ? [0.1, 20] : [1, 150];
+  const isValid = value !== "" && !isNaN(reading) && reading >= min && reading <= max;
+  // A typical mmHg reading entered while set to kPa is the most likely slip, so name it.
+  const validationMessage =
+    value === "" || isValid
+      ? null
+      : etco2Unit === "kPa" && reading > 20
+        ? "That looks like mmHg. Switch the unit above."
+        : `Enter a value between ${min} and ${max} ${etco2Unit}.`;
 
   const onConfirm = () => {
     logEtco2(value);
@@ -3666,22 +3820,31 @@ const Etco2ModalView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Log ETCO2 Value">
       <div className="flex flex-col space-y-4">
-        <p className="text-center text-gray-600 dark:text-gray-400">Enter the current end-tidal CO2 reading in mmHg.</p>
+        <SegmentedSetting
+          label="Unit"
+          value={etco2Unit}
+          options={[
+            { value: "kPa", label: "kPa" },
+            { value: "mmHg", label: "mmHg" },
+          ]}
+          onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
+        />
         <input
-          type="number"
+          type="text"
+          inputMode="decimal"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="e.g., 35"
+          placeholder={etco2Unit === "kPa" ? "e.g., 4.5" : "e.g., 35"}
           autoFocus
-          className="text-center text-2xl font-bold p-3 border-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="text-center text-2xl font-bold p-3 border-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-tone-accent"
         />
+        {validationMessage && <p className="text-sm text-center text-tone-danger">{validationMessage}</p>}
         <ActionButton
           title="Log Value"
           icon={<Gauge size={18} />}
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
+          tone="primary"
           onClick={onConfirm}
-          disabled={!value || isNaN(Number(value))}
+          disabled={!isValid}
         />
       </div>
     </Modal>
@@ -3706,7 +3869,7 @@ const AirwayAdjunctModal: React.FC<{
         <p className="text-center text-gray-600 dark:text-gray-400">Choose the type of advanced airway placed.</p>
         <ActionButton
           title="Supraglottic Airway (i-Gel)"
-          backgroundColor="bg-blue-600"
+          backgroundColor="bg-tone-accent"
           foregroundColor="text-white"
           onClick={() => handleSelect(AirwayAdjunctType.SGA)}
         />
@@ -3747,12 +3910,17 @@ const DosageEntryModal: React.FC<{
   const [age, setAge] = useState<PatientAgeCategory>(patientAgeCategory || PatientAgeCategory.Adult);
   const [manualAmount, setManualAmount] = useState("");
   const [manualUnit, setManualUnit] = useState("mg");
+  // A second tap while the dialog is closing would log the dose twice.
+  const didConfirmRef = useRef(false);
 
   const onConfirm = (dosage: string, ageVal: PatientAgeCategory | null) => {
+    if (didConfirmRef.current) return;
+    didConfirmRef.current = true;
     if (ageVal) {
       setPatientAgeCategory(ageVal);
-      // Two-way sync: update demographic age from drug calculator
-      const ageStr = categoryToAgeString(ageVal);
+      // Two-way sync: years as a bare number ("6"), months kept as months ("6 months"), so an infant isn't
+      // recorded as 6 years old. Adult records nothing.
+      const ageStr = ageTextForCategory(ageVal, ageVal === PatientAgeCategory.Adult);
       if (ageStr && ageStr !== patientAgeStr) {
         setPatientAgeStr(ageStr);
       }
@@ -3793,14 +3961,14 @@ const DosageEntryModal: React.FC<{
         {drug.type === "adrenaline" || drug.type === "amiodarone" ? (
           <>
             <div className="space-y-2">
-              <h4 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Patient Age</h4>
+              <h4 className="text-tone-accent font-semibold text-sm">Patient Age</h4>
               <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-xl">
                 <div className="flex justify-between items-center">
                   <span className="text-gray-800 dark:text-gray-200">Age Category</span>
                   <select
                     value={age}
                     onChange={(e) => setAge(e.target.value as PatientAgeCategory)}
-                    className="bg-transparent text-blue-600 dark:text-blue-400 font-medium text-right"
+                    className="bg-transparent text-tone-accent font-medium text-right"
                   >
                     {allPatientAgeCategories.map((cat) => (
                       <option key={cat} value={cat}>
@@ -3813,14 +3981,14 @@ const DosageEntryModal: React.FC<{
             </div>
 
             <div className="space-y-2">
-              <h4 className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Calculated Dose</h4>
+              <h4 className="text-tone-accent font-semibold text-sm">Calculated Dose</h4>
               <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
                 {calculatedDose ? (
                   <div className="space-y-3">
                     <p className="text-center text-3xl font-bold text-gray-900 dark:text-white">{calculatedDose}</p>
                     <ActionButton
                       title="Log Calculated Dose"
-                      backgroundColor="bg-blue-600"
+                      backgroundColor="bg-tone-accent"
                       foregroundColor="text-white"
                       onClick={() => onConfirm(calculatedDose, age)}
                     />
@@ -3847,7 +4015,7 @@ const DosageEntryModal: React.FC<{
                   <select
                     value={manualUnit}
                     onChange={(e) => setManualUnit(e.target.value)}
-                    className="bg-transparent text-blue-600 dark:text-blue-400 font-medium"
+                    className="bg-transparent text-tone-accent font-medium"
                   >
                     <option>mg</option>
                     <option>mcg</option>
@@ -3905,53 +4073,152 @@ const DosageEntryModal: React.FC<{
 // REUSABLE UI COMPONENTS
 //============================================================================
 
+// Older call sites still pass colour classes; read their intent so they pick up the calm palette.
+const toneFromLegacyColour = (backgroundColor = ""): ButtonTone => {
+  if (backgroundColor.includes("bg-red")) return "danger";
+  if (/bg-(blue|green)-(5|6)00/.test(backgroundColor)) return "primary";
+  return "standard";
+};
+
 interface ActionButtonProps {
   title: string;
   icon?: React.ReactNode;
-  backgroundColor: string;
-  foregroundColor: string;
+  tone?: ButtonTone;
+  highlight?: ButtonHighlight;
+  backgroundColor?: string;
+  foregroundColor?: string;
   height?: string;
   fontSize?: string;
   onClick: () => void;
   disabled?: boolean;
   className?: string;
+  /** A second line under the title, such as a drug countdown or which dose is due. */
+  detail?: string | null;
+  /** Offers a small "Not now" bell-slash button that quietens the button's reminder. */
+  onNotNow?: () => void;
 }
+
+// The four drug buttons share one height, tall enough for a detail line, so the grid never jumps as lines come and go.
+const DRUG_BUTTON_HEIGHT = "h-16 py-1";
 
 const ActionButton: React.FC<ActionButtonProps> = ({
   title,
   icon,
+  tone,
+  highlight,
   backgroundColor,
-  foregroundColor,
   height = "h-14",
   fontSize = "text-base",
   onClick,
   disabled = false,
   className = "",
+  detail,
+  onNotNow,
 }) => {
-  return (
+  const [flash, setFlash] = useState(false);
+  const colours = highlight ? HIGHLIGHT_CLASSES[highlight] : TONE_CLASSES[tone ?? toneFromLegacyColour(backgroundColor)];
+
+  const button = (
     <button
-      onClick={onClick}
+      aria-label={detail ? `${title}, ${detail}` : undefined}
+      onClick={() => {
+        onClick();
+        // A brief ring on release confirms the tap even when nothing else on screen changes.
+        setFlash(true);
+        setTimeout(() => setFlash(false), 350);
+      }}
       disabled={disabled}
       className={`
-        flex items-center justify-center space-x-2 w-full px-4 rounded-xl 
-        font-semibold shadow-md
-        transition-all duration-150 ease-in-out
-        active:scale-95 active:shadow-inner
+        flex items-center justify-center space-x-2 w-full px-4 rounded-xl
+        font-semibold
+        transition-all duration-150 ease-out
+        active:scale-95 active:brightness-90
         disabled:opacity-40 disabled:cursor-not-allowed
-        ${height} ${fontSize} ${backgroundColor} ${foregroundColor} ${className}
+        ${flash ? "ring-2 ring-tone-accent ring-offset-2 ring-offset-background" : ""}
+        ${height} ${fontSize} ${colours} ${className}
       `}
     >
       {icon}
-      <span>{title}</span>
+      {detail ? (
+        <span className="flex flex-col items-start leading-tight">
+          <span className="line-clamp-2">{title}</span>
+          <span className={`text-xs font-bold tabular-nums ${highlight ? "" : "opacity-80"}`}>{detail}</span>
+        </span>
+      ) : (
+        // Centred in the button's height, at most two lines.
+        <span className="line-clamp-2 text-center leading-tight">{title}</span>
+      )}
     </button>
+  );
+
+  if (!onNotNow) return button;
+  // "Not now" replaces the old banners' dismiss buttons: a small bell-slash in the corner, offered only while lit.
+  return (
+    <div className="relative">
+      {button}
+      <button
+        onClick={onNotNow}
+        aria-label={`Not now: ${title}`}
+        title="Not now"
+        className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900 shadow flex items-center justify-center active:scale-95 transition-transform"
+      >
+        <BellOff size={14} aria-hidden="true" />
+      </button>
+    </div>
   );
 };
 
+// The arrest state, coloured by meaning: red is kept for "act now", so an arrest in progress is green.
+const StateBadge: React.FC = () => {
+  const { arrestState, isTimerPaused } = useArrest();
+  const label = isTimerPaused
+    ? "PAUSED"
+    : { [ArrestState.Pending]: "READY", [ArrestState.Active]: "ACTIVE", [ArrestState.Rosc]: "ROSC", [ArrestState.Ended]: "DECEASED" }[
+        arrestState
+      ];
+  const colour =
+    isTimerPaused || arrestState === ArrestState.Pending || arrestState === ArrestState.Ended
+      ? "bg-tone-slate text-tone-on-slate"
+      : arrestState === ArrestState.Active
+        ? "bg-tone-accent text-tone-on-accent"
+        : "bg-tone-positive text-tone-on-positive";
+  return <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colour}`}>{label}</span>;
+};
+
+// Time spent on the arrest before eResus was started. Always the same three buttons, so they're where the crew
+// expects them whenever they're needed.
+const TimeOffsetButtons: React.FC<{ onAdd: (seconds: number) => void }> = ({ onAdd }) => {
+  const chip = "h-8 rounded-full bg-tone-tint text-tone-on-tint text-xs font-semibold active:scale-95 transition-transform";
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 5, 10].map((minutes) => (
+        <button
+          key={minutes}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAdd(minutes * 60);
+          }}
+          aria-label={`Add ${minutes} minute${minutes === 1 ? "" : "s"} before eResus`}
+          className={`${chip} w-[42px] font-mono`}
+        >
+          +{minutes}
+        </button>
+      ))}
+      <span className="text-xs text-gray-500 dark:text-gray-400">min</span>
+    </div>
+  );
+};
+
+const spokenDuration = (seconds: number) => {
+  const total = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(total / 60)} minutes ${total % 60} seconds`;
+};
+
 // Header & Timers
-const HeaderView: React.FC = () => {
+const HeaderView: React.FC<{ onAddTime?: () => void }> = ({ onAddTime }) => {
   const {
     arrestState,
-    masterTime,
     timeOffset,
     totalArrestTime,
     addTimeOffset,
@@ -3959,106 +4226,273 @@ const HeaderView: React.FC = () => {
     uiState,
     isTimerPaused,
     analyseRhythm,
+    roscTime,
   } = useArrest();
+  const [showTimeCorrection, setShowTimeCorrection] = useState(false);
+  const [showBeforeEResus, setShowBeforeEResus] = useState(false);
 
-  const isRhythmCheckDue = arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0;
-
-  const stateInfo = {
-    [ArrestState.Pending]: { text: "PENDING", color: "bg-gray-500" },
-    [ArrestState.Active]: { text: "ACTIVE", color: "bg-red-500" },
-    [ArrestState.Rosc]: { text: "ROSC", color: "bg-green-500" },
-    [ArrestState.Ended]: { text: "DECEASED", color: "bg-black" },
-  };
+  const { isRhythmCheckDue } = useArrest();
+  const showsDue = isRhythmCheckDue && !isTimerPaused;
+  const canCorrectTime = timeOffset > 0 && !isRhythmCheckDue && arrestState !== ArrestState.Ended;
+  const canAddBeforeEResus = arrestState === ArrestState.Active && !isRhythmCheckDue && !isTimerPaused;
 
   const handleHeaderTap = () => {
-    if (isRhythmCheckDue && !isTimerPaused) {
-      analyseRhythm();
-    }
+    if (showsDue) analyseRhythm();
   };
 
   const headerBg = isTimerPaused
-    ? "bg-orange-100 dark:bg-orange-900/30"
+    ? "bg-tone-slate/15"
     : isRhythmCheckDue
-      ? "bg-red-600"
+      ? "bg-tone-danger-solid"
       : "bg-white dark:bg-gray-800";
+  // Frozen clocks (paused, ended) look frozen; on the red header, white.
+  const clockColour =
+    isTimerPaused || arrestState === ArrestState.Ended
+      ? "text-gray-500 dark:text-gray-400"
+      : showsDue
+        ? "text-white"
+        : "text-tone-accent";
+
+  // Time since the arrest was confirmed. "~" when part of it is estimated; tapping it then lets a
+  // mis-tapped +10 be corrected. Not disabled: a disabled button swallows the tap the header needs when a
+  // rhythm check is due.
+  const clockButton = (large: boolean, colour: string, prefix = "") => (
+    <button
+      type="button"
+      tabIndex={canCorrectTime ? 0 : -1}
+      onClick={(e) => {
+        if (!canCorrectTime) return;
+        e.stopPropagation();
+        setShowTimeCorrection(true);
+      }}
+      aria-label={
+        timeOffset > 0
+          ? `${prefix}${TimeFormatter.format(totalArrestTime)}, including about ${Math.round(timeOffset / 60)} minutes estimated`
+          : undefined
+      }
+      className={`flex items-baseline font-mono font-bold ${canCorrectTime ? "" : "pointer-events-none"} ${colour}`}
+    >
+      {prefix && <span className="font-sans font-semibold mr-1">{prefix}</span>}
+      {timeOffset > 0 && <span className={`${large ? "text-2xl" : ""} mr-0.5`}>~</span>}
+      <span className={large ? "text-4xl" : ""}>{TimeFormatter.format(totalArrestTime)}</span>
+    </button>
+  );
 
   return (
     <div
-      className={`p-4 shadow-md transition-colors duration-300 ${headerBg} ${isRhythmCheckDue && !isTimerPaused ? "cursor-pointer" : ""}`}
+      className={`relative z-10 px-4 pt-3 pb-3 shadow-md transition-colors duration-300 ${headerBg} ${showsDue ? "cursor-pointer" : ""}`}
       onClick={handleHeaderTap}
     >
-      <div className="flex justify-between items-center mb-3">
-        <div className="flex flex-col items-start space-y-1">
-          {isRhythmCheckDue && !isTimerPaused ? (
-            <h1 className="text-2xl font-bold text-white leading-tight">RHYTHM CHECK DUE</h1>
+      {/* The same height in every state, so the screen below never jumps when the buttons go or a check falls due. */}
+      <div className="flex justify-between items-start gap-2 h-[104px]">
+        <div className={`flex flex-col items-start gap-1.5 min-w-0 ${showsDue ? "text-white" : "text-gray-900 dark:text-white"}`}>
+          {showsDue ? (
+            <>
+              {/* The whole header is the button now; say so in words, not just colour. */}
+              <h1 className="text-2xl font-extrabold leading-tight">RHYTHM CHECK DUE</h1>
+              <p className="font-semibold">Tap to analyse</p>
+            </>
           ) : (
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">eResus</h1>
+            <>
+              <h1 className="text-2xl font-bold leading-tight">eResus</h1>
+              <StateBadge />
+              {/* Under the badge, where there's room, rather than adding a row to the header. */}
+              {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
+                <TimeOffsetButtons
+                  onAdd={(seconds) => {
+                    addTimeOffset(seconds);
+                    onAddTime?.();
+                  }}
+                />
+              )}
+            </>
           )}
-          <span
-            className={`px-2 py-0.5 rounded-lg text-xs font-black text-white ${
-              isTimerPaused ? "bg-orange-500" : isRhythmCheckDue ? "bg-white/30" : stateInfo[arrestState].color
-            }`}
-          >
-            {isTimerPaused ? "PAUSED" : stateInfo[arrestState].text}
-          </span>
         </div>
 
-        <div className="flex flex-col items-end">
-          <div className="flex items-baseline">
-            {timeOffset > 0 && (
+        <div className="flex flex-col items-end flex-shrink-0">
+          {arrestState === ArrestState.Rosc && roscTime !== null ? (
+            <>
+              {/* After ROSC the time that matters most is since ROSC; the arrest clock stays alongside. */}
               <span
-                className={`font-mono font-bold text-2xl mr-1 ${
-                  isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-blue-600 dark:text-blue-400"
-                }`}
+                className="font-mono font-bold text-4xl text-tone-positive"
+                aria-label={`${spokenDuration(totalArrestTime - roscTime)} since ROSC`}
               >
-                {Math.floor(timeOffset / 60)}+
+                {TimeFormatter.format(totalArrestTime - roscTime)}
               </span>
-            )}
-            <span
-              className={`font-mono font-bold text-4xl ${
-                isRhythmCheckDue && !isTimerPaused ? "text-white" : "text-blue-600 dark:text-blue-400"
-              }`}
-            >
-              {TimeFormatter.format(masterTime + timeOffset)}
-            </span>
-          </div>
-          {(arrestState === ArrestState.Active || arrestState === ArrestState.Pending) && !isTimerPaused && (
-            <div className="flex space-x-1 mt-1">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(60);
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
-              >
-                +1m
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(300);
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
-              >
-                +5m
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addTimeOffset(600);
-                }}
-                className={`px-2 py-0.5 text-xs rounded ${isRhythmCheckDue ? "bg-white/20 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
-              >
-                +10m
-              </button>
-            </div>
+              <span className="flex items-baseline gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+                <span>since ROSC</span>
+                {clockButton(false, "text-gray-500 dark:text-gray-400", "· Arrest")}
+              </span>
+            </>
+          ) : (
+            <>
+              {clockButton(true, clockColour)}
+              <span className={`text-sm ${showsDue ? "text-white" : "text-gray-500 dark:text-gray-400"}`}>
+                {arrestState === ArrestState.Pending ? "\u00a0" : "since arrest"}
+              </span>
+            </>
           )}
         </div>
       </div>
 
-      {/* Stats Row */}
-      {arrestState !== ArrestState.Pending && <StatsRow />}
+      {/* Stats Row. Tapping it adds shocks and drugs given before eResus was started. */}
+      {arrestState !== ArrestState.Pending && (
+        <button
+          type="button"
+          tabIndex={canAddBeforeEResus ? 0 : -1}
+          className={`block w-full mt-2 text-left ${canAddBeforeEResus ? "" : "pointer-events-none"}`}
+          aria-describedby={canAddBeforeEResus ? "before-eresus-hint" : undefined}
+          onClick={(e) => {
+            if (!canAddBeforeEResus) return;
+            e.stopPropagation();
+            setShowBeforeEResus(true);
+          }}
+        >
+          <StatsRow />
+          <span id="before-eresus-hint" className="sr-only">
+            Add shocks or drugs given before eResus was started
+          </span>
+        </button>
+      )}
+      {/* Outside the header, so the backdrop isn't under the bottom bar and its taps don't reach the header. */}
+      {createPortal(
+        <div onClick={(e) => e.stopPropagation()}>
+          <TimeCorrectionModal isOpen={showTimeCorrection} onClose={() => setShowTimeCorrection(false)} />
+          <BeforeEResusModal isOpen={showBeforeEResus} onClose={() => setShowBeforeEResus(false)} />
+        </div>,
+        document.body,
+      )}
     </div>
+  );
+};
+
+const TimeCorrectionModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { timeOffset, setTimeBeforeStart } = useArrest();
+  const [refused, setRefused] = useState(false);
+  const minutes = Math.round(timeOffset / 60);
+  const close = () => {
+    setRefused(false);
+    onClose();
+  };
+  const correct = (seconds: number) => {
+    if (setTimeBeforeStart(timeOffset - seconds)) close();
+    else setRefused(true);
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={close} title={`~${minutes} min before eResus (estimated)`}>
+      <div className="space-y-3">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Time between the first ambulance resource confirming arrest and starting eResus, included in the clock and ToR
+          timing.
+        </p>
+        {refused && (
+          <p className="text-sm text-tone-danger">
+            <strong>Can't reduce it that far.</strong> Some entries are earlier than that, so the time wasn't changed.
+          </p>
+        )}
+        <button onClick={() => correct(60)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+          Remove 1 min
+        </button>
+        {timeOffset >= 300 && (
+          <button onClick={() => correct(300)} className="w-full py-3 rounded-xl font-semibold bg-tone-tint text-tone-on-tint">
+            Remove 5 min
+          </button>
+        )}
+        <button
+          onClick={() => correct(timeOffset)}
+          className="w-full py-3 rounded-xl font-semibold bg-tone-danger text-tone-on-danger"
+        >
+          Clear
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+// Shocks and drugs given before eResus was started, which keep the drug prompts in step.
+// Times aren't known, so they're recorded at the moment eResus was started and marked as estimated.
+const BEFORE_ITEMS: [GivenItem, string][] = [
+  ["shock", "Shocks"],
+  ["adrenaline", "Adrenaline"],
+  ["amiodarone", "Amiodarone"],
+  ["lidocaine", "Lidocaine"],
+];
+
+const BeforeEResusModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { logBeforeStart, antiarrhythmicGiven, drugTimingShockCount } = useArrest();
+  const [counts, setCounts] = useState<Partial<Record<GivenItem, number>>>({});
+  const close = () => {
+    setCounts({});
+    onClose();
+  };
+  // One antiarrhythmic per arrest, as on the main screen.
+  const isAllowed = (item: GivenItem) =>
+    item === "amiodarone"
+      ? antiarrhythmicGiven !== AntiarrhythmicDrug.Lidocaine && !counts.lidocaine
+      : item === "lidocaine"
+        ? antiarrhythmicGiven !== AntiarrhythmicDrug.Amiodarone && !counts.amiodarone
+        : true;
+  const change = (item: GivenItem, by: number) =>
+    setCounts((c) => ({ ...c, [item]: Math.min(10, Math.max(0, (c[item] ?? 0) + by)) }));
+  const hasAny = Object.values(counts).some((n) => (n ?? 0) > 0);
+  const antiarrhythmicBeforeThirdShock =
+    (counts.amiodarone ?? 0) + (counts.lidocaine ?? 0) > 0 && drugTimingShockCount + (counts.shock ?? 0) < 3;
+
+  return (
+    <Modal isOpen={isOpen} onClose={close} title="Given before eResus">
+      <div className="divide-y divide-gray-200 dark:divide-gray-700">
+        {BEFORE_ITEMS.map(([item, label]) => {
+          const value = counts[item] ?? 0;
+          const allowed = isAllowed(item);
+          return (
+            <div key={item} className={`flex items-center justify-between py-2 ${allowed ? "" : "opacity-40"}`}>
+              <span className="font-semibold text-gray-900 dark:text-white">{label}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => change(item, -1)}
+                  disabled={!allowed || value === 0}
+                  aria-label={`One fewer ${label.toLowerCase()}`}
+                  className="w-11 h-11 rounded-xl flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-tone-accent disabled:opacity-40"
+                >
+                  <Minus size={20} />
+                </button>
+                <span className="w-8 text-center font-mono text-xl font-bold text-gray-900 dark:text-white" aria-live="polite">
+                  {value}
+                </span>
+                <button
+                  onClick={() => change(item, 1)}
+                  disabled={!allowed || value === 10}
+                  aria-label={`One more ${label.toLowerCase()}`}
+                  className="w-11 h-11 rounded-xl flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-tone-accent disabled:opacity-40"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {antiarrhythmicBeforeThirdShock && (
+        <p className="mt-3 p-3 rounded-xl text-sm font-semibold bg-tone-alert/25 text-tone-on-alert">
+          Amiodarone and lidocaine are usually given after the 3rd shock. Add the shocks given too, so the next dose is
+          prompted at the right time.
+        </p>
+      )}
+      <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+        Given before eResus, time unknown. If you know when, choose it on the arrest screen.
+      </p>
+      <button
+        disabled={!hasAny}
+        onClick={() => {
+          logBeforeStart(counts);
+          close();
+        }}
+        className="mt-4 w-full py-3 rounded-xl font-semibold bg-tone-accent text-tone-on-accent disabled:opacity-40"
+      >
+        Add
+      </button>
+    </Modal>
   );
 };
 
@@ -4073,35 +4507,22 @@ const StatsRow: React.FC = () => {
     uiState,
     arrestState,
     isTimerPaused,
+    antiarrhythmicGiven,
   } = useArrest();
 
-  const isRhythmCheckDue =
-    arrestState === ArrestState.Active && uiState === UIState.Default && cprTime <= 0 && !isTimerPaused;
+  const isRhythmCheckDue = useArrest().isRhythmCheckDue && !isTimerPaused;
+  const color = `font-bold ${isRhythmCheckDue ? "text-white" : "text-foreground"}`;
+  // One antiarrhythmic per arrest, so one slot: amiodarone until lidocaine is the one given.
+  const usesLidocaine = antiarrhythmicGiven === AntiarrhythmicDrug.Lidocaine;
 
   return (
-    <div className="flex justify-around">
+    <div className="flex">
+      <StatItem label="Shocks" value={shockCount} color={color} isDue={isRhythmCheckDue} />
+      <StatItem label="Adrenaline" value={adrenalineCount} color={color} isDue={isRhythmCheckDue} />
       <StatItem
-        label="Shocks"
-        value={shockCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-orange-500"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Adrenaline"
-        value={adrenalineCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-red-500"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Amiodarone"
-        value={amiodaroneCount}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-pink-500"}`}
-        isDue={isRhythmCheckDue}
-      />
-      <StatItem
-        label="Lidocaine"
-        value={Math.max(lidocaineCount, dynamicLidocaineCount)}
-        color={`font-bold ${isRhythmCheckDue ? "text-white" : "text-purple-500"}`}
+        label={usesLidocaine ? "Lidocaine" : "Amiodarone"}
+        value={usesLidocaine ? Math.max(lidocaineCount, dynamicLidocaineCount) : amiodaroneCount}
+        color={color}
         isDue={isRhythmCheckDue}
       />
     </div>
@@ -4114,31 +4535,114 @@ const StatItem: React.FC<{ label: string; value: number; color: string; isDue?: 
   color,
   isDue,
 }) => (
-  <div className={`flex flex-col items-center ${color}`}>
+  <div className={`flex-1 flex flex-col items-center justify-center min-h-11 ${color}`}>
     <span className="font-mono font-bold text-lg">{value}</span>
-    <span
-      className={`text-[10px] font-semibold uppercase ${isDue ? "text-white/80" : "text-gray-500 dark:text-gray-400"}`}
-    >
+    <span className={`text-xs font-semibold ${isDue ? "text-white" : "text-gray-500 dark:text-gray-400"}`}>
       {label}
     </span>
   </div>
 );
 
-const CPRTimerView: React.FC = () => {
-  const { cprTime } = useArrest();
-  const { cprCycleDuration } = useSettings();
+const useVoiceListener = () =>
+  useSyncExternalStore(voiceCommandListener.subscribe, voiceCommandListener.getState);
 
-  const percentage = cprTime / cprCycleDuration;
+// Only true once the browser has confirmed it can recognise speech on the device.
+const useVoiceCommandsAvailable = () => {
+  const { voiceCommandsEnabled } = useSettings();
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    if (!voiceCommandsEnabled) return;
+    let cancelled = false;
+    checkVoiceCommandAvailability().then((status) => {
+      if (!cancelled) setAvailable(status === "available");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [voiceCommandsEnabled]);
+  return voiceCommandsEnabled && available;
+};
+
+// Press and hold to speak, then let go (matches iOS). Only a deliberate hold turns the microphone on,
+// never a tap or a brush.
+const usePushToTalk = (onVoiceTranscript: ((transcript: string) => void) | undefined, label: string) => {
+  const voiceAvailable = useVoiceCommandsAvailable() && onVoiceTranscript !== undefined;
+  const [isPressed, setIsPressed] = useState(false);
+  // Set once the hold has lasted long enough, whether or not the recogniser starts, so the ring always changes
+  // under the finger and says so if the microphone couldn't be used (matches iOS).
+  const [isHolding, setIsHolding] = useState(false);
+  const [micFailed, setMicFailed] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // If the ring goes mid-hold, the timer mustn't start the microphone afterwards.
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    },
+    [],
+  );
+  const startTalking = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setIsPressed(true);
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      const started = voiceCommandListener.startPushToTalk();
+      setMicFailed(!started);
+      setIsHolding(true);
+      navigator.vibrate?.(15);
+    }, 350);
+  };
+  const stopTalking = () => {
+    setIsPressed(false);
+    setIsHolding(false);
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    voiceCommandListener.stopPushToTalk((transcript) => onVoiceTranscript?.(transcript));
+  };
+  const pushToTalk = voiceAvailable
+    ? {
+        onPointerDown: startTalking,
+        onPointerUp: stopTalking,
+        onPointerLeave: stopTalking,
+        onPointerCancel: stopTalking,
+        onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+        role: "button",
+        "aria-label": label,
+      }
+    : {};
+  return { voiceAvailable, isPressed, isHolding, micFailed, pushToTalk };
+};
+
+// Holding anywhere on the ring is push-to-talk: speak, then let go (matches iOS).
+const CPRTimerView: React.FC<{ onVoiceTranscript?: (transcript: string) => void }> = ({ onVoiceTranscript }) => {
+  const { cprTime, rhythmCheckOverdue, uiState } = useArrest();
+  const isDue = rhythmCheckOverdue !== null;
+  // During a rhythm check the cycle stands still until a shock or a non-shockable rhythm restarts it.
+  const isPausedForCheck = uiState !== UIState.Default;
+  const { cprCycleDuration } = useSettings();
+  const listener = useVoiceListener();
+  const { voiceAvailable, isPressed, isHolding, micFailed, pushToTalk } = usePushToTalk(
+    onVoiceTranscript,
+    "Press and hold to speak a command",
+  );
+
+  const percentage = Math.max(0, cprTime) / cprCycleDuration;
   const strokeDasharray = 2 * Math.PI * 52;
   const strokeDashoffset = strokeDasharray * (1 - percentage);
-  const isEnding = cprTime <= 10;
+  const isEnding = isDue || (cprTime <= 10 && !isPausedForCheck);
 
   return (
-    <div className="relative w-56 h-56">
+    <div
+      className={`relative w-52 h-52 ${
+        voiceAvailable ? "select-none touch-none rounded-full motion-safe:transition-transform motion-safe:duration-200" : ""
+      } ${isPressed ? "motion-safe:scale-[0.94]" : ""}`}
+      {...pushToTalk}
+    >
       <svg className="w-full h-full" viewBox="0 0 120 120">
         <circle
           className="text-gray-200 dark:text-gray-700"
-          strokeWidth="10"
+          strokeWidth="9"
           stroke="currentColor"
           fill="transparent"
           r="52"
@@ -4146,8 +4650,10 @@ const CPRTimerView: React.FC = () => {
           cy="60"
         />
         <circle
-          className={`transition-all duration-1000 linear ${isEnding ? "text-red-500" : "text-blue-600"}`}
-          strokeWidth="10"
+          className={`transition-all duration-1000 linear ${
+            isPausedForCheck ? "text-tone-slate" : isEnding ? "text-tone-danger" : "text-tone-accent"
+          }`}
+          strokeWidth="9"
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
@@ -4159,15 +4665,140 @@ const CPRTimerView: React.FC = () => {
           transform="rotate(-90 60 60)"
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`font-mono font-bold text-5xl ${isEnding ? "text-red-500" : "text-gray-900 dark:text-white"}`}>
-          {TimeFormatter.format(cprTime)}
-        </span>
-        <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">CPR Cycle</span>
+      <div
+        className="absolute inset-0 flex flex-col items-center justify-center"
+        aria-label={
+          isDue
+            ? `Rhythm check overdue by ${spokenDuration(rhythmCheckOverdue ?? 0)}`
+            : isPausedForCheck
+              ? "CPR cycle paused for rhythm check"
+              : `${spokenDuration(Math.max(0, cprTime))} left in CPR cycle`
+        }
+      >
+        {isDue ? (
+          // Overdue: how late the check is comes first; the next cycle stays visible, smaller (matches iOS).
+          <>
+            <span className="text-xs font-bold uppercase text-tone-danger">Check due</span>
+            <span className="font-mono font-bold text-4xl text-tone-danger">+{TimeFormatter.format(rhythmCheckOverdue ?? 0)}</span>
+            <span className="text-xs font-semibold tabular-nums text-gray-500 dark:text-gray-400">
+              next {TimeFormatter.format(Math.max(0, cprTime))}
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={`font-mono font-bold text-5xl ${
+                isPausedForCheck ? "text-gray-500 dark:text-gray-400" : isEnding ? "text-tone-danger" : "text-gray-900 dark:text-white"
+              }`}
+            >
+              {TimeFormatter.format(Math.max(0, cprTime))}
+            </span>
+            {/* "Analysing", not "Paused", so it can't be mistaken for the arrest clock being paused. */}
+            <span className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
+              {isPausedForCheck ? "Analysing" : "CPR Cycle"}
+            </span>
+          </>
+        )}
       </div>
+      {/* Also when hands-free hears the wake word, so it's plain the command is being taken. */}
+      {voiceAvailable && (isHolding || listener.isPushToTalkActive || listener.heardWakeWord) && (
+        <PushToTalkRing
+          transcript={listener.transcript}
+          failed={(micFailed || isHolding) && !listener.isPushToTalkActive && !listener.heardWakeWord}
+        />
+      )}
     </div>
   );
 };
+
+// The listening state of the ring (matches iOS). Browsers don't expose the recogniser's audio level,
+// so the halo bumps as each word arrives instead of following loudness.
+const PushToTalkRing: React.FC<{ transcript: string; failed?: boolean }> = ({ transcript, failed = false }) => (
+  // Exactly over the timer ring, so none of it shows round the microphone (matches iOS).
+  <div className="absolute inset-0 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
+    <div className="absolute inset-0 rounded-full border-[10px] border-tone-danger motion-safe:animate-ptt-ripple motion-reduce:hidden" />
+    <div
+      key={transcript.split(" ").length}
+      className="absolute inset-0 rounded-full border-[18px] border-tone-danger opacity-20 motion-safe:animate-ptt-bump"
+    />
+    <svg className="absolute inset-0 w-full h-full" viewBox="0 0 120 120">
+      <circle className="fill-card" r="50" cx="60" cy="60" />
+      <circle
+        className="text-tone-danger motion-safe:animate-ptt-draw"
+        strokeWidth="10"
+        strokeLinecap="round"
+        stroke="currentColor"
+        fill="transparent"
+        strokeDasharray="326.7"
+        r="52"
+        cx="60"
+        cy="60"
+        transform="rotate(-90 60 60)"
+      />
+    </svg>
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-12 text-center">
+      {/* The timer gives way to a microphone as listening starts. */}
+      {failed ? (
+        <MicOff size={44} strokeWidth={2.5} className="text-tone-danger" />
+      ) : (
+        <Mic
+          size={44}
+          strokeWidth={2.5}
+          className={`text-tone-danger motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:duration-300 ${
+            transcript ? "" : "motion-safe:animate-pulse"
+          }`}
+        />
+      )}
+      <span className="font-semibold text-sm text-foreground line-clamp-4">
+        {failed ? "Microphone unavailable. Try again." : transcript || "Listening…"}
+      </span>
+    </div>
+  </div>
+);
+
+// A glow round the edge of the screen while hands-free has heard the wake word and is taking a command,
+// so it's obvious across the room that eResus is listening (matches iOS). Never blocks a tap.
+const WakeWordEdgeGlow: React.FC = () => {
+  const listener = useVoiceListener();
+  if (!listener.heardWakeWord) return null;
+  return (
+    <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-[60] motion-safe:animate-in motion-safe:fade-in duration-200">
+      <div className="eresus-edge-glow absolute inset-0 rounded-[40px] blur-md opacity-90 motion-safe:animate-edge-glow-spin" />
+      <div className="eresus-edge-glow eresus-edge-glow-thin absolute inset-0 rounded-[40px] motion-safe:animate-edge-glow-spin" />
+    </div>
+  );
+};
+
+const VoiceListeningStatus: React.FC<{ holdHint?: string; className?: string }> = ({
+  holdHint = "Hold the ring to talk.",
+  className = "-mt-4 justify-center",
+}) => {
+  const listener = useVoiceListener();
+  const { voiceWakeWord } = useSettings();
+  if (!listener.isHandsFreeActive || listener.isPushToTalkActive) return null;
+  const wakeWord = voiceWakeWord === "eresus" ? "eResus" : "Scribe";
+  // Long transcripts are cut from the start so the latest words stay visible.
+  return (
+    <p
+      className={`${className} flex items-center gap-1.5 text-xs ${
+        listener.heardWakeWord ? "text-tone-danger" : "text-gray-500 dark:text-gray-400"
+      }`}
+    >
+      {listener.heardWakeWord ? <AudioWaveform size={14} className="shrink-0" /> : <Ear size={14} className="shrink-0" />}
+      <span className="truncate [direction:rtl]">
+        <bdi>
+          {listener.heardWakeWord
+            ? `“${wakeWord}” heard: ${listener.transcript}`
+            : `Listening for “${wakeWord}”. ${holdHint}`}
+        </bdi>
+      </span>
+    </p>
+  );
+};
+
+// Logs saved by older versions said "Deceased", "Complete" or "Incomplete"; shown in today's words (matches iOS).
+const displayOutcome = (stored: string): string =>
+  stored === "Deceased" || stored === "Complete" ? "Resuscitation stopped" : /Incomplete/.test(stored) ? "Unknown" : stored;
 
 // Screen State Views
 const IosAppStoreBanner: React.FC = () => {
@@ -4177,9 +4808,9 @@ const IosAppStoreBanner: React.FC = () => {
   if (!isIos || dismissed) return null;
 
   return (
-    <div className="p-4 bg-blue-50 dark:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 flex items-center space-x-3">
+    <div className="p-4 bg-tone-tint rounded-xl border border-tone-accent/30 flex items-center space-x-3">
       <img
-        src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg"
+        src="/icons/icon-192.png"
         className="w-12 h-12 rounded-xl flex-shrink-0"
         alt="eResus"
       />
@@ -4189,7 +4820,7 @@ const IosAppStoreBanner: React.FC = () => {
           href="https://apps.apple.com/gb/app/eresus/id6753123316"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm text-blue-600 dark:text-blue-400 font-medium"
+          className="text-sm text-tone-accent font-medium"
         >
           Download for iOS →
         </a>
@@ -4210,7 +4841,9 @@ const IosAppStoreBanner: React.FC = () => {
 const PendingView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
-}> = ({ onShowPdf, onShowNewborn }) => {
+  needsSetup?: boolean;
+  onStartSetup?: () => void;
+}> = ({ onShowPdf, onShowNewborn, needsSetup = false, onStartSetup }) => {
   const { startArrest, showRecoveryPrompt, resumeRecoveredSession, discardRecoveredSession, receiveSessionTransfer } =
     useArrest();
   const [showReceiveTransfer, setShowReceiveTransfer] = useState(false);
@@ -4246,8 +4879,7 @@ const PendingView: React.FC<{
           <div className="flex space-x-3">
             <ActionButton
               title="Resume"
-              backgroundColor="bg-green-600"
-              foregroundColor="text-white"
+              tone="primary"
               height="h-12"
               onClick={resumeRecoveredSession}
             />
@@ -4264,8 +4896,7 @@ const PendingView: React.FC<{
       <IosAppStoreBanner />
       <ActionButton
         title="Start Arrest"
-        backgroundColor="bg-red-600"
-        foregroundColor="text-white"
+        tone="primary"
         height="h-20"
         fontSize="text-2xl"
         onClick={startArrest}
@@ -4273,13 +4904,26 @@ const PendingView: React.FC<{
 
       <ActionButton
         title="Newborn Life Support"
-        backgroundColor="bg-purple-600"
-        foregroundColor="text-white"
+        tone="standard"
         height="h-16"
         fontSize="text-lg"
         onClick={onShowNewborn}
       />
-      <AlgorithmGridView onShowPdf={onShowPdf} />
+      <GuidelinesView onShowPdf={onShowPdf} />
+
+      {needsSetup && onStartSetup && (
+        <button
+          onClick={onStartSetup}
+          className="w-full flex items-center gap-3 p-4 text-left rounded-xl bg-card border border-border active:scale-[0.99] transition-transform"
+        >
+          <Settings size={20} className="text-muted-foreground shrink-0" />
+          <span className="flex-grow">
+            <span className="block text-sm font-semibold text-foreground">Finish setting up eResus</span>
+            <span className="block text-xs text-muted-foreground">Install, account and research options. About a minute.</span>
+          </span>
+          <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+        </button>
+      )}
 
       {/* Receive Transfer - subtle pill button */}
       {!showReceiveTransfer ? (
@@ -4330,6 +4974,16 @@ const PendingView: React.FC<{
   );
 };
 
+// Lucide has no metronome; drawn to match the iOS glyph so the speaker icon can mean spoken prompts.
+const MetronomeIcon: React.FC<{ size?: number }> = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M9 3h6l4 18H5L9 3z" />
+    <path d="M12 16l6-9" />
+    <path d="M7 16h10" />
+  </svg>
+);
+
+
 const ActiveArrestContentView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowOtherDrugs: () => void;
@@ -4341,20 +4995,27 @@ const ActiveArrestContentView: React.FC<{
   onLogAmiodarone: () => void;
   onLogLidocaine: () => void;
   onShowTOR: () => void;
+  onShowTrauma: () => void;
+  onVoiceTranscript?: (transcript: string) => void;
 }> = (props) => {
   const {
     cprTime,
     uiState,
-    timeUntilAdrenaline,
-    shouldShowAdrenalinePrompt,
-    shouldShowAmiodaroneFirstDosePrompt,
-    shouldShowAmiodaroneReminder,
+    isTraumaArrest,
+    isPaediatric,
+    setTraumaArrest,
+    areDrugPromptsQuietened,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
     events,
     reversibleCauses,
     isTimerPaused,
-    setHideAdrenalinePrompt,
-    setHideAmiodaronePrompt,
+    isLastAdrenalineTimeUnknown,
+    setLastAdrenaline,
+    totalArrestTime,
   } = useArrest();
+  const { voicePromptsEnabled } = useSettings();
   const { metronomeBPM } = useSettings();
   const [isMetronomeOn, setIsMetronomeOn] = useState(metronomeService.isPlaying);
 
@@ -4370,39 +5031,48 @@ const ActiveArrestContentView: React.FC<{
     };
   }, []);
 
+  // Bring the next thing to press to the middle of the screen, however the step was started
+  // (button, red header or voice).
+  const previousUiStateRef = useRef(uiState);
+  useEffect(() => {
+    if (previousUiStateRef.current === uiState) return;
+    previousUiStateRef.current = uiState;
+    const target =
+      uiState !== UIState.Default
+        ? "arrest-primary-action"
+        : isAdrenalineHighlighted || isAmiodaroneHighlighted || shouldShowLidocaineReminder
+          ? "arrest-medications"
+          : null;
+    if (!target) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(target)?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  }, [uiState, isAdrenalineHighlighted, isAmiodaroneHighlighted, shouldShowLidocaineReminder]);
+
   return (
-    <div className={`p-4 space-y-6 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
-      <div className="relative flex justify-center">
-        <CPRTimerView />
+    <div className={`p-4 space-y-4 pb-36 transition-opacity ${isTimerPaused ? "opacity-50 pointer-events-none" : ""}`}>
+      {/* Room between the header, the ring and Analyse Rhythm: 24 px each side (matches iOS). */}
+      <div className="relative flex justify-center pt-2 pb-2">
+        <CPRTimerView onVoiceTranscript={props.onVoiceTranscript} />
         <button
           onClick={toggleMetronome}
+          aria-label={isMetronomeOn ? "Turn metronome off" : "Turn metronome on"}
           className={`absolute bottom-4 right-4 w-12 h-12 rounded-full flex items-center justify-center
           shadow-lg transition-colors
-          ${isMetronomeOn ? "bg-blue-600 text-white" : "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400"}`}
+          ${isMetronomeOn ? "bg-tone-accent text-tone-on-accent" : "bg-white dark:bg-gray-700 text-tone-accent"}`}
         >
-          {isMetronomeOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
+          <MetronomeIcon size={24} />
         </button>
+        <VoicePromptButton enabled={voicePromptsEnabled} className="bottom-4 left-4" />
       </div>
+      <VoiceListeningStatus />
 
-      {timeUntilAdrenaline !== null && timeUntilAdrenaline > 0 && (
-        <AdrenalineTimerView timeRemaining={timeUntilAdrenaline} />
+      {isTraumaArrest && (
+        <HOTTCard compact onOpen={props.onShowTrauma} />
       )}
-      {timeUntilAdrenaline !== null && timeUntilAdrenaline <= 0 && (
-        <AdrenalineDueWarning onClick={props.onLogAdrenaline} />
-      )}
-      {shouldShowAdrenalinePrompt && (
-        <AdrenalinePromptView onClick={props.onLogAdrenaline} onDismiss={() => setHideAdrenalinePrompt(true)} />
-      )}
-      {shouldShowAmiodaroneFirstDosePrompt && (
-        <AmiodaronePromptView onClick={props.onLogAmiodarone} onDismiss={() => setHideAmiodaronePrompt(true)} />
-      )}
-      {shouldShowAmiodaroneReminder && (
-        <AmiodaroneReminderView onClick={props.onLogAmiodarone} onDismiss={() => setHideAmiodaronePrompt(true)} />
-      )}
+
+      {isLastAdrenalineTimeUnknown && <AdrenalineTimeUnknownView totalTime={totalArrestTime} onSelect={setLastAdrenaline} />}
 
       <ActionGridView {...props} />
-
-      <AlgorithmGridView onShowPdf={props.onShowPdf} />
 
       <ChecklistView
         title="Reversible Causes (4 H's & 4 T's)"
@@ -4413,43 +5083,223 @@ const ActiveArrestContentView: React.FC<{
 
       <EventLogView events={events} />
 
+      {/* Last but for Transfer, so a scroll to the bottom always finds them. */}
+      <GuidelinesView onShowPdf={props.onShowPdf} guidelines={guidelinesDuring(isPaediatric, isTraumaArrest)} />
+
       <TransferArrestPill />
     </div>
   );
 };
 
+const SectionTitle: React.FC<{ title: string }> = ({ title }) => (
+  <h3 className="text-center text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{title}</h3>
+);
+
+// Quick post-ROSC drugs (matches iOS QuickDrug). Doses follow JRCALC post-ROSC care; anything else goes
+// through the drug list. drugName is the drug list's name, so the log and last-given times match.
+interface QuickDrug {
+  title: string;
+  drugName: string;
+  group: DrugGroupKind;
+  doses: string[];
+  childDoses: string[];
+  message: string;
+  childMessage: string;
+}
+const QUICK_DRUGS: Record<"pushDoseAdrenaline" | "sodiumChloride" | "tranexamicAcid", QuickDrug> = {
+  tranexamicAcid: {
+    title: "Tranexamic acid",
+    drugName: "Tranexamic acid",
+    group: "fluids",
+    doses: ["1 g"],
+    childDoses: ["15 mg/kg (max 1 g)"],
+    message: "JRCALC: after ROSC following traumatic cardiac arrest. Single dose; consider time since injury.",
+    childMessage: "JRCALC: after ROSC following traumatic cardiac arrest. Single dose; consider time since injury.",
+  },
+  pushDoseAdrenaline: {
+    title: "Push-dose adrenaline",
+    drugName: "Adrenaline push-dose",
+    group: "arrest",
+    doses: ["50 mcg", "100 mcg"],
+    childDoses: [],
+    message: "For hypotension after ROSC. Titrate to a systolic over 100.",
+    childMessage: "Child: choose Other dose and enter the dose given.",
+  },
+  sodiumChloride: {
+    title: "Sodium chloride 0.9%",
+    drugName: "Sodium chloride 0.9%",
+    group: "fluids",
+    doses: ["250 ml", "500 ml"],
+    childDoses: ["10 ml/kg"],
+    message: "Fluid bolus to a systolic over 100, then reassess.",
+    childMessage: "Fluid bolus, then reassess.",
+  },
+};
+
 const RoscView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
-  onShowOtherDrugs: () => void;
-}> = ({ onShowPdf, onShowOtherDrugs }) => {
-  const { reArrest, postROSCTasks, toggleChecklistItemCompletion, events } = useArrest();
+  onOpenDrugs: (focus: DrugGroupKind | null) => void;
+  onShowEtco2: () => void;
+  onVoiceTranscript?: (transcript: string) => void;
+  // A common post-ROSC drug, checked for a repeat like any other. The dose is null when dose prompts are off:
+  // the drug is logged on the tap, like every other drug.
+  onQuickDrug: (name: string, dose: string | null) => void;
+}> = ({ onShowPdf, onOpenDrugs, onShowEtco2, onVoiceTranscript, onQuickDrug }) => {
+  const {
+    reArrest,
+    isPaediatric,
+    postROSCTasks,
+    toggleChecklistItemCompletion,
+    events,
+    latestObservation,
+    logObservation,
+    logDestination,
+    totalArrestTime,
+    hasTraumaContext,
+  } = useArrest();
+  const [observationToLog, setObservationToLog] = useState<ROSCObservation | null>(null);
+  const [showDestination, setShowDestination] = useState(false);
+  const [quickDrug, setQuickDrug] = useState<QuickDrug | null>(null);
+  const { showDosagePrompts } = useSettings();
+  const give = (drug: QuickDrug) => (showDosagePrompts ? setQuickDrug(drug) : onQuickDrug(drug.drugName, null));
+  // Arrest clock time of the latest tranexamic acid, from before or after ROSC. A single dose, so it shows.
+  const txaEvent = events.find((e) => e.type === EventType.Drug && e.message.startsWith("Tranexamic acid"));
+  const listener = useVoiceListener();
+  const { voiceAvailable, isPressed, pushToTalk } = usePushToTalk(onVoiceTranscript, "Hold to talk");
+  const paediatric = isPaediatric === true;
+  const talking = voiceAvailable && listener.isPushToTalkActive;
 
   return (
     <div className="p-4 space-y-6 pb-36">
+      {/* First and alone, so it can be hit in a second. Undo in the bar below reverses a mistap. */}
       <ActionButton
         title="Patient Re-Arrested"
+        tone="danger"
         icon={<RotateCw size={20} />}
-        backgroundColor="bg-orange-500"
-        foregroundColor="text-white"
         height="h-16"
         fontSize="text-lg"
         onClick={reArrest}
       />
-      <ActionButton
-        title="Administer Medication"
-        icon={<Syringe size={20} />}
-        backgroundColor="bg-gray-600"
-        foregroundColor="text-white"
-        height="h-16"
-        fontSize="text-lg"
-        onClick={onShowOtherDrugs}
-      />
+
+      {voiceAvailable && (
+        // The ring isn't on this screen, so the microphone gets its own hold target, on the right where a
+        // right thumb reaches it.
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">{talking ? "Listening…" : "Hold to talk"}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {talking && listener.transcript ? listener.transcript : "“Sats 96”, “BP 110 over 70”, “BM 6.2”"}
+              </p>
+            </div>
+            <div
+              className={`flex h-[52px] w-[52px] shrink-0 select-none touch-none items-center justify-center rounded-full text-white motion-safe:transition-transform motion-safe:duration-200 ${
+                talking ? "bg-tone-danger motion-safe:animate-pulse" : "bg-tone-accent"
+              } ${isPressed ? "motion-safe:scale-95" : ""}`}
+              {...pushToTalk}
+            >
+              <Mic size={22} />
+            </div>
+          </div>
+          <VoiceListeningStatus holdHint="Hold the mic to talk." className="" />
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <SectionTitle title="Observations" />
+        <div className="grid grid-cols-2 gap-3">
+          {ROSC_OBSERVATION_ORDER.map((observation) => (
+            <ObservationButton
+              key={observation}
+              observation={observation}
+              latest={latestObservation(observation)}
+              now={totalArrestTime}
+              onClick={() => (observation === "etco2" ? onShowEtco2() : setObservationToLog(observation))}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <SectionTitle title="Medications" />
+        <div className="grid grid-cols-2 gap-3">
+          {/* The two most often needed after ROSC: one tap, plus a dose when dose prompts are on. */}
+          <ActionButton title="Push-dose Adrenaline" tone="primary" height="h-12" fontSize="text-sm" onClick={() => give(QUICK_DRUGS.pushDoseAdrenaline)} />
+          <ActionButton title="Sodium Chloride 0.9%" tone="primary" height="h-12" fontSize="text-sm" onClick={() => give(QUICK_DRUGS.sodiumChloride)} />
+          {/* JRCALC: if ROSC follows traumatic cardiac arrest, give tranexamic acid. A single dose, so the time it
+              was given shows here and a second one is asked about first. */}
+          {hasTraumaContext && (
+            <button
+              onClick={() => give(QUICK_DRUGS.tranexamicAcid)}
+              className={`col-span-2 flex min-h-12 flex-col items-center justify-center rounded-xl text-sm font-semibold active:scale-95 transition-transform ${
+                txaEvent ? "bg-tone-tint text-tone-on-tint" : "bg-tone-accent text-white"
+              }`}
+            >
+              <span>Tranexamic Acid</span>
+              {txaEvent && <span className="text-xs font-normal opacity-80">Given {TimeFormatter.format(txaEvent.timestamp)}</span>}
+            </button>
+          )}
+          <ActionButton title="Sedation / RSI..." tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs("sedation")} />
+          <ActionButton title="All Drugs..." tone="standard" height="h-12" fontSize="text-sm" onClick={() => onOpenDrugs(null)} />
+        </div>
+      </div>
+
+      {quickDrug && (
+        <Modal isOpen onClose={() => setQuickDrug(null)} title={quickDrug.title}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500 dark:text-gray-400">{paediatric ? quickDrug.childMessage : quickDrug.message}</p>
+            {(paediatric ? quickDrug.childDoses : quickDrug.doses).map((dose) => (
+              <ActionButton
+                key={dose}
+                title={dose}
+                tone="primary"
+                height="h-12"
+                onClick={() => {
+                  onQuickDrug(quickDrug.drugName, dose);
+                  setQuickDrug(null);
+                }}
+              />
+            ))}
+            <ActionButton
+              title="Other dose…"
+              tone="standard"
+              height="h-12"
+              onClick={() => {
+                setQuickDrug(null);
+                onOpenDrugs(quickDrug.group);
+              }}
+            />
+          </div>
+        </Modal>
+      )}
+
+      {hasTraumaContext && <HOTTCard compact />}
 
       <ChecklistView title="Post-ROSC Care" items={postROSCTasks} onToggle={toggleChecklistItemCompletion} />
 
-      <AlgorithmGridView onShowPdf={onShowPdf} />
+      <div className="space-y-2">
+        <SectionTitle title="Conveyance" />
+        <div className="grid grid-cols-2 gap-3">
+          <ActionButton title="Destination..." tone="slate" height="h-12" fontSize="text-sm" onClick={() => setShowDestination(true)} />
+          <ActionButton title="Pre-alert Given" tone="slate" height="h-12" fontSize="text-sm" onClick={() => logDestination("Pre-alert given")} />
+        </div>
+      </div>
+
       <EventLogView events={events} />
+      <GuidelinesView onShowPdf={onShowPdf} guidelines={guidelinesAfterROSC(isPaediatric, hasTraumaContext)} />
       <TransferArrestPill />
+
+      <ObservationSheet
+        observation={observationToLog}
+        onClose={() => setObservationToLog(null)}
+        onConfirm={(value) => observationToLog && logObservation(observationToLog, value)}
+      />
+      <DestinationSheet
+        isOpen={showDestination}
+        onClose={() => setShowDestination(false)}
+        traumatic={hasTraumaContext}
+        onConfirm={logDestination}
+      />
     </div>
   );
 };
@@ -4468,6 +5318,7 @@ const EndedView: React.FC<{
     vodConfirmed,
     confirmVOD,
     toggleVodChecklistItem,
+    isPaediatric,
   } = useArrest();
   const [showPLIIE, setShowPLIIE] = useState(false);
 
@@ -4515,7 +5366,7 @@ const EndedView: React.FC<{
           <ActionButton
             title="Confirm VOD"
             icon={<Shield size={18} />}
-            backgroundColor={allVodChecked ? "bg-blue-600" : "bg-gray-400 dark:bg-gray-600"}
+            backgroundColor={allVodChecked ? "bg-tone-accent" : "bg-gray-400 dark:bg-gray-600"}
             foregroundColor="text-white"
             onClick={confirmVOD}
             disabled={!allVodChecked}
@@ -4538,7 +5389,7 @@ const EndedView: React.FC<{
           <ActionButton
             title="Breaking Bad News (PLIIE)"
             icon={<Users size={18} />}
-            backgroundColor="bg-blue-600"
+            backgroundColor="bg-tone-accent"
             foregroundColor="text-white"
             onClick={() => setShowPLIIE(true)}
           />
@@ -4567,8 +5418,8 @@ const EndedView: React.FC<{
         </div>
       )}
 
-      <AlgorithmGridView onShowPdf={onShowPdf} />
       <EventLogView events={events} />
+      <GuidelinesView onShowPdf={onShowPdf} guidelines={guidelinesAfterStopping(isPaediatric)} />
       <TransferArrestPill />
 
       <PLIIEModal isOpen={showPLIIE} onClose={() => setShowPLIIE(false)} />
@@ -4583,7 +5434,7 @@ const TransferArrestPill: React.FC = () => {
     <>
       <button
         onClick={() => setShowTransfer(true)}
-        className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-semibold text-sm transition-all active:scale-95"
+        className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-full bg-tone-tint text-tone-on-tint font-semibold text-sm transition-all active:scale-95"
       >
         <QrCode size={16} />
         <span>Transfer Arrest</span>
@@ -4605,16 +5456,29 @@ const ActionGridView: React.FC<{
   onLogAmiodarone: () => void;
   onLogLidocaine: () => void;
   onShowTOR: () => void;
+  onShowTrauma: () => void;
 }> = (props) => {
   const {
+    traumaInterventionCount,
     uiState,
     analyseRhythm,
     logRhythm,
     achieveROSC,
     deliverShock,
+    deliverStackedShocks,
+    shockCount,
     isAdrenalineAvailable,
     isAmiodaroneAvailable,
     isLidocaineAvailable,
+    isRhythmCheckDue,
+    isAdrenalineHighlighted,
+    isAmiodaroneHighlighted,
+    shouldShowLidocaineReminder,
+    adrenalineButtonDetail,
+    amiodaroneButtonDetail,
+    lidocaineButtonDetail,
+    dismissAdrenalinePrompt,
+    setHideAmiodaronePrompt,
   } = useArrest();
 
   // Green success flash states
@@ -4632,13 +5496,14 @@ const ActionGridView: React.FC<{
 
   return (
     <div className="space-y-6">
+      <div id="arrest-primary-action" className="space-y-6 scroll-mt-4">
       {/* Rhythm Analysis */}
       {uiState === UIState.Default && (
         <ActionButton
           title="Analyse Rhythm"
+          tone="primary"
+          highlight={isRhythmCheckDue ? "handsOff" : undefined}
           icon={<Activity size={20} />}
-          backgroundColor="bg-blue-600"
-          foregroundColor="text-white"
           height="h-16"
           fontSize="text-lg"
           onClick={analyseRhythm}
@@ -4650,34 +5515,29 @@ const ActionGridView: React.FC<{
           <div className="grid grid-cols-2 gap-3">
             <ActionButton
               title="VF"
-              backgroundColor="bg-orange-500"
-              foregroundColor="text-white"
+              tone="danger"
               onClick={() => logRhythm("VF", true)}
             />
             <ActionButton
               title="VT"
-              backgroundColor="bg-orange-500"
-              foregroundColor="text-white"
+              tone="danger"
               onClick={() => logRhythm("VT", true)}
             />
             <ActionButton
               title="PEA"
-              backgroundColor="bg-gray-500"
-              foregroundColor="text-white"
+              tone="slate"
               onClick={() => logRhythm("PEA", false)}
             />
             <ActionButton
               title="Asystole"
-              backgroundColor="bg-gray-500"
-              foregroundColor="text-white"
+              tone="slate"
               onClick={() => logRhythm("Asystole", false)}
             />
           </div>
           <ActionButton
             title="ROSC"
+            tone="positive"
             icon={<Heart size={18} />}
-            backgroundColor="bg-green-600"
-            foregroundColor="text-white"
             onClick={achieveROSC}
           />
         </div>
@@ -4685,55 +5545,73 @@ const ActionGridView: React.FC<{
       {uiState === UIState.ShockAdvised && (
         <ActionButton
           title="Deliver Shock"
+          tone="danger"
+          highlight="handsOff"
           icon={<Bolt size={20} />}
-          backgroundColor="bg-orange-500"
-          foregroundColor="text-white"
           height="h-16"
           fontSize="text-lg"
-          onClick={deliverShock}
+          onClick={() => deliverShock()}
         />
       )}
+      {uiState === UIState.ShockAdvised && shockCount === 0 && (
+        // Only offered for the first shocks; RCUK limits stacked shocks to witnessed, monitored arrests.
+        <div className="space-y-1">
+          <ActionButton
+            title="3 Stacked Shocks"
+            tone="dangerTint"
+            icon={<Zap size={18} />}
+            onClick={deliverStackedShocks}
+          />
+          <p className="text-center text-xs text-gray-500 dark:text-gray-400">Witnessed, monitored VF/pVT only</p>
+        </div>
+      )}
+      </div>
 
       {/* Medications */}
-      <div className="space-y-3">
+      <div id="arrest-medications" className="space-y-3">
         <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Medications</h3>
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="Adrenaline"
+            tone="standard"
+            highlight={isAdrenalineHighlighted ? "drugDue" : undefined}
+            detail={adrenalineButtonDetail}
+            onNotNow={isAdrenalineHighlighted ? dismissAdrenalinePrompt : undefined}
             icon={<Syringe size={16} />}
-            backgroundColor="bg-pink-500"
-            foregroundColor="text-white"
-            height="h-12"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogAdrenaline}
             disabled={!isAdrenalineAvailable}
           />
           <ActionButton
             title="Amiodarone"
+            tone="standard"
+            highlight={isAmiodaroneHighlighted ? "drugDue" : undefined}
+            detail={amiodaroneButtonDetail}
+            onNotNow={isAmiodaroneHighlighted ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            backgroundColor="bg-purple-600"
-            foregroundColor="text-white"
-            height="h-12"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogAmiodarone}
             disabled={!isAmiodaroneAvailable}
           />
           <ActionButton
             title="Lidocaine"
+            tone="standard"
+            highlight={shouldShowLidocaineReminder ? "drugDue" : undefined}
+            detail={lidocaineButtonDetail}
+            onNotNow={shouldShowLidocaineReminder ? () => setHideAmiodaronePrompt(true) : undefined}
             icon={<Syringe size={16} />}
-            backgroundColor="bg-indigo-600"
-            foregroundColor="text-white"
-            height="h-12"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onLogLidocaine}
             disabled={!isLidocaineAvailable}
           />
           <ActionButton
             title="Other Meds..."
+            tone="standard"
             icon={<Pill size={16} />}
-            backgroundColor="bg-gray-500"
-            foregroundColor="text-white"
-            height="h-12"
+            height={DRUG_BUTTON_HEIGHT}
             fontSize="text-sm"
             onClick={props.onShowOtherDrugs}
           />
@@ -4746,33 +5624,39 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="Adv. Airway"
+            tone="standard"
             icon={<AirVent size={16} />}
-            backgroundColor="bg-blue-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={handleAirway}
           />
           <ActionButton
             title="Log ETCO2"
+            tone="standard"
             icon={<Gauge size={16} />}
-            backgroundColor="bg-teal-500"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onShowEtco2}
           />
         </div>
-        {/* Full-width IV/IO button */}
-        <ActionButton
-          title="Log IV / IO"
-          icon={<Droplet size={16} />}
-          backgroundColor="bg-fuchsia-600"
-          foregroundColor="text-white"
-          height="h-12"
-          fontSize="text-sm"
-          onClick={handleIVIO}
-        />
+        <div className="grid grid-cols-2 gap-3">
+          <ActionButton
+            title="Log IV / IO"
+            tone="standard"
+            icon={<Droplet size={16} />}
+            height="h-12"
+            fontSize="text-sm"
+            onClick={handleIVIO}
+          />
+          <ActionButton
+            title={traumaInterventionCount > 0 ? `Trauma (${traumaInterventionCount})` : "Trauma..."}
+            tone={traumaInterventionCount > 0 ? "primary" : "standard"}
+            icon={traumaInterventionCount > 0 ? <CheckCircle2 size={16} /> : <Bandage size={16} />}
+            height="h-12"
+            fontSize="text-sm"
+            onClick={props.onShowTrauma}
+          />
+        </div>
       </div>
 
       {/* Patient Status */}
@@ -4781,18 +5665,16 @@ const ActionGridView: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             title="ROSC"
+            tone="positive"
             icon={<HeartPulse size={16} />}
-            backgroundColor="bg-green-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={achieveROSC}
           />
           <ActionButton
             title="TOR"
+            tone="dangerTint"
             icon={<XSquare size={16} />}
-            backgroundColor="bg-red-600"
-            foregroundColor="text-white"
             height="h-12"
             fontSize="text-sm"
             onClick={props.onShowTOR}
@@ -4803,89 +5685,31 @@ const ActionGridView: React.FC<{
   );
 };
 
-const AdrenalineTimerView: React.FC<{ timeRemaining: number }> = ({ timeRemaining }) => (
-  <div className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-semibold">
-    <Timer size={20} />
-    <span>Adrenaline due in: {TimeFormatter.format(timeRemaining)}</span>
-  </div>
-);
-
-const AdrenalineDueWarning: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
-  <button
-    onClick={onClick}
-    className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
-  >
-    <AlertTriangle size={20} />
-    <span>Adrenaline Due - Tap to Log</span>
-  </button>
-);
-
-const AmiodaroneReminderView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-600 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
-    >
+// Adrenaline was given before eResus at an unknown time. Choosing roughly when starts the usual timer;
+// "Don't know" makes it due now. Left alone, the next rhythm check does the same (matches iOS).
+// totalTime: the arrest clock now; a choice earlier than 00:00 isn't offered.
+const AdrenalineTimeUnknownView: React.FC<{ totalTime: number; onSelect: (minutesAgo: number | null) => void }> = ({
+  totalTime,
+  onSelect,
+}) => (
+  <div className="p-3 rounded-2xl bg-tone-tint text-tone-on-tint space-y-2">
+    <div className="flex items-center justify-center gap-2 font-bold">
       <Syringe size={20} />
-      <span>Consider 2nd Amiodarone - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-);
-
-const AdrenalinePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-pink-500 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider Adrenaline - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-);
-
-const AmiodaronePromptView: React.FC<{ onClick?: () => void; onDismiss?: () => void }> = ({ onClick, onDismiss }) => (
-  <div className="relative">
-    <button
-      onClick={onClick}
-      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-purple-500 text-white font-bold animate-pulse w-full cursor-pointer active:scale-95 transition-transform"
-    >
-      <Syringe size={20} />
-      <span>Consider Amiodarone - Tap to Log</span>
-    </button>
-    {onDismiss && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
-      >
-        ✕
-      </button>
-    )}
+      <span>Last adrenaline: time unknown</span>
+    </div>
+    <div className="flex gap-2">
+      {([[2, "~2 min ago"], [4, "~4 min ago"], [null, "Don't know"]] as [number | null, string][])
+        .filter(([minutes]) => minutes === null || totalTime >= minutes * 60)
+        .map(([minutes, label]) => (
+        <button
+          key={label}
+          onClick={() => onSelect(minutes)}
+          className="flex-1 min-h-11 px-2 rounded-xl text-sm font-semibold bg-white/60 dark:bg-white/10 active:scale-95 transition-transform"
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   </div>
 );
 
@@ -4919,7 +5743,7 @@ const ChecklistView: React.FC<{
         >
           {item.name}
           {item.name === "Hypothermia" && item.hypothermiaStatus !== HypothermiaStatus.None && (
-            <span className="ml-2 text-xs text-blue-500">[{item.hypothermiaStatus}]</span>
+            <span className="ml-2 text-xs text-tone-accent">[{item.hypothermiaStatus}]</span>
           )}
         </span>
         {item.name === "Hypothermia" && <ChevronRight size={16} className="text-gray-400 ml-auto" />}
@@ -4929,7 +5753,8 @@ const ChecklistView: React.FC<{
 );
 
 const EventLogView: React.FC<{ events: Event[] }> = ({ events }) => {
-  const sortedEvents = useMemo(() => [...events].sort((a, b) => a.timestamp - b.timestamp), [events]);
+  // Reversed first, so entries logged in the same second keep the order they were logged in.
+  const sortedEvents = useMemo(() => [...events].reverse().sort((a, b) => a.timestamp - b.timestamp), [events]);
 
   return (
     <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-2">
@@ -4948,86 +5773,135 @@ const EventLogView: React.FC<{ events: Event[] }> = ({ events }) => {
   );
 };
 
-const AlgorithmGridView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void }> = ({ onShowPdf }) => (
-  <div className="space-y-3">
-    <h3 className="text-center font-semibold text-gray-700 dark:text-gray-300">Resuscitation Council UK</h3>
-    <div className="grid grid-cols-2 gap-3">
-      {AppConstants.pdfAlgorithms.map((pdf) => (
+// The guideline charts, bundled as images so they open with no signal (the service worker pre-caches them).
+type GuidelineSource = "rcuk" | "jrcalc";
+interface Guideline extends PDFIdentifiable {
+  source: GuidelineSource;
+  name: string;
+}
+const guideline = (id: string, source: GuidelineSource, name: string, file: string): Guideline => ({
+  id,
+  source,
+  name,
+  pdfUrl: `/guidelines/${file}`,
+  title: `${source === "rcuk" ? "RCUK" : "JRCALC"} ${name}`,
+});
+const GUIDELINES = {
+  adultALS: guideline("adultALS", "rcuk", "Adult ALS", "adult_als.png"),
+  paediatricALS: guideline("paediatricALS", "rcuk", "Paediatric ALS", "paediatric_als.png"),
+  newbornLS: guideline("newbornLS", "rcuk", "Newborn LS", "newborn_ls.png"),
+  traumaticArrest: guideline("traumaticArrest", "rcuk", "Traumatic Arrest", "traumatic_arrest.png"),
+  // The two post-ROSC charts sit side by side.
+  postResuscitationCare: guideline("postResuscitationCare", "rcuk", "Post-Resus Care", "post_arrest.png"),
+  jrcalcPostROSC: guideline("jrcalcPostROSC", "jrcalc", "Post-ROSC Care", "jrcalc_post_rosc.webp"),
+  jrcalcAdultArrest: guideline("jrcalcAdultArrest", "jrcalc", "Termination of Resus", "jrcalc_adult_arrest.webp"),
+};
+const ALL_GUIDELINES: Guideline[] = Object.values(GUIDELINES);
+
+// Which charts fit each screen (matches iOS Guideline). Age unknown (null) shows adult and child charts.
+const guidelinesDuring = (paediatric: boolean | null, trauma: boolean): Guideline[] => {
+  const g = GUIDELINES;
+  const list =
+    paediatric === true ? [g.paediatricALS]
+    : paediatric === false ? [g.adultALS, g.jrcalcAdultArrest]
+    : [g.adultALS, g.paediatricALS, g.jrcalcAdultArrest];
+  return trauma ? [...list, g.traumaticArrest] : list;
+};
+const guidelinesAfterROSC = (paediatric: boolean | null, trauma: boolean): Guideline[] => {
+  const g = GUIDELINES;
+  // The paediatric ALS chart carries the post-ROSC care for children.
+  const list = paediatric === true ? [g.paediatricALS] : [g.jrcalcPostROSC, g.postResuscitationCare];
+  if (paediatric === null) list.push(g.paediatricALS);
+  return trauma ? [...list, g.traumaticArrest] : list;
+};
+// The JRCALC chart is the adult ToR flowchart, so it is never the only chart offered when the age is unknown.
+const guidelinesAfterStopping = (paediatric: boolean | null): Guideline[] =>
+  paediatric === true ? [GUIDELINES.paediatricALS]
+  : paediatric === false ? [GUIDELINES.jrcalcAdultArrest]
+  : [GUIDELINES.paediatricALS, GUIDELINES.jrcalcAdultArrest];
+
+const GuidelinesView: React.FC<{ onShowPdf: (pdf: PDFIdentifiable) => void; guidelines?: Guideline[] }> = ({
+  onShowPdf,
+  guidelines = ALL_GUIDELINES,
+}) => {
+  const [showAll, setShowAll] = useState(false);
+  const isAll = guidelines.length === ALL_GUIDELINES.length;
+  return (
+    <div className="space-y-2">
+      <SectionTitle title="Guidelines" />
+      {/* One compact grid, small enough for the whole set to fit on the start screen. */}
+      <div className="grid grid-cols-2 gap-2.5">
+        {guidelines.map((chart, index) => (
+          <button
+            key={chart.id}
+            onClick={() => onShowPdf(chart)}
+            aria-label={`${chart.source === "rcuk" ? "Resuscitation Council UK" : "JRCALC"} ${chart.name}`}
+            // A card left on its own is centred at the same width.
+            className={`${guidelines.length % 2 === 1 && index === guidelines.length - 1 ? "col-span-2 w-[calc(50%-5px)] justify-self-center" : ""} flex min-h-[50px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-gray-100 px-1.5 py-1 text-gray-900 transition-transform active:scale-95 dark:border-gray-600 dark:bg-gray-700 dark:text-white`}
+          >
+            <span className="truncate text-sm font-semibold">{chart.name}</span>
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+              {chart.source === "rcuk" ? "RCUK" : "JRCALC"}
+            </span>
+          </button>
+        ))}
+      </div>
+      {!isAll && (
         <button
-          key={pdf.id}
-          onClick={() => onShowPdf(pdf)}
-          className="p-4 text-center font-semibold text-sm
-           bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-2xl
-           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors active:scale-95"
+          onClick={() => setShowAll(true)}
+          className="w-full rounded-xl bg-tone-tint py-2.5 text-sm font-semibold text-tone-accent active:scale-95 transition-transform"
         >
-          {pdf.title}
+          All guidelines
         </button>
-      ))}
+      )}
+      <Modal isOpen={showAll} onClose={() => setShowAll(false)} title="Guidelines">
+        <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          {ALL_GUIDELINES.map((chart) => (
+            <button
+              key={chart.id}
+              onClick={() => {
+                setShowAll(false);
+                onShowPdf(chart);
+              }}
+              className="flex w-full flex-col items-start py-3 text-left"
+            >
+              <span className="font-semibold text-gray-900 dark:text-white">{chart.name}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {chart.source === "rcuk" ? "Resuscitation Council UK" : "JRCALC"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Modal>
     </div>
-  </div>
-);
+  );
+};
 
 const BottomControlsView: React.FC<{
   onShowSummary: () => void;
   onShowReset: () => void;
 }> = ({ onShowSummary, onShowReset }) => {
-  const { undo, canUndo, isTimerPaused, pauseArrest, resumeArrest } = useArrest();
+  const { undo, canUndo, isTimerPaused, pauseArrest, resumeArrest, arrestState } = useArrest();
+  // The tab bar is hidden during an arrest, so the bar sits on the home indicator instead.
+  const tabBarHidden = arrestState === ArrestState.Active || arrestState === ArrestState.Rosc;
 
+  // Tinted rather than solid, so they don't compete with Analyse Rhythm or Deliver Shock above.
   return (
-    <div className="fixed bottom-0 left-0 right-0 p-3 pb-[72px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10">
+    <div
+      className={`fixed bottom-0 left-0 right-0 p-3 ${tabBarHidden ? "pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "pb-[72px]"} bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-10`}
+    >
       <div className="flex space-x-3">
         {isTimerPaused ? (
           <>
-            <ActionButton
-              title="Resume"
-              icon={<Heart size={18} />}
-              backgroundColor="bg-green-600"
-              foregroundColor="text-white"
-              height="h-12"
-              onClick={resumeArrest}
-            />
-            <ActionButton
-              title="Summary"
-              backgroundColor="bg-blue-600"
-              foregroundColor="text-white"
-              height="h-12"
-              onClick={onShowSummary}
-            />
-            <ActionButton
-              title="Reset"
-              icon={<RotateCw size={18} />}
-              backgroundColor="bg-red-600"
-              foregroundColor="text-white"
-              height="h-12"
-              onClick={onShowReset}
-            />
+            <ActionButton title="Resume" tone="primary" icon={<Play size={18} />} height="h-12" onClick={resumeArrest} />
+            <ActionButton title="Summary" tone="standard" height="h-12" onClick={onShowSummary} />
+            <ActionButton title="Reset" tone="dangerTint" icon={<RotateCw size={18} />} height="h-12" onClick={onShowReset} />
           </>
         ) : (
           <>
-            <ActionButton
-              title="Undo"
-              icon={<Undo size={18} />}
-              backgroundColor="bg-gray-200 dark:bg-gray-700"
-              foregroundColor="text-gray-800 dark:text-gray-200"
-              height="h-12"
-              onClick={undo}
-              disabled={!canUndo}
-            />
-            <ActionButton
-              title="Summary"
-              backgroundColor="bg-blue-600"
-              foregroundColor="text-white"
-              height="h-12"
-              onClick={onShowSummary}
-            />
-            <ActionButton
-              title="Stop"
-              icon={<Square size={18} />}
-              backgroundColor="bg-red-600"
-              foregroundColor="text-white"
-              height="h-12"
-              onClick={pauseArrest}
-            />
+            <ActionButton title="Undo" tone="standard" icon={<Undo size={18} />} height="h-12" onClick={undo} disabled={!canUndo} />
+            <ActionButton title="Summary" tone="standard" height="h-12" onClick={onShowSummary} />
+            <ActionButton title="Stop" tone="dangerTint" icon={<Square size={18} />} height="h-12" onClick={pauseArrest} />
           </>
         )}
       </div>
@@ -5071,7 +5945,9 @@ const getEventTypeColor = (type: EventType): string => {
 const ArrestView: React.FC<{
   onShowPdf: (pdf: PDFIdentifiable) => void;
   onShowNewborn: () => void;
-}> = ({ onShowPdf, onShowNewborn }) => {
+  needsSetup?: boolean;
+  onStartSetup?: () => void;
+}> = ({ onShowPdf, onShowNewborn, needsSetup = false, onStartSetup }) => {
   const viewModel = useArrest();
   const { showDosagePrompts } = useSettings();
 
@@ -5083,10 +5959,35 @@ const ArrestView: React.FC<{
   const [showAirwayAdjunctModal, setShowAirwayAdjunctModal] = useState(false);
   const [showVascularAccessModal, setShowVascularAccessModal] = useState(false);
   const [showTORModal, setShowTORModal] = useState(false);
+  const [showTraumaModal, setShowTraumaModal] = useState(false);
+  const [otherDrugsFocus, setOtherDrugsFocus] = useState<DrugGroupKind | null>(null);
   const [drugToLog, setDrugToLog] = useState<DrugToLog | null>(null);
   const [drugConfirmation, setDrugConfirmation] = useState<{ drug: DrugToLog; dose: string } | null>(null);
 
+  // A double tap is dropped; a repeat soon after (or a second TXA, or a third antiarrhythmic) is asked about
+  // first (matches iOS checkRepeat).
+  const [repeatPrompt, setRepeatPrompt] = useState<{ message: string; proceed: () => void } | null>(null);
+  const repeatCounts = { amiodarone: viewModel.amiodaroneCount, lidocaine: viewModel.lidocaineCount };
+  const checkRepeatFor = (name: string) =>
+    repeatCheck(viewModel.events, name, Date.now() / 1000, viewModel.totalArrestTime, repeatCounts);
+  const checkRepeat = (name: string, proceed: () => void) => {
+    const check = checkRepeatFor(name);
+    if (check.kind === "new") proceed();
+    else if (check.kind === "doubleTap") {
+      // Said, so a gloved tap that did nothing isn't taken for a second dose logged.
+      HapticManager.notification("warning");
+      showVoiceFeedback(`${name} already logged`, true);
+    } else {
+      HapticManager.notification("warning");
+      setRepeatPrompt({ message: check.message, proceed });
+    }
+  };
+
   const handleLogDrug = (drug: DrugToLog) => {
+    checkRepeat(getDrugLogTitle(drug), () => proceedLogDrug(drug));
+  };
+
+  const proceedLogDrug = (drug: DrugToLog) => {
     if (showDosagePrompts) {
       if (viewModel.patientAgeCategory && (drug.type === "adrenaline" || drug.type === "amiodarone")) {
         let dose: string | null = null;
@@ -5136,18 +6037,385 @@ const ArrestView: React.FC<{
     setDrugConfirmation(null);
   };
 
-  const handleSelectOtherDrug = (drug: DrugToLog) => {
+  const handleSelectOtherDrug = (name: string) => {
     setShowOtherDrugsModal(false);
-    handleLogDrug(drug);
+    handleLogDrug({ type: "other", name });
   };
+
+  const openDrugs = (focus: DrugGroupKind | null) => {
+    setOtherDrugsFocus(focus);
+    setShowOtherDrugsModal(true);
+  };
+
+  // Voice commands
+  // undoDepth: Undo goes back to here, reversing everything from that one phrase.
+  const [voiceFeedback, setVoiceFeedback] = useState<{ id: number; message: string; succeeded: boolean; undoDepth: number | null } | null>(
+    null,
+  );
+  // A phrase can hold several actions ("rhythm check VF shock delivered"). They run one per render so
+  // each sees the state the previous one left, exactly as separate taps would.
+  const [voiceRun, setVoiceRun] = useState<{
+    heard: string;
+    actions: VoiceAction[];
+    index: number;
+    // A handover's "started" runs first and can move the clock, so the spoken time is read after it.
+    spokenTime: VoiceTime | null;
+    time: number | null;
+    depthBefore: number;
+    done: string[];
+    notes: string[];
+    stoppedBecause: string | null;
+  } | null>(null);
+  const { etco2Unit, voiceHandsFree, voiceWakeWord } = useSettings();
+  const voiceAvailable = useVoiceCommandsAvailable();
+
+  // The first time someone adds time before eResus, point them to where earlier shocks and drugs go.
+  const hasShownBeforeEResusHintRef = useRef(false);
+  useEffect(() => {
+    if (viewModel.arrestState === ArrestState.Pending) hasShownBeforeEResusHintRef.current = false;
+  }, [viewModel.arrestState]);
+  const showBeforeEResusHint = () => {
+    // Never over a voice result, which may still be offering Undo.
+    if (hasShownBeforeEResusHintRef.current || voiceFeedback || viewModel.arrestState !== ArrestState.Active) return;
+    hasShownBeforeEResusHintRef.current = true;
+    showVoiceFeedback("Given shocks or drugs before eResus? Tap the counters at the top to add them.", true);
+  };
+
+  // Logging a trauma intervention can quieten the drug prompts; say so, so it's never silent.
+  const wasTraumaRef = useRef(viewModel.isTraumaArrest);
+  useEffect(() => {
+    const wasTrauma = wasTraumaRef.current;
+    wasTraumaRef.current = viewModel.isTraumaArrest;
+    // A phrase being run says it in its own result.
+    if (!viewModel.isTraumaArrest || wasTrauma || voiceFeedback || voiceRun || viewModel.arrestState !== ArrestState.Active) return;
+    showVoiceFeedback(
+      "Traumatic cardiac arrest mode selected: drug reminders paused while HOTT comes first. Switch it off in the Trauma sheet.",
+      true,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewModel.isTraumaArrest]);
+
+  const bannerTouch = useRef<{ x: number; y: number } | null>(null);
+  const showVoiceFeedback = (message: string, succeeded: boolean, undoDepth: number | null = null) => {
+    const id = Date.now();
+    setVoiceFeedback({ id, message, succeeded, undoDepth });
+    // Long enough to read and reach Undo mid-compressions, then out of the way; a tap or swipe clears it sooner.
+    const ms = undoDepth !== null ? 10000 : succeeded ? 5000 : 8000;
+    setTimeout(() => setVoiceFeedback((current) => (current?.id === id ? null : current)), ms);
+  };
+
+  const handleVoiceTranscript = (transcript: string) => {
+    const heard = transcript ? `Heard “${transcript}”.` : "Nothing heard.";
+    const parse = parseVoiceCommand(transcript);
+
+    if (parse.reason) {
+      navigator.vibrate?.([30, 50, 30]);
+      const explanation = {
+        question: "That sounded like a question; nothing logged.",
+        instruction: "That sounded like an instruction. Say it once done, e.g. “adrenaline given”.",
+        notGiven: "That sounded like something not yet done; nothing logged.",
+        conflict: "That contained conflicting details; nothing logged. Please say it again.",
+        nothing: "No command recognised; nothing logged.",
+        downtime:
+          "Downtime before arrival isn't recorded. To set the clock, say when the arrest was confirmed, e.g. “resus started 10 minutes ago”.",
+        countUnclear: "For shocks or drugs given before eResus, say so, e.g. “2 shocks before eResus”; nothing logged.",
+      }[parse.reason];
+      showVoiceFeedback(`${heard} ${explanation}`, false);
+      return;
+    }
+
+    setVoiceRun({
+      heard,
+      actions: parse.actions,
+      index: 0,
+      spokenTime: parse.time,
+      time: null,
+      depthBefore: viewModel.undoDepth,
+      done: [],
+      notes: [],
+      stoppedBecause: null,
+    });
+  };
+
+  const handleVoiceTranscriptRef = useRef(handleVoiceTranscript);
+  handleVoiceTranscriptRef.current = handleVoiceTranscript;
+
+  useEffect(() => {
+    if (!voiceRun) return;
+    const action = voiceRun.actions[voiceRun.index];
+    if (action && !voiceRun.stoppedBecause) {
+      // History entries sit at the moment eResus was started; only what happened since takes the spoken time.
+      if (!["started", "given", "earlierRhythm"].includes(action.type) && voiceRun.spokenTime) {
+        const time = viewModel.arrestTime(voiceRun.spokenTime);
+        setVoiceRun(
+          time === null
+            ? { ...voiceRun, spokenTime: null, stoppedBecause: "That time is in the future or before the arrest was confirmed; not logged." }
+            : { ...voiceRun, spokenTime: null, time },
+        );
+        return;
+      }
+      const result = performVoiceAction(action, voiceRun.time);
+      if (result === "continue") {
+        setVoiceRun({ ...voiceRun });
+      } else if ("skipped" in result) {
+        // Already on the record: left out, and the rest of the phrase still counts (matches iOS).
+        setVoiceRun({ ...voiceRun, index: voiceRun.index + 1, notes: [...voiceRun.notes, result.skipped] });
+      } else if ("failure" in result) {
+        setVoiceRun({ ...voiceRun, stoppedBecause: result.failure });
+      } else {
+        setVoiceRun({
+          ...voiceRun,
+          index: voiceRun.index + 1,
+          done: [...voiceRun.done, result.summary],
+          notes: result.note ? [...voiceRun.notes, result.note] : voiceRun.notes,
+        });
+      }
+      return;
+    }
+
+    let message = voiceRun.heard;
+    if (voiceRun.done.length > 0) {
+      const when = voiceRun.time !== null ? ` at ${clockText(voiceRun.time)}` : "";
+      message += ` Logged: ${voiceRun.done.join(", ")}${when}.`;
+    }
+    if (voiceRun.stoppedBecause) message += ` ${voiceRun.stoppedBecause}`;
+    if (voiceRun.notes.length > 0) message += ` ${voiceRun.notes.join(" ")}`;
+
+    const succeeded = voiceRun.done.length > 0;
+    navigator.vibrate?.(succeeded && !voiceRun.stoppedBecause ? 20 : [30, 50, 30]);
+    const canUndo = succeeded && viewModel.undoDepth > voiceRun.depthBefore;
+    showVoiceFeedback(message, succeeded, canUndo ? voiceRun.depthBefore : null);
+    setVoiceRun(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceRun]);
+
+  // Live (not back-dated) voice entries of something just logged are refused, so closed-loop calls aren't two doses.
+  const voiceRefusal = (name: string, time: number | null) =>
+    voiceRepeatRefusal(viewModel.events, name, time, Date.now() / 1000, viewModel.totalArrestTime, repeatCounts);
+
+  // Each action only applies when a tap would make sense at this point in the algorithm (matches iOS).
+  // "continue" means it has done the first half and wants the next render to finish.
+  const performVoiceAction = (
+    action: VoiceAction,
+    time: number | null,
+  ): { summary: string; note?: string } | { failure: string } | { skipped: string } | "continue" => {
+    const vm = viewModel;
+    if (action.type === "undo") {
+      if (!vm.canUndo) return { failure: "Nothing to undo." };
+      vm.undo();
+      return { summary: "undo" };
+    }
+    // Drugs, readings and interventions are also logged after ROSC; everything else needs an active arrest.
+    const worksAfterROSC = ["otherDrug", "observation", "procedure", "rearrest", "preAlert", "note", "patient"].includes(action.type);
+    const stateAllows = vm.arrestState === ArrestState.Active || (worksAfterROSC && vm.arrestState === ArrestState.Rosc);
+    if (!stateAllows || vm.isTimerPaused) {
+      return { failure: "Voice commands work during an active adult arrest." };
+    }
+
+    switch (action.type) {
+      case "started": {
+        const confirmed = vm.dateFor(action.time);
+        if (!confirmed) return { failure: "That time is in the future; the clock wasn't changed." };
+        // Whole minutes: it's an estimate, and the clock shouldn't pretend otherwise.
+        const offset = Math.round(((Date.now() - confirmed.getTime()) / 1000 - vm.masterTime) / 60) * 60;
+        if (offset < 0) return { failure: "eResus was started before then; the clock wasn't changed." };
+        let moved = false;
+        vm.performFromVoice(null, () => {
+          moved = vm.setTimeBeforeStart(offset);
+        });
+        if (!moved) return { failure: "Earlier entries are before that time; the clock wasn't changed." };
+        return {
+          summary: offset === 0 ? "arrest confirmed when eResus was started" : `arrest confirmed ~${offset / 60} min before eResus`,
+        };
+      }
+      case "given": {
+        const { item, count } = action;
+        let added = false;
+        if (!["shock", "adrenaline", "amiodarone", "lidocaine"].includes(item)) {
+          vm.performFromVoice(null, () => {
+            added = vm.logOtherBeforeStart(item);
+          });
+          if (!added) return { failure: `${item} wasn't added.` };
+          return { summary: `${item} before eResus` };
+        }
+        vm.performFromVoice(null, () => {
+          added = vm.logBeforeStart({ [item]: count });
+        });
+        if (!added) {
+          const other = item === "amiodarone" ? "Lidocaine" : "Amiodarone";
+          return { failure: `${other} is already recorded, so ${item} wasn't added.` };
+        }
+        const name = item.charAt(0).toUpperCase() + item.slice(1);
+        const summary = item === "shock" ? (count === 1 ? "1 shock" : `${count} shocks`) : `${name} ×${count}`;
+        // An antiarrhythmic before the 3rd shock is unusual; the shock count is probably incomplete.
+        const note =
+          (item === "amiodarone" || item === "lidocaine") && vm.drugTimingShockCount < 3
+            ? `${name} is usually given after the 3rd shock: say how many shocks were given.`
+            : undefined;
+        return { summary: `${summary} before eResus`, note };
+      }
+      case "earlierRhythm": {
+        const name =
+          action.rhythm === "Shockable" ? "Shockable rhythm" : action.rhythm === "Non-shockable" ? "Non-shockable rhythm" : action.rhythm;
+        vm.performFromVoice(null, () => vm.logEarlierRhythm(name));
+        return { summary: `${name} before eResus` };
+      }
+      case "drug": {
+        const { drug, dose } = action;
+        const refusal = voiceRefusal(drug.charAt(0).toUpperCase() + drug.slice(1), time);
+        if (refusal) return { failure: refusal };
+        if (drug === "adrenaline") {
+          if (!vm.isAdrenalineAvailable) return { failure: "Adrenaline is withheld (severe hypothermia)." };
+          vm.performFromVoice(time, () => vm.logAdrenaline(dose, true));
+        } else if (drug === "amiodarone") {
+          if (!vm.isAmiodaroneAvailable) return { failure: "Amiodarone isn't available now." };
+          vm.performFromVoice(time, () => vm.logAmiodarone(dose, true));
+        } else {
+          if (!vm.isLidocaineAvailable) return { failure: "Lidocaine isn't available now." };
+          vm.performFromVoice(time, () => vm.logLidocaine(dose, true));
+        }
+        const name = drug.charAt(0).toUpperCase() + drug.slice(1);
+        return { summary: dose ? `${name} ${dose}` : name, note: doseNote(drug, dose) ?? undefined };
+      }
+      case "otherDrug": {
+        const { drug, dose } = action;
+        const refusal = voiceRefusal(drug, time);
+        if (refusal) return { failure: refusal };
+        vm.performFromVoice(time, () => vm.logOtherDrug(drug, dose, true));
+        return { summary: dose ? `${drug} ${dose}` : drug };
+      }
+      case "procedure": {
+        // Chest procedures need a side; guessing one would put the wrong side on the record.
+        if (!isTraumaProcedureName(action.procedure)) return { failure: `${action.procedure}: say left, right or both.` };
+        const refusal = voiceRefusal(action.procedure, time);
+        if (refusal) return { skipped: refusal };
+        // Only a definitive TCA intervention during the arrest marks it as traumatic (as logTraumaProcedure decides).
+        const marksTrauma =
+          !vm.isTraumaArrest && vm.arrestState === ArrestState.Active && TRAUMA_MARKS_ARREST.has(action.procedure);
+        vm.performFromVoice(time, () => vm.logTraumaProcedure(action.procedure));
+        return {
+          summary: action.procedure,
+          note: marksTrauma ? "Traumatic cardiac arrest mode selected: drug reminders paused." : undefined,
+        };
+      }
+      case "trauma":
+        if (vm.isTraumaArrest) return { summary: "traumatic arrest (already set)" };
+        vm.performFromVoice(null, () => vm.setTraumaArrest(true));
+        return { summary: "traumatic cardiac arrest mode selected" };
+      case "rearrest":
+        if (vm.arrestState !== ArrestState.Rosc) return { failure: "Re-arrest is only after ROSC." };
+        vm.performFromVoice(null, vm.reArrest);
+        return { summary: "re-arrest" };
+      case "preAlert":
+        vm.performFromVoice(null, () => vm.logDestination("Pre-alert given"));
+        return { summary: "pre-alert given" };
+      case "note":
+        vm.performFromVoice(null, () => vm.logNote(action.text));
+        return { summary: action.text.toLowerCase() };
+      case "patient":
+        vm.setPatientDetails(action.age, action.sex);
+        return { summary: [action.age && `age ${action.age}`, action.sex?.toLowerCase()].filter(Boolean).join(", ") };
+      case "observation": {
+        const { kind, value } = action;
+        vm.performFromVoice(null, () => vm.logObservation(kind, value));
+        return { summary: `${ROSC_OBSERVATIONS[kind].title} ${value}` };
+      }
+      case "analyse":
+        if (vm.uiState !== UIState.Default) return { failure: "A rhythm check is already in progress." };
+        vm.performFromVoice(time, vm.analyseRhythm);
+        return { summary: "rhythm check" };
+      case "rhythm": {
+        if (vm.uiState === UIState.ShockAdvised) return { failure: "A shock is already advised." };
+        // "VF" on its own starts the rhythm check first, as the buttons would.
+        if (vm.uiState === UIState.Default) {
+          vm.performFromVoice(time, vm.analyseRhythm);
+          return "continue";
+        }
+        const shockable = ["VF", "VT", "Shockable"].includes(action.rhythm);
+        const name =
+          action.rhythm === "Shockable" ? "Shockable rhythm" : action.rhythm === "Non-shockable" ? "Non-shockable rhythm" : action.rhythm;
+        vm.performFromVoice(time, () => vm.logRhythm(name, shockable));
+        return { summary: name };
+      }
+      case "shock": {
+        if (vm.uiState !== UIState.ShockAdvised) return { failure: "Log a shockable rhythm before a shock." };
+        const shockNumber = vm.shockCount + 1;
+        vm.performFromVoice(time, () => vm.deliverShock(action.energy));
+        return { summary: action.energy ? `shock ${shockNumber} ${action.energy}` : `shock ${shockNumber}` };
+      }
+      case "rosc":
+        vm.performFromVoice(time, vm.achieveROSC);
+        return { summary: "ROSC" };
+      case "airway": {
+        const type = action.device as AirwayAdjunctType;
+        vm.performFromVoice(time, () => vm.logAirwayPlaced(type));
+        return { summary: type === AirwayAdjunctType.Unspecified ? "advanced airway" : getAirwayAdjunctDisplayName(type) };
+      }
+      case "access": {
+        const { route, successful, gauge, location } = action;
+        vm.performFromVoice(time, () => vm.logVascularAccess(route, location ?? "", gauge ?? "", successful));
+        const detail = [gauge, location].filter(Boolean).join(", ");
+        return { summary: `${route} ${successful ? "access" : "failed"}${detail ? ` (${detail})` : ""}` };
+      }
+      case "etco2": {
+        const unit = action.unit ?? etco2Unit;
+        // Below 5 mmHg is far more likely a kPa reading said out of habit.
+        const [min, max] = unit === "kPa" ? [0.1, 20] : [5, 150];
+        if (action.value < min || action.value > max) {
+          return { failure: `ETCO2 ${formatNumber(action.value)} ${unit} is outside the expected range; not logged.` };
+        }
+        vm.performFromVoice(time, () => vm.logEtco2(String(action.value), unit));
+        return { summary: `ETCO2 ${formatNumber(action.value)} ${unit}` };
+      }
+    }
+  };
+
+  // A gentle check, not a block: logs what was said but flags a dose that differs from the expected one.
+  // Checked before the dose is logged, so the counts are of doses already given.
+  const doseNote = (drug: string, dose: string | null): string | null => {
+    const age = viewModel.patientAgeCategory ?? PatientAgeCategory.Adult;
+    const isAdult = age === PatientAgeCategory.Adult;
+    const expected =
+      drug === "adrenaline"
+        ? DosageCalculator.calculateAdrenalineDose(age)
+        : drug === "amiodarone"
+          ? DosageCalculator.calculateAmiodaroneDose(age, viewModel.amiodaroneCount + 1)
+          : drug === "lidocaine" && isAdult
+            ? viewModel.lidocaineCount === 0
+              ? "100mg"
+              : "50mg"
+            : null;
+    return checkDose(drug, dose, expected, isAdult);
+  };
+
+  const clockText = (total: number) =>
+    new Date(Date.now() + (total - viewModel.totalArrestTime) * 1000).toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  // Hands-free listens only while an adult arrest is running on screen, or after ROSC.
+  const shouldListenHandsFree =
+    voiceAvailable &&
+    voiceHandsFree &&
+    (viewModel.arrestState === ArrestState.Active || viewModel.arrestState === ArrestState.Rosc) &&
+    !viewModel.isTimerPaused;
+  useEffect(() => {
+    if (shouldListenHandsFree) {
+      voiceCommandListener.startHandsFree(voiceWakeWord, (command) => handleVoiceTranscriptRef.current(command));
+    } else {
+      voiceCommandListener.stopHandsFree();
+    }
+  }, [shouldListenHandsFree, voiceWakeWord]);
+  useEffect(() => () => voiceCommandListener.stopHandsFree(), []);
 
   return (
     <div className="flex flex-col h-full">
-      <HeaderView />
+      <HeaderView onAddTime={showBeforeEResusHint} />
 
       <div className="flex-grow overflow-y-auto bg-gray-100 dark:bg-gray-900">
         {viewModel.arrestState === ArrestState.Pending && (
-          <PendingView onShowPdf={onShowPdf} onShowNewborn={onShowNewborn} />
+          <PendingView onShowPdf={onShowPdf} onShowNewborn={onShowNewborn} needsSetup={needsSetup} onStartSetup={onStartSetup} />
         )}
         {viewModel.arrestState === ArrestState.Active && (
           <ActiveArrestContentView
@@ -5161,14 +6429,54 @@ const ArrestView: React.FC<{
             onLogAmiodarone={() => handleLogDrug({ type: "amiodarone" })}
             onLogLidocaine={() => handleLogDrug({ type: "lidocaine" })}
             onShowTOR={() => setShowTORModal(true)}
+            onShowTrauma={() => setShowTraumaModal(true)}
+            onVoiceTranscript={handleVoiceTranscript}
           />
         )}
         {viewModel.arrestState === ArrestState.Rosc && (
-          <RoscView onShowPdf={onShowPdf} onShowOtherDrugs={() => setShowOtherDrugsModal(true)} />
+          <RoscView
+            onShowPdf={onShowPdf}
+            onOpenDrugs={openDrugs}
+            onShowEtco2={() => setShowEtco2Modal(true)}
+            onVoiceTranscript={handleVoiceTranscript}
+            onQuickDrug={(name, dose) => checkRepeat(name, () => viewModel.logOtherDrug(name, dose, dose !== null))}
+          />
         )}
         {viewModel.arrestState === ArrestState.Ended && <EndedView onShowPdf={onShowPdf} />}
       </div>
 
+      {voiceFeedback && viewModel.arrestState !== ArrestState.Pending && (
+        // Shows what was heard and what it did, with Undo one tap away. A tap or a swipe puts it away.
+        <div
+          role="status"
+          onClick={() => setVoiceFeedback(null)}
+          onTouchStart={(e) => (bannerTouch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
+          onTouchEnd={(e) => {
+            const start = bannerTouch.current;
+            if (!start) return;
+            const dx = e.changedTouches[0].clientX - start.x;
+            const dy = e.changedTouches[0].clientY - start.y;
+            if (Math.abs(dx) > 60 || dy > 30) setVoiceFeedback(null);
+          }}
+          className={`mx-3 mb-2 flex items-center gap-3 p-3 rounded-xl shadow text-sm cursor-pointer ${
+            voiceFeedback.succeeded ? "bg-tone-tint text-tone-on-tint" : "bg-tone-alert text-tone-on-alert"
+          }`}
+        >
+          <span className="flex-grow">{voiceFeedback.message}</span>
+          {voiceFeedback.undoDepth !== null && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                viewModel.undoToDepth(voiceFeedback.undoDepth!);
+                setVoiceFeedback(null);
+              }}
+              className="px-3 py-1.5 rounded-lg font-semibold bg-tone-accent text-tone-on-accent"
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      )}
       {viewModel.arrestState !== ArrestState.Pending && (
         <BottomControlsView
           onShowSummary={() => setShowSummaryModal(true)}
@@ -5176,8 +6484,15 @@ const ArrestView: React.FC<{
         />
       )}
 
+      <WakeWordEdgeGlow />
+
       {/* Modals */}
-      <SummaryView isOpen={showSummaryModal} onClose={() => setShowSummaryModal(false)} />
+      <SummaryView
+        isOpen={showSummaryModal}
+        onClose={() => setShowSummaryModal(false)}
+        typeColour={(type) => getEventTypeColor(type as EventType)}
+        {...viewModel.summaryInput()}
+      />
       <ResetModalView isOpen={showResetModal} onClose={() => setShowResetModal(false)} />
       <HypothermiaModal isOpen={showHypothermiaModal} onClose={() => setShowHypothermiaModal(false)} />
       <Etco2ModalView isOpen={showEtco2Modal} onClose={() => setShowEtco2Modal(false)} />
@@ -5188,12 +6503,41 @@ const ArrestView: React.FC<{
         onClose={() => setShowTORModal(false)}
         onConfirmTOR={viewModel.confirmTOR}
       />
-      <OtherDrugsModal
+      <OtherDrugsSheet
         isOpen={showOtherDrugsModal}
-        onClose={() => setShowOtherDrugsModal(false)}
-        onSelectDrug={handleSelectOtherDrug}
+        onClose={() => {
+          setShowOtherDrugsModal(false);
+          setOtherDrugsFocus(null);
+        }}
+        focus={otherDrugsFocus}
+        recent={recentOtherDrugs(viewModel.events)}
+        lastGiven={(drug) => loggedAt(viewModel.events, drug)}
+        onSelect={handleSelectOtherDrug}
+      />
+      <TraumaSheet
+        isOpen={showTraumaModal}
+        onClose={() => setShowTraumaModal(false)}
+        isTrauma={viewModel.isTraumaArrest}
+        onSetTrauma={viewModel.setTraumaArrest}
+        onLogProcedure={viewModel.logTraumaProcedure}
+        repeatCheckFor={checkRepeatFor}
+        loggedAt={(name) => loggedAt(viewModel.events, name)}
+        onDrug={handleSelectOtherDrug}
+        onFluids={() => openDrugs("fluids")}
       />
       {drugToLog && <DosageEntryModal isOpen={!!drugToLog} onClose={() => setDrugToLog(null)} drug={drugToLog} />}
+
+      {repeatPrompt && (
+        <RepeatPromptModal
+          message={repeatPrompt.message}
+          onCancel={() => setRepeatPrompt(null)}
+          onConfirm={() => {
+            const { proceed } = repeatPrompt;
+            setRepeatPrompt(null);
+            proceed();
+          }}
+        />
+      )}
 
       {/* Drug Confirmation Alert */}
       {drugConfirmation && (
@@ -5218,7 +6562,7 @@ const ArrestView: React.FC<{
               />
               <ActionButton
                 title="Confirm"
-                backgroundColor="bg-blue-600"
+                backgroundColor="bg-tone-accent"
                 foregroundColor="text-white"
                 onClick={() => handleConfirmDrug(true)}
               />
@@ -5273,7 +6617,8 @@ const LogbookView: React.FC = () => {
       const eventsCollectionPath = `/artifacts/${appId}/users/${userId}/logs/${log.id}/events`;
       const eventsSnapshot = await getDocs(collection(db, eventsCollectionPath));
       const fetchedEvents: Event[] = eventsSnapshot.docs.map((d) => d.data() as Event);
-      fetchedEvents.sort((a, b) => a.timestamp - b.timestamp);
+      // Newest first, like a live log.
+      fetchedEvents.sort((a, b) => b.timestamp - a.timestamp);
       setSelectedLogEvents(fetchedEvents);
     } catch (e) {
       console.error("Error fetching log events: ", e);
@@ -5302,13 +6647,6 @@ const LogbookView: React.FC = () => {
     return parts.join(" ");
   };
 
-  // Dynamic lidocaine count from events
-  const getDynamicLidocaineCount = (logEvents: Event[]): number => {
-    return logEvents.filter(
-      (e) => e.message.toLowerCase().includes("lidocaine") && e.message.toLowerCase().includes("given"),
-    ).length;
-  };
-
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 bg-white dark:bg-gray-800 shadow-md">
@@ -5335,14 +6673,14 @@ const LogbookView: React.FC = () => {
                   {log.startTime.toDate().toLocaleTimeString()}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {log.finalOutcome}
+                  Duration: {TimeFormatter.format(log.totalDuration)} | Outcome: {displayOutcome(log.finalOutcome)}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500">
                   Shocks: {log.shockCount ?? 0} | Adr: {log.adrenalineCount ?? 0} | Amio: {log.amiodaroneCount ?? 0} |
                   Lido: {log.lidocaineCount ?? 0}
                 </p>
                 {hasPatientInfo(log) ? (
-                  <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">
+                  <p className="text-xs text-tone-accent font-semibold mt-1">
                     {getPatientInfoText(log)}
                   </p>
                 ) : (
@@ -5351,14 +6689,14 @@ const LogbookView: React.FC = () => {
                       e.stopPropagation();
                       setEditingLog(log);
                     }}
-                    className="inline-block mt-2 px-3 py-1 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded-full cursor-pointer"
+                    className="inline-block mt-2 px-3 py-1 text-xs font-semibold text-tone-accent bg-tone-tint rounded-full cursor-pointer"
                   >
                     + Add Patient Info
                   </span>
                 )}
               </div>
               <div className="flex flex-col items-end space-y-1 flex-shrink-0 ml-2">
-                <button onClick={() => setEditingLog(log)} className="p-1.5 text-gray-400 hover:text-blue-500">
+                <button onClick={() => setEditingLog(log)} className="p-1.5 text-gray-400 hover:text-tone-accent">
                   <Pencil size={16} />
                 </button>
                 <button onClick={() => log.id && deleteLog(log.id)} className="p-1.5 text-gray-400 hover:text-red-500">
@@ -5402,162 +6740,22 @@ const LogbookView: React.FC = () => {
         ))}
       </div>
 
-      {/* Log Detail Modal */}
       {selectedLog && (
-        <Modal isOpen={!!selectedLog} onClose={() => setSelectedLog(null)} title="Log Summary">
-          <div className="flex flex-col space-y-4">
-            {/* Date and demographics */}
-            <div>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-                {selectedLog.startTime
-                  .toDate()
-                  .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
-              </h3>
-              {hasPatientInfo(selectedLog) && (
-                <p className="text-blue-600 dark:text-blue-400 font-semibold flex items-center space-x-2">
-                  <UserIcon size={14} />
-                  <span>{getPatientInfoText(selectedLog)}</span>
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-1 text-sm">
-              <p className="text-gray-700 dark:text-gray-300">
-                Start Time:{" "}
-                {selectedLog.startTime.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </p>
-              {selectedLog.roscTime != null && (
-                <p className="text-green-600 dark:text-green-400 font-semibold">ROSC achieved</p>
-              )}
-              {selectedLog.torTime != null && (
-                <p className="text-red-500 font-semibold">
-                  TOR at{" "}
-                  {selectedLog.startTime
-                    ? new Date(
-                        selectedLog.startTime.toDate().getTime() + selectedLog.torTime * 1000,
-                      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : TimeFormatter.format(selectedLog.torTime)}
-                </p>
-              )}
-              {selectedLog.vodTime != null && (
-                <p className="text-red-500 font-semibold">
-                  VOD at{" "}
-                  {selectedLog.startTime
-                    ? new Date(
-                        selectedLog.startTime.toDate().getTime() + selectedLog.vodTime * 1000,
-                      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : TimeFormatter.format(selectedLog.vodTime)}
-                </p>
-              )}
-              <p className="text-gray-700 dark:text-gray-300">
-                Total Duration: {TimeFormatter.format(selectedLog.totalDuration)}
-              </p>
-            </div>
-
-            {/* Critical Interventions */}
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-1 text-sm">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                Critical Interventions
-              </h4>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Initial Rhythm:</span>
-                <span className="font-bold text-gray-900 dark:text-white">{selectedLog.initialRhythm || "None"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">First IV / IO:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractFirstEventTime(
-                    selectedLogEvents,
-                    ["vascular access", "iv access", "io access"],
-                    selectedLog.startTime?.toDate(),
-                  ) || "None"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">First Airway:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractFirstEventTime(selectedLogEvents, ["advanced airway"], selectedLog.startTime?.toDate()) ||
-                    "None"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Last Adrenaline:</span>
-                <span className="font-bold text-gray-900 dark:text-white">
-                  {extractLastEventTime(selectedLogEvents, ["adrenaline"], selectedLog.startTime?.toDate()) || "None"}
-                </span>
-              </div>
-            </div>
-
-            {/* Stats */}
-            <div className="flex justify-around py-2">
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">{selectedLog.shockCount ?? 0}</span>
-                <p className="text-xs text-gray-500">Shocks</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {selectedLog.adrenalineCount ?? 0}
-                </span>
-                <p className="text-xs text-gray-500">Adrenaline</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {selectedLog.amiodaroneCount ?? 0}
-                </span>
-                <p className="text-xs text-gray-500">Amiodarone</p>
-              </div>
-              <div className="text-center">
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
-                  {Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}
-                </span>
-                <p className="text-xs text-gray-500">Lidocaine</p>
-              </div>
-            </div>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-700 rounded-lg font-mono text-sm">
-              {selectedLogEvents.map((event, index) => (
-                <div key={index} className="flex">
-                  <span className={`font-bold w-16 flex-shrink-0 ${getEventTypeColor(event.type)}`}>
-                    [{TimeFormatter.format(event.timestamp)}]
-                  </span>
-                  <span className="ml-2 text-gray-800 dark:text-gray-200">{event.message}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex space-x-2">
-              <button
-                onClick={() => {
-                  const startText = selectedLog.startTime
-                    ? selectedLog.startTime.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : "Unknown";
-                  const dateText = selectedLog.startTime
-                    ? selectedLog.startTime
-                        .toDate()
-                        .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-                    : "Unknown";
-                  const patientInfo = hasPatientInfo(selectedLog) ? getPatientInfoText(selectedLog) : "";
-                  const evtsSorted = selectedLogEvents.sort((a, b) => a.timestamp - b.timestamp);
-                  const text = `eResus - Arrest Summary\nDate: ${dateText}\n${patientInfo ? `Patient: ${patientInfo}\n` : ""}Start Time: ${startText}\nInitial Rhythm: ${selectedLog.initialRhythm || "None"}\n${selectedLog.torTime != null ? `TOR: ${selectedLog.startTime ? new Date(selectedLog.startTime.toDate().getTime() + selectedLog.torTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.torTime)}\n` : ""}${selectedLog.vodTime != null ? `VOD: ${selectedLog.startTime ? new Date(selectedLog.startTime.toDate().getTime() + selectedLog.vodTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : TimeFormatter.format(selectedLog.vodTime)}\n` : ""}Total Duration: ${TimeFormatter.format(selectedLog.totalDuration)}\n\nShocks: ${selectedLog.shockCount ?? 0}  |  Adrenaline: ${selectedLog.adrenalineCount ?? 0}  |  Amiodarone: ${selectedLog.amiodaroneCount ?? 0}  |  Lidocaine: ${Math.max(selectedLog.lidocaineCount ?? 0, getDynamicLidocaineCount(selectedLogEvents))}\n\n--- Event Log ---\n${evtsSorted.map((e) => `[${TimeFormatter.format(e.timestamp)}] ${e.message}`).join("\n")}`;
-                  navigator.clipboard.writeText(text.trim()).catch(console.error);
-                  if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
-                }}
-                className="flex-1 py-3 rounded-xl bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white font-bold flex items-center justify-center space-x-2 active:scale-95 transition-transform"
-              >
-                <Clipboard size={18} />
-                <span>Copy</span>
-              </button>
-              <div className="flex-1">
-                <ActionButton
-                  title="Close"
-                  backgroundColor="bg-blue-600"
-                  foregroundColor="text-white"
-                  onClick={() => setSelectedLog(null)}
-                />
-              </div>
-            </div>
-          </div>
-        </Modal>
+        <SummaryView
+          isOpen
+          onClose={() => setSelectedLog(null)}
+          events={selectedLogEvents}
+          totalTime={selectedLog.totalDuration}
+          startTime={selectedLog.startTime?.toDate() ?? null}
+          shockCount={selectedLog.shockCount ?? 0}
+          adrenalineCount={selectedLog.adrenalineCount ?? 0}
+          amiodaroneCount={selectedLog.amiodaroneCount ?? 0}
+          lidocaineCount={Math.max(selectedLog.lidocaineCount ?? 0, lidocaineDosesIn(selectedLogEvents))}
+          patientAge={selectedLog.patientAge && selectedLog.patientAge !== "Unknown" ? selectedLog.patientAge : null}
+          patientGender={selectedLog.patientGender && selectedLog.patientGender !== "Unknown" ? selectedLog.patientGender : null}
+          isLive={false}
+          typeColour={(type) => getEventTypeColor(type as EventType)}
+        />
       )}
 
       {editingLog && (
@@ -5648,8 +6846,8 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
     return (
       <Modal isOpen={isOpen} onClose={onClose} title="Account">
         <div className="space-y-4 text-center">
-          <div className="w-16 h-16 mx-auto rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
-            <UserIcon size={32} className="text-blue-600 dark:text-blue-400" />
+          <div className="w-16 h-16 mx-auto rounded-full bg-tone-tint flex items-center justify-center">
+            <UserIcon size={32} className="text-tone-accent" />
           </div>
           <p className="text-gray-700 dark:text-gray-300">Signed in as</p>
           <p className="font-semibold text-gray-900 dark:text-white">
@@ -5660,8 +6858,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
           </p>
           <ActionButton
             title="Sign Out"
-            backgroundColor="bg-red-600"
-            foregroundColor="text-white"
+            tone="dangerTint"
             onClick={handleSignOut}
           />
         </div>
@@ -5684,7 +6881,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
             </p>
             <ActionButton
               title="Back to Sign In"
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={() => {
                 setMode("login");
@@ -5773,7 +6970,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                       ? "Create Account"
                       : "Sign In with Email"
               }
-              backgroundColor="bg-blue-600"
+              backgroundColor="bg-tone-accent"
               foregroundColor="text-white"
               onClick={handleSubmit}
               disabled={loading}
@@ -5785,7 +6982,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                     setMode("register");
                     setError("");
                   }}
-                  className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                  className="w-full text-center text-sm text-tone-accent"
                 >
                   Don't have an account? Create one
                 </button>
@@ -5806,7 +7003,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                   setMode("login");
                   setError("");
                 }}
-                className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                className="w-full text-center text-sm text-tone-accent"
               >
                 Already have an account? Sign in
               </button>
@@ -5818,7 +7015,7 @@ const AuthView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, 
                   setError("");
                   setResetSent(false);
                 }}
-                className="w-full text-center text-sm text-blue-600 dark:text-blue-400"
+                className="w-full text-center text-sm text-tone-accent"
               >
                 Back to Sign In
               </button>
@@ -5845,15 +7042,60 @@ const SettingsView: React.FC = () => {
     setShowDosagePrompts,
     researchModeEnabled,
     setResearchModeEnabled,
+    setHasRespondedToResearchTerms,
     askForPatientInfo,
     setAskForPatientInfo,
     userOrganization,
     setUserOrganization,
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voicePromptsToneOnly,
+    setVoicePromptsToneOnly,
+    rhythmCheckWarning,
+    setRhythmCheckWarning,
+    promptRhythmCheck,
+    setPromptRhythmCheck,
+    promptAdrenaline,
+    setPromptAdrenaline,
+    promptAntiarrhythmic,
+    setPromptAntiarrhythmic,
+    etco2Unit,
+    setEtco2Unit,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    setVoiceWakeWord,
   } = useSettings();
+  const [voiceCommandsMessage, setVoiceCommandsMessage] = useState<string | null>(null);
+
+  // Enabling checks for on-device recognition and downloads the language pack if needed (needs a tap).
+  const toggleVoiceCommands = async (enable: boolean) => {
+    if (!enable) {
+      setVoiceCommandsEnabled(false);
+      setVoiceCommandsMessage(null);
+      return;
+    }
+    let status = await checkVoiceCommandAvailability();
+    if (status === "downloadable" || status === "downloading") {
+      setVoiceCommandsMessage("Downloading English (UK) speech recognition to this device…");
+      status = (await installVoiceCommandLanguage()) ? "available" : await checkVoiceCommandAvailability();
+    }
+    if (status === "available") {
+      setVoiceCommandsEnabled(true);
+      setVoiceCommandsMessage(null);
+    } else {
+      setVoiceCommandsMessage(
+        "This browser can't recognise speech on the device, so voice commands aren't available. They need a recent version of Google Chrome, or the eResus iPhone app.",
+      );
+    }
+  };
   const { user, isAnonymous, db } = useFirebase();
 
   const [availableOrgs, setAvailableOrgs] = useState<string[]>(["Independent / None"]);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -5895,11 +7137,11 @@ const SettingsView: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-900 dark:text-white font-medium">{user.email}</p>
-                <p className="text-xs text-green-600 dark:text-green-400">Signed in</p>
+                <p className="text-xs text-tone-accent">Signed in</p>
               </div>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded-lg"
+                className="px-3 min-h-11 text-sm font-medium text-tone-on-tint bg-tone-tint rounded-lg"
               >
                 Manage
               </button>
@@ -5907,12 +7149,12 @@ const SettingsView: React.FC = () => {
           ) : (
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-700 dark:text-gray-300">Anonymous</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Sign in to sync logs across devices</p>
+                <p className="text-sm text-gray-700 dark:text-gray-300">Not signed in</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Back up and sync your logbook</p>
               </div>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg active:scale-95 transition-transform"
+                className="px-3 min-h-11 text-sm font-medium text-white bg-tone-accent rounded-lg active:scale-95 transition-transform"
               >
                 Sign In
               </button>
@@ -5920,9 +7162,9 @@ const SettingsView: React.FC = () => {
           )}
         </div>
 
-        {/* Timers */}
+        {/* During an Arrest */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Timers</h3>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">During an Arrest</h3>
           <SettingStepper
             label="CPR Cycle"
             value={cprCycleDuration}
@@ -5941,13 +7183,8 @@ const SettingsView: React.FC = () => {
             step={1}
             unit="minutes"
           />
-        </div>
-
-        {/* Metronome */}
-        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Metronome</h3>
           <SettingStepper
-            label="BPM"
+            label="Metronome"
             value={metronomeBPM}
             onChange={setMetronomeBPM}
             min={80}
@@ -5955,17 +7192,133 @@ const SettingsView: React.FC = () => {
             step={5}
             unit="BPM"
           />
-        </div>
-
-        {/* Medications */}
-        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Medications</h3>
           <SettingToggle
-            label="Show Dosage Prompts"
+            label="Dose Calculator"
             enabled={showDosagePrompts}
             onChange={setShowDosagePrompts}
-            description="When enabled, the app will ask for patient age or a manual dose when you log Adrenaline, Amiodarone, or other drugs."
+            description="Asks for the patient's age or a dose when adrenaline, amiodarone or other drugs are logged."
           />
+          {!researchModeEnabled && (
+            <SettingToggle
+              label="Ask for Age and Sex"
+              enabled={askForPatientInfo}
+              onChange={setAskForPatientInfo}
+              description="Asks for approximate age and sex when an arrest starts."
+            />
+          )}
+          <SegmentedSetting
+            label="ETCO2 Unit"
+            value={etco2Unit}
+            options={[
+              { value: "kPa", label: "kPa" },
+              { value: "mmHg", label: "mmHg" },
+            ]}
+            onChange={(unit) => setEtco2Unit(unit as "kPa" | "mmHg")}
+          />
+        </div>
+
+        {/* Prompts & Hands-Free */}
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Spoken Prompts</h3>
+          <SettingToggle
+            label="Spoken Prompts"
+            enabled={voicePromptsEnabled}
+            onChange={setVoicePromptsEnabled}
+            description="Announces key events such as rhythm checks and drug reminders. The speaker button on the arrest screen mutes them for the current case."
+          />
+          {voicePromptsEnabled && (
+            <>
+              <SegmentedSetting
+                label="Style"
+                value={voicePromptsToneOnly ? "tone" : "voice"}
+                options={[
+                  { value: "voice", label: "Voice" },
+                  { value: "tone", label: "Tone Only" },
+                ]}
+                onChange={(value) => setVoicePromptsToneOnly(value === "tone")}
+              />
+              <SegmentedSetting
+                label="Rhythm Check Warning"
+                value={String(rhythmCheckWarning)}
+                options={[
+                  { value: "0", label: "Off" },
+                  { value: "10", label: "10 s" },
+                  { value: "15", label: "15 s" },
+                  { value: "30", label: "30 s" },
+                ]}
+                onChange={(value) => setRhythmCheckWarning(Number(value))}
+              />
+              <SettingToggle
+                label="Rhythm Check / Reassessment Due"
+                enabled={promptRhythmCheck}
+                onChange={setPromptRhythmCheck}
+                description="Announced when the CPR cycle ends, or when a newborn reassessment is due."
+              />
+              <SettingToggle
+                label="Adrenaline Reminders"
+                enabled={promptAdrenaline}
+                onChange={setPromptAdrenaline}
+                description="Consider adrenaline, and when a repeat dose is due."
+              />
+              <SettingToggle
+                label="Amiodarone / Lidocaine Reminders"
+                enabled={promptAntiarrhythmic}
+                onChange={setPromptAntiarrhythmic}
+                description="After the third and fifth shocks."
+              />
+            </>
+          )}
+        </div>
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Voice Commands (Experimental)</h3>
+          <SettingToggle
+            label="Voice Commands"
+            enabled={voiceCommandsEnabled}
+            onChange={toggleVoiceCommands}
+            description="Press and hold the CPR ring and speak, e.g. “rhythm check VF, shock delivered 200 joules” or “1 mg adrenaline at 14:52”. Understands drugs and doses, rhythms, shocks, ROSC, airway, IV/IO, ETCO2, times and “undo”. Speech is recognised on this device only and nothing is sent anywhere. Check each entry: anything logged by voice is marked (voice) and the banner's Undo reverses the whole phrase."
+          />
+          {voiceCommandsMessage && <p className="text-sm text-tone-danger">{voiceCommandsMessage}</p>}
+          {voiceCommandsEnabled && (
+            <SettingToggle
+              label="Hands-Free Wake Word"
+              enabled={voiceHandsFree}
+              onChange={setVoiceHandsFree}
+              description={`Say the wake word, then the command: “${voiceWakeWord === "eresus" ? "eResus" : "Scribe"}, adrenaline 1 mg”. The microphone is only on during an active arrest, and the browser shows its microphone indicator while it listens.`}
+            />
+          )}
+          {voiceCommandsEnabled && voiceHandsFree && (
+            <SegmentedSetting
+              label="Wake Word"
+              value={voiceWakeWord}
+              options={[
+                { value: "scribe", label: "Scribe" },
+                { value: "eresus", label: "eResus" },
+              ]}
+              onChange={(value) => setVoiceWakeWord(value as WakeWord)}
+            />
+          )}
+        </div>
+
+        {/* Appearance */}
+        <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Appearance</h3>
+          <div className="flex space-x-2">
+            {appearanceOptions.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setAppearanceMode(opt.value)}
+                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-xl border-2
+                ${
+                  appearanceMode === opt.value
+                    ? "bg-tone-tint border-tone-accent text-tone-on-tint"
+                    : "bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400"
+                }`}
+              >
+                {opt.icon}
+                <span className="text-sm font-medium">{opt.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Research & Data */}
@@ -5975,28 +7328,17 @@ const SettingsView: React.FC = () => {
             <span>Research & Data</span>
           </h3>
           <SettingToggle
-            label="Research Mode"
+            label="Enrol in Research"
             enabled={researchModeEnabled}
-            onChange={setResearchModeEnabled}
-            description="When enabled, anonymised arrest data is uploaded to help improve cardiac arrest outcomes research."
+            onChange={(enabled) => {
+              // Switching it on here is an active choice, so it counts as consent.
+              if (enabled) setHasRespondedToResearchTerms(true);
+              setResearchModeEnabled(enabled);
+            }}
+            description="Uploads anonymised logs when an arrest ends, to help improve cardiac arrest outcomes."
           />
-          {researchModeEnabled ? (
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-800 dark:text-gray-200">Ask for Patient Info</span>
-                <span className="text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
-                  Required
-                </span>
-              </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Mandatory when Research Mode is enabled.</p>
-            </div>
-          ) : (
-            <SettingToggle
-              label="Ask for Patient Info"
-              enabled={askForPatientInfo}
-              onChange={setAskForPatientInfo}
-              description="Prompt for approximate patient age and gender when starting an arrest."
-            />
+          {researchModeEnabled && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">Age and sex are asked for at the start of each arrest while enrolled.</p>
           )}
           <div className="space-y-2">
             <span className="text-gray-800 dark:text-gray-200 text-sm">Organisation</span>
@@ -6016,43 +7358,49 @@ const SettingsView: React.FC = () => {
             href="https://tech.aegismedicalsolutions.co.uk/eresus/data-policy"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-600 dark:text-blue-400 underline flex items-center space-x-1"
+            className="text-sm text-tone-accent underline flex items-center space-x-1"
           >
             <ExternalLink size={14} />
-            <span>Data Collection Policy</span>
+            <span>Data Policy</span>
           </a>
         </div>
 
-        {/* Appearance */}
+        {/* About */}
         <div className="p-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg space-y-4">
-          <h3 className="font-semibold text-gray-700 dark:text-gray-300">Appearance</h3>
-          <div className="flex space-x-2">
-            {appearanceOptions.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setAppearanceMode(opt.value)}
-                className={`flex-1 flex flex-col items-center space-y-1 p-3 rounded-xl border-2
-                ${
-                  appearanceMode === opt.value
-                    ? "bg-blue-100 dark:bg-blue-900 border-blue-500 text-blue-700 dark:text-blue-300"
-                    : "bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400"
-                }`}
-              >
-                {opt.icon}
-                <span className="text-sm font-medium">{opt.label}</span>
-              </button>
-            ))}
-          </div>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300">About</h3>
+          <button
+            onClick={() => setShowWhatsNew(true)}
+            className="w-full min-h-11 flex items-center justify-between text-gray-800 dark:text-gray-200"
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles size={18} className="text-tone-accent" aria-hidden="true" />
+              What's New & Quick Tour
+            </span>
+            <ChevronRight size={18} className="text-gray-400" aria-hidden="true" />
+          </button>
+          {/* Opens the mail app with the version filled in (matches iOS). Never add patient details or a log here. */}
+          <a
+            href={`mailto:it-support@aegismedicalsolutions.co.uk?subject=${encodeURIComponent("eResus feedback (web app v1.3)")}&body=${encodeURIComponent(
+              `\n\nPlease don't include patient details.\n${navigator.userAgent}`,
+            )}`}
+            className="w-full min-h-11 flex items-center justify-between text-gray-800 dark:text-gray-200"
+          >
+            <span className="flex items-center gap-2">
+              <Mail size={18} className="text-tone-accent" aria-hidden="true" />
+              Send Feedback
+            </span>
+            <ChevronRight size={18} className="text-gray-400" aria-hidden="true" />
+          </a>
         </div>
 
         {/* Developer Info */}
         <div className="text-center py-4 space-y-1">
-          <p className="text-xs text-gray-400 dark:text-gray-500">eResus v1.2</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">eResus v1.3</p>
           <a
             href="https://tech.aegismedicalsolutions.co.uk"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors"
+            className="text-xs text-gray-400 dark:text-gray-500 hover:text-tone-accent transition-colors"
           >
             Developed by Aegis Medical Solutions Ltd
           </a>
@@ -6060,6 +7408,7 @@ const SettingsView: React.FC = () => {
       </div>
 
       <AuthView isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <WhatsNewView isOpen={showWhatsNew} onClose={() => setShowWhatsNew(false)} voiceCommandsEnabled={voiceCommandsEnabled} setup={<WhatsNewQuickSetup />} />
     </div>
   );
 };
@@ -6097,6 +7446,84 @@ const SettingStepper: React.FC<{
   </div>
 );
 
+const SegmentedSetting: React.FC<{
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}> = ({ label, value, options, onChange }) => (
+  <div className="space-y-2">
+    <span className="text-gray-800 dark:text-gray-200">{label}</span>
+    <div className="flex rounded-lg bg-gray-100 dark:bg-gray-700 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            value === option.value
+              ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow"
+              : "text-gray-600 dark:text-gray-400"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
+// The switches most worth a look after updating, all also in Settings (matches iOS).
+const WhatsNewQuickSetup: React.FC = () => {
+  const {
+    voicePromptsEnabled,
+    setVoicePromptsEnabled,
+    voiceCommandsEnabled,
+    setVoiceCommandsEnabled,
+    voiceHandsFree,
+    setVoiceHandsFree,
+    voiceWakeWord,
+    showDosagePrompts,
+    setShowDosagePrompts,
+  } = useSettings();
+  const [message, setMessage] = useState<string | null>(null);
+  const word = voiceWakeWord === "eresus" ? "eResus" : "Scribe";
+
+  const toggleVoice = async (enable: boolean) => {
+    if (!enable) {
+      setVoiceCommandsEnabled(false);
+      return;
+    }
+    let status = await checkVoiceCommandAvailability();
+    if (status === "downloadable" || status === "downloading") {
+      setMessage("Downloading English (UK) speech recognition to this device…");
+      status = (await installVoiceCommandLanguage()) ? "available" : await checkVoiceCommandAvailability();
+    }
+    if (status === "available") {
+      setVoiceCommandsEnabled(true);
+      setMessage(null);
+    } else {
+      setMessage("This browser can't recognise speech on the device. Voice needs a recent Google Chrome, or the eResus iPhone app.");
+    }
+  };
+
+  return (
+    <div className="mt-5 space-y-5">
+      <SettingToggle label="Spoken prompts" enabled={voicePromptsEnabled} onChange={setVoicePromptsEnabled} description="Says when a rhythm check or drug is due." />
+      <SettingToggle label="Voice scribe" enabled={voiceCommandsEnabled} onChange={toggleVoice} description="Hold the CPR ring and speak to log." />
+      {voiceCommandsEnabled && (
+        <SettingToggle
+          label={`Hands-free “${word}”`}
+          enabled={voiceHandsFree}
+          onChange={setVoiceHandsFree}
+          description={`Say “${word}”, then the entry. Only during an arrest.`}
+        />
+      )}
+      <SettingToggle label="Dose calculator" enabled={showDosagePrompts} onChange={setShowDosagePrompts} description="Suggests doses by age and asks for the dose given." />
+      <p className={`text-sm ${message ? "text-tone-danger" : "text-muted-foreground"}`}>{message ?? "All of these are in Settings too."}</p>
+    </div>
+  );
+};
+
 const SettingToggle: React.FC<{
   label: string;
   enabled: boolean;
@@ -6110,7 +7537,7 @@ const SettingToggle: React.FC<{
         onClick={() => onChange(!enabled)}
         className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent 
         transition-colors duration-200 ease-in-out focus:outline-none
-        ${enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}
+        ${enabled ? "bg-tone-accent" : "bg-gray-300 dark:bg-gray-600"}`}
       >
         <span
           className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 
@@ -6126,32 +7553,28 @@ const SettingToggle: React.FC<{
 //============================================================================
 // PDF VIEWER
 //============================================================================
+// Charts are bundled images, so they open with no signal. The page can't pinch-zoom (user-scalable=no),
+// so a tap toggles between fitting the screen and twice the width, scrolled within the viewer.
 const PDFView: React.FC<{ pdf: PDFIdentifiable; onClose: () => void }> = ({ pdf, onClose }) => {
+  const [zoomed, setZoomed] = useState(false);
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
       <div className="flex justify-between items-center p-4 flex-shrink-0 bg-gray-900">
         <h2 className="text-lg font-semibold text-white truncate flex-1 mr-4">{pdf.title}</h2>
         <button
           onClick={onClose}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex-shrink-0 transition-colors"
+          className="px-4 py-2 bg-tone-accent hover:opacity-90 text-white rounded-xl flex-shrink-0 transition-colors"
         >
           Done
         </button>
       </div>
-      <div className="flex-1 overflow-auto">
-        <object
-          data={pdf.pdfUrl}
-          type="application/pdf"
-          className="w-full h-full"
-          style={{ minHeight: "calc(100vh - 80px)" }}
-        >
-          <iframe
-            src={`https://docs.google.com/viewer?url=${encodeURIComponent(pdf.upstreamUrl ?? pdf.pdfUrl)}&embedded=true`}
-            title={pdf.title}
-            className="w-full h-full border-0"
-            style={{ minHeight: "calc(100vh - 80px)" }}
-          />
-        </object>
+      <div className="flex-1 overflow-auto bg-white">
+        <img
+          src={pdf.pdfUrl}
+          alt={pdf.title}
+          onClick={() => setZoomed((z) => !z)}
+          className={`block max-w-none ${zoomed ? "w-[200%] cursor-zoom-out" : "w-full cursor-zoom-in"}`}
+        />
       </div>
     </div>
   );
@@ -6166,14 +7589,13 @@ type TabID = "arrest" | "logbook" | "settings";
 const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabID>("arrest");
   const [pdfToShow, setPdfToShow] = useState<PDFIdentifiable | null>(null);
-  const [showInstallModal, setShowInstallModal] = useState(() => {
-    const hasSeenInstructions = localStorage.getItem("eResusSeenInstallInstructions");
-    const isStandalone =
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [isStandalone] = useState(
+    () =>
       window.matchMedia("(display-mode: standalone)").matches ||
       (window.navigator as any).standalone ||
-      document.referrer.includes("android-app://");
-    return !hasSeenInstructions && !isStandalone;
-  });
+      document.referrer.includes("android-app://"),
+  );
   const [showNewborn, setShowNewborn] = useState(() => {
     return localStorage.getItem("eresus_active_view") === "nls";
   });
@@ -6191,6 +7613,10 @@ const AppContent: React.FC = () => {
     researchModeEnabled,
     askForPatientInfo,
     userOrganization,
+    voicePromptsEnabled,
+    voicePromptsToneOnly,
+    promptRhythmCheck,
+    voiceCommandsEnabled,
   } = useSettings();
   const { db, userId, isAnonymous, user } = useFirebase();
   const [showAccountPrompt, setShowAccountPrompt] = useState(false);
@@ -6216,32 +7642,80 @@ const AppContent: React.FC = () => {
     }
   }, [isAnonymous, userId, user]);
 
-  const hasSeenAccountPrompt = localStorage.getItem("eResusSeenAccountPrompt");
+  // Setup never opens on launch, so a first-time user at a job can press Start straight away.
+  // It runs once the first case has been reset, or from the card on the start screen.
+  const hasSeenInstall = !!localStorage.getItem("eResusSeenInstallInstructions");
+  const hasSeenAccountPrompt = !!localStorage.getItem("eResusSeenAccountPrompt");
+  const needsSetup =
+    (!hasSeenInstall && !isStandalone) || (!hasSeenAccountPrompt && isAnonymous) || !hasRespondedToResearchTerms;
+  const [setupInProgress, setSetupInProgress] = useState(false);
 
+  const startSetup = () => {
+    if (arrestViewModel.arrestState === ArrestState.Pending) setSetupInProgress(true);
+  };
+
+  // Steps through install, account and research consent one at a time while a setup run is in progress.
   useEffect(() => {
-    if (!showInstallModal && !hasSeenAccountPrompt && isAnonymous) {
+    if (!setupInProgress || showInstallModal || showAccountPrompt || showResearchConsent) return;
+    if (!hasSeenInstall && !isStandalone) {
+      setShowInstallModal(true);
+    } else if (!hasSeenAccountPrompt && isAnonymous) {
       setShowAccountPrompt(true);
-    } else if (!showInstallModal && settingsLoaded && !hasRespondedToResearchTerms) {
-      setShowResearchConsent(true);
+    } else if (!hasRespondedToResearchTerms) {
+      // After signing in, wait for their saved settings in case they've already answered on another device.
+      if (settingsLoaded) setShowResearchConsent(true);
+    } else {
+      setSetupInProgress(false);
     }
-  }, [showInstallModal, hasRespondedToResearchTerms, isAnonymous, settingsLoaded]);
+  }, [
+    setupInProgress,
+    showInstallModal,
+    showAccountPrompt,
+    showResearchConsent,
+    hasSeenInstall,
+    hasSeenAccountPrompt,
+    isStandalone,
+    isAnonymous,
+    hasRespondedToResearchTerms,
+    settingsLoaded,
+  ]);
+
+  // After an update, a short tour, once. Never over a running or recovered arrest.
+  // A fresh install gets the setup prompts instead; the tour is for people updating.
+  const [showWhatsNewOnLaunch, setShowWhatsNewOnLaunch] = useState(() => {
+    if (hasSeenWhatsNew()) return false;
+    const isExistingUser = !!localStorage.getItem("eResusSeenInstallInstructions") || !!localStorage.getItem("eResusSeenAccountPrompt") || hasRespondedToResearchTerms;
+    if (!isExistingUser) {
+      markWhatsNewSeen();
+      return false;
+    }
+    return arrestViewModel.arrestState === ArrestState.Pending;
+  });
+
+  const previousArrestStateRef = useRef(arrestViewModel.arrestState);
+  useEffect(() => {
+    const previous = previousArrestStateRef.current;
+    previousArrestStateRef.current = arrestViewModel.arrestState;
+    if (arrestViewModel.arrestState === ArrestState.Pending && previous !== ArrestState.Pending && needsSetup) {
+      const timer = setTimeout(startSetup, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [arrestViewModel.arrestState]);
 
   const handleCloseAccountPrompt = () => {
     localStorage.setItem("eResusSeenAccountPrompt", "true");
     setShowAccountPrompt(false);
-    // If user just signed in, don't immediately show research consent —
-    // wait for settings to load from Firestore (the effect above will handle it)
-    if (!isAnonymous && user && !settingsLoaded) {
-      return;
-    }
-    if (!hasRespondedToResearchTerms) {
-      setShowResearchConsent(true);
-    }
   };
 
   const handleCloseInstallModal = () => {
     localStorage.setItem("eResusSeenInstallInstructions", "true");
     setShowInstallModal(false);
+  };
+
+  const handleCloseResearchConsent = () => {
+    // Closing without choosing ends this run; the card stays until they answer.
+    setSetupInProgress(false);
+    setShowResearchConsent(false);
   };
 
   const handleNLSTransition = (data: {
@@ -6258,13 +7732,35 @@ const AppContent: React.FC = () => {
     arrestViewModel.startArrest(convertedEvents, data.timeOffset, data.startTime);
   };
 
+  const hideTabBar =
+    currentTab === "arrest" &&
+    !showNewborn &&
+    (arrestViewModel.arrestState === ArrestState.Active || arrestViewModel.arrestState === ArrestState.Rosc);
+
   const renderTab = () => {
     switch (currentTab) {
       case "arrest":
         if (showNewborn) {
-          return <NewbornLifeSupport onBack={() => setShowNewborn(false)} onTransitionToALS={handleNLSTransition} />;
+          return (
+            <NewbornLifeSupport
+              onBack={() => setShowNewborn(false)}
+              onTransitionToALS={handleNLSTransition}
+              voicePrompts={{
+                enabled: voicePromptsEnabled,
+                toneOnly: voicePromptsToneOnly,
+                reassess: promptRhythmCheck,
+              }}
+            />
+          );
         }
-        return <ArrestView onShowPdf={setPdfToShow} onShowNewborn={() => setShowNewborn(true)} />;
+        return (
+          <ArrestView
+            onShowPdf={setPdfToShow}
+            onShowNewborn={() => setShowNewborn(true)}
+            needsSetup={needsSetup}
+            onStartSetup={startSetup}
+          />
+        );
       case "logbook":
         return <LogbookView />;
       case "settings":
@@ -6277,6 +7773,8 @@ const AppContent: React.FC = () => {
       <div className="h-screen w-screen flex flex-col font-sans bg-background">
         <main className="flex-grow overflow-hidden">{renderTab()}</main>
 
+        {/* Logbook and Settings aren't needed mid-arrest; hiding the tab bar brings the drugs above the fold. */}
+        {!hideTabBar && (
         <nav className="flex justify-around p-2 bg-card border-t border-border z-20">
           <TabButton
             label="Arrest"
@@ -6297,11 +7795,18 @@ const AppContent: React.FC = () => {
             onClick={() => setCurrentTab("settings")}
           />
         </nav>
+        )}
 
         {pdfToShow && <PDFView pdf={pdfToShow} onClose={() => setPdfToShow(null)} />}
         <InstallInstructionsModal isOpen={showInstallModal} onClose={handleCloseInstallModal} />
         <AccountPromptView isOpen={showAccountPrompt} onClose={handleCloseAccountPrompt} />
-        <ResearchConsentView isOpen={showResearchConsent} onClose={() => setShowResearchConsent(false)} />
+        <ResearchConsentView isOpen={showResearchConsent} onClose={handleCloseResearchConsent} />
+        <WhatsNewView
+          isOpen={showWhatsNewOnLaunch && arrestViewModel.arrestState === ArrestState.Pending}
+          onClose={() => setShowWhatsNewOnLaunch(false)}
+          voiceCommandsEnabled={voiceCommandsEnabled}
+          setup={<WhatsNewQuickSetup />}
+        />
         <PatientInfoPromptView
           isOpen={arrestViewModel.showPatientInfoPrompt}
           onClose={() => arrestViewModel.setShowPatientInfoPrompt(false)}
@@ -6332,7 +7837,7 @@ const TabButton: React.FC<{
     className={`flex flex-col items-center w-20 p-1 rounded-lg transition-colors
     ${
       isActive
-        ? "text-blue-600 dark:text-blue-400"
+        ? "text-tone-accent"
         : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
     }`}
   >

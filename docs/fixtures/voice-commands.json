@@ -1,0 +1,3051 @@
+[
+ {
+  "heard": "adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "Adrenaline given",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "1mg adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "1 milligram of adrenaline at 14:52",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": {
+    "clock": "14:52"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline one milligram",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 1",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "epi in",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline's in",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "300 of amiodarone",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "amio three hundred",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "amiodarone 150 milligrams 2 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "150 mg"
+    }
+   ],
+   "time": {
+    "secondsAgo": 120
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "lido 100 mg",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "lidocaine",
+     "dose": "100 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "lignocaine fifty milligrams",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "lidocaine",
+     "dose": "50 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 100 micrograms",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "100 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline point five milligrams",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "0.5 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline and amiodarone given",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 1mg and amiodarone 300mg at 1452",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": {
+    "clock": "14:52"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "1mg adrenaline and 300mg amiodarone",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline due",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "adrenaline is due",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "draw up adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "no adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "give adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "instruction"
+  }
+ },
+ {
+  "heard": "adrenaline please",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "instruction"
+  }
+ },
+ {
+  "heard": "adrenaline 1 mg adrenaline 10 mg",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "rhythm check",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "analyse rhythm",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rhythm check VF",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rhythm check, v fib",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "vfib",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "VF",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "v.f.",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "it's VT",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VT"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pulseless VT",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VT"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "v tach",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VT"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "PEA",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "PEA"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "p.e.a.",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "PEA"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pulseless electrical activity",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "PEA"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "asystole",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Asystole"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "a systole",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Asystole"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "flat line",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Asystole"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock advised",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Shockable"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "no shock advised",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Non-shockable"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "non shockable",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "Non-shockable"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rhythm check shockable",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "Shockable"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock advised VF",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "not VF",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "VF asystole",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "is it VF",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "is he shockable",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "shock",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock delivered",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shocked at 200 joules",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": "200 J"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "200 J shock",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": "200 J"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock 150",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": "150 J"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "VF shocked",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    },
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "VF shock",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    },
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rhythm check VF shock delivered 200 joules",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    },
+    {
+     "type": "shock",
+     "energy": "200 J"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "asystole shock",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "charging",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "charging to 200",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "ROSC",
+  "expected": {
+   "actions": [
+    {
+     "type": "rosc"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we've got ROSC",
+  "expected": {
+   "actions": [
+    {
+     "type": "rosc"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "got a pulse",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "return of spontaneous circulation at 14:58",
+  "expected": {
+   "actions": [
+    {
+     "type": "rosc"
+    }
+   ],
+   "time": {
+    "clock": "14:58"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "no pulse",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "undo",
+  "expected": {
+   "actions": [
+    {
+     "type": "undo"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "scratch that",
+  "expected": {
+   "actions": [
+    {
+     "type": "undo"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "scratch that, 1 mg adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "undo"
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "i-gel in",
+  "expected": {
+   "actions": [
+    {
+     "type": "airway",
+     "device": "sga"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "igel",
+  "expected": {
+   "actions": [
+    {
+     "type": "airway",
+     "device": "sga"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "intubated",
+  "expected": {
+   "actions": [
+    {
+     "type": "airway",
+     "device": "ett"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tube's in",
+  "expected": {
+   "actions": [
+    {
+     "type": "airway",
+     "device": "ett"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "airway in",
+  "expected": {
+   "actions": [
+    {
+     "type": "airway",
+     "device": "unspecified"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "failed intubation",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "IO in",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IV in left AC 18 gauge",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IV",
+     "successful": true,
+     "gauge": "18G",
+     "location": "Left AC"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IV failed",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IV",
+     "successful": false,
+     "gauge": null,
+     "location": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "missed the IV",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IV",
+     "successful": false,
+     "gauge": null,
+     "location": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO right tibia",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Right tibia"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ETCO2 4.2",
+  "expected": {
+   "actions": [
+    {
+     "type": "etco2",
+     "value": 4.2,
+     "unit": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "end tidal 35 millimetres of mercury",
+  "expected": {
+   "actions": [
+    {
+     "type": "etco2",
+     "value": 35,
+     "unit": "mmHg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "CO2 four point five kpa",
+  "expected": {
+   "actions": [
+    {
+     "type": "etco2",
+     "value": 4.5,
+     "unit": "kPa"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline at 2:52 pm",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "14:52"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline at fourteen fifty two",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "14:52"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline a minute ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 60
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 30 seconds ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 30
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 1 mg amiodarone 300 mg VF shock",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    },
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rhythm check asystole adrenaline 1 mg",
+  "expected": {
+   "actions": [
+    {
+     "type": "analyse"
+    },
+    {
+     "type": "rhythm",
+     "rhythm": "Asystole"
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "get the bag ready",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "speak up",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "adrenaline at 2:52",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "02:52",
+    "twelveHour": true
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline at quarter to three",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "02:45",
+    "twelveHour": true
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "amiodarone at half past two",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "02:30",
+    "twelveHour": true
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline given at a quarter past 3 pm",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "clock": "15:15"
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "ETCO2 is 3.8",
+  "expected": {
+   "actions": [
+    {
+     "type": "etco2",
+     "value": 3.8,
+     "unit": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "e t c o 2 3.8",
+  "expected": {
+   "actions": [
+    {
+     "type": "etco2",
+     "value": 3.8,
+     "unit": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline given 1 mg",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "one hundred and fifty of amiodarone",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "150 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "vf, shocked, adrenaline 1 mg, amio 300",
+  "expected": {
+   "actions": [
+    {
+     "type": "rhythm",
+     "rhythm": "VF"
+    },
+    {
+     "type": "shock",
+     "energy": null
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO in left humerus",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Left humerus"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "lost ROSC",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "CPR started 10 minutes ago, 2 shocks, adrenaline 4 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "Arrest confirmed 10 minutes ago, 2 shocks, adrenaline 4 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 10 minutes ago, adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "arrest confirmed at 14:20",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "clock": "14:20"
+     }
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we've been going for 15 minutes, in VF, shocked 3 times",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 900
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    },
+    {
+     "type": "earlierRhythm",
+     "rhythm": "VF"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we're 10 minutes in, 2 adrenaline, amiodarone 300",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 2
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "half an hour in",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 1800
+     }
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "crew started CPR at 2:15, asystole throughout",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "clock": "02:15",
+      "twelveHour": true
+     }
+    },
+    {
+     "type": "earlierRhythm",
+     "rhythm": "Asystole"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline x2, last 4 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 1
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "2 shocks",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "shocked twice",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "AED shocked 3 times",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "two doses of adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "2 adrenaline",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "no shocks, adrenaline 1 mg",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "IV started 5 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IV",
+     "successful": true,
+     "gauge": null,
+     "location": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 300
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "down for 10 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "downtime 15 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "collapsed at 14:10",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "bystander CPR started 10 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "downtime"
+  }
+ },
+ {
+  "heard": "family started CPR 5 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "CPR for 2 minutes",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "resus started 5 minutes ago, amiodarone and lidocaine",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "adrenaline 4 minutes ago and amiodarone 2 minutes ago",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "conflict"
+  }
+ },
+ {
+  "heard": "2 shocks before eResus",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "AED shocked 3 times before we arrived",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "two doses of adrenaline already",
+  "expected": {
+   "actions": [
+    {
+     "type": "given",
+     "item": "adrenaline",
+     "count": 2
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "one shock delivered",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "1 adrenaline",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we started compressions again, shock delivered",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 10 minutes ago, adrenaline 4 minutes ago, amiodarone",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 240
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "we're 10 minutes in, amiodarone, 3 shocks",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 3
+    },
+    {
+     "type": "given",
+     "item": "amiodarone",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "we started amiodarone 2 minutes ago",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": null
+    }
+   ],
+   "time": {
+    "secondsAgo": 120
+   },
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline amiodarone due",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "preparing adrenaline amiodarone",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "adrenaline 1 amiodarone 300",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    },
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "shock 2 adrenaline given",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    },
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "TXA given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tranexamic acid",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tranexamic acid 1 gram",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tranexamic acid",
+     "dose": "1 g"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "calcium chloride 10 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Calcium chloride 10%",
+     "dose": "10 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "bicarb 50 mmol",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium bicarbonate 8.4%",
+     "dose": "50 mmol"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "naloxone 400 micrograms",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Naloxone",
+     "dose": "400 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "Narcan given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Naloxone",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 100 milligrams",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "100 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tenecteplase given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Tenecteplase",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "noradrenaline started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Noradrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "push dose adrenaline 10 micrograms",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline push-dose",
+     "dose": "10 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline infusion started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "give TXA",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "instruction"
+  }
+ },
+ {
+  "heard": "prepare calcium",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "unit of blood",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Packed red cells",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline flush",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "pelvic binder on",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Pelvic binder"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "tourniquet left leg",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Tourniquet"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "left thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (left)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "bilateral thoracostomies",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (bilateral)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle decompression right",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle decompression both sides",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (left)"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "no binder",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "HEMS requested",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Enhanced / critical care requested"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "traumatic arrest",
+  "expected": {
+   "actions": [
+    {
+     "type": "trauma"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "major trauma centre",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "sats 96",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "spo2",
+     "value": "96%"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "sats are 94 percent",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "spo2",
+     "value": "94%"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BP 110 over 70",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "110/70 (MAP 83)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood pressure 90 on 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "90/50 (MAP 63)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BM 6.2",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "glucose",
+     "value": "6.2 mmol/L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood sugar is 4.5",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "glucose",
+     "value": "4.5 mmol/L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "temp 36.4",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "temperature",
+     "value": "36.4 °C"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "12 lead shows a STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "twelve lead no STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "No STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "sats 300",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "BP 70 over 110",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "CPR started 10 minutes ago, 2 shocks, TXA given",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "countUnclear"
+  }
+ },
+ {
+  "heard": "Arrest confirmed 10 minutes ago, 2 shocks, TXA given",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 600
+     }
+    },
+    {
+     "type": "given",
+     "item": "shock",
+     "count": 2
+    },
+    {
+     "type": "given",
+     "item": "Tranexamic acid",
+     "count": 1
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "10% glucose 50 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Glucose 10%",
+     "dose": "50 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "glucose 10% 100 ml",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Glucose 10%",
+     "dose": "100 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "needle thoracostomy left",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (left)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "thoracotomy",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "clamshell",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracotomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO left humerus, needle decompression right",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Left humerus"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "aim for sats 94 to 98",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "sats 94 to 98",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "query STEMI",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "Possible STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "12 lead shows ST elevation",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "no ST elevation on the 12 lead",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "ecg",
+     "value": "No STEMI"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "nor adrenaline started",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Noradrenaline infusion",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "systolic of 80",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "80 systolic"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "BP 80",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "MAP 65",
+  "expected": {
+   "actions": [
+    {
+     "type": "observation",
+     "kind": "bp",
+     "value": "MAP 65"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pelvic sling on",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Pelvic binder"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "resus started 5 minutes ago, thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "started",
+     "time": {
+      "secondsAgo": 300
+     }
+    },
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "IO left humerus, needle decompression",
+  "expected": {
+   "actions": [
+    {
+     "type": "access",
+     "route": "IO",
+     "successful": true,
+     "gauge": null,
+     "location": "Left humerus"
+    },
+    {
+     "type": "procedure",
+     "procedure": "Needle decompression"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "right sided thoracostomy",
+  "expected": {
+   "actions": [
+    {
+     "type": "procedure",
+     "procedure": "Thoracostomy (right)"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "Consider adrenaline.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Consider second dose of amiodarone.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Consider second dose of lidocaine.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "Adrenaline due.",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "notGiven"
+  }
+ },
+ {
+  "heard": "have we got a pulse",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "okay is that VF",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "question"
+  }
+ },
+ {
+  "heard": "stand clear shocking",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "adrenaline 1 mg IV",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "1 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "amiodarone 300 IO",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "amiodarone",
+     "dose": "300 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "push dose adrenaline 100",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Adrenaline push-dose",
+     "dose": "100 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "500 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "one litre of saline",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "1 L"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "saline 10 mls per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": "10 ml/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "rocuronium 100",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Rocuronium",
+     "dose": "100 mg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "fentanyl 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Fentanyl",
+     "dose": "50 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline 10 micrograms per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": "10 mcg/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 2 mg per kilo",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "2 mg/kg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "hartmanns 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Hartmann’s solution",
+     "dose": "500 ml"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "whole blood 1 unit",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Whole blood",
+     "dose": "1 unit"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "atropine 500",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Atropine",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "ketamine 100 mg fentanyl 50",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Ketamine",
+     "dose": "100 mg"
+    },
+    {
+     "type": "otherDrug",
+     "drug": "Fentanyl",
+     "dose": "50 mcg"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "Shot given",
+  "expected": {
+   "actions": [
+    {
+     "type": "shock",
+     "energy": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "adrenaline shot given",
+  "expected": {
+   "actions": [
+    {
+     "type": "drug",
+     "drug": "adrenaline",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Packed red cells",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "blood loss",
+  "expected": {
+   "actions": [],
+   "time": null,
+   "reason": "nothing"
+  }
+ },
+ {
+  "heard": "plasma given",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Plasma",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "fluid bolus",
+  "expected": {
+   "actions": [
+    {
+     "type": "otherDrug",
+     "drug": "Sodium chloride 0.9%",
+     "dose": null
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "patient re-arrested",
+  "expected": {
+   "actions": [
+    {
+     "type": "rearrest"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "pre-alert given",
+  "expected": {
+   "actions": [
+    {
+     "type": "preAlert"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "LUCAS on",
+  "expected": {
+   "actions": [
+    {
+     "type": "note",
+     "text": "Mechanical CPR started"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "65 year old male",
+  "expected": {
+   "actions": [
+    {
+     "type": "patient",
+     "age": "65",
+     "sex": "Male"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ },
+ {
+  "heard": "aged 70, female",
+  "expected": {
+   "actions": [
+    {
+     "type": "patient",
+     "age": "70",
+     "sex": "Female"
+    }
+   ],
+   "time": null,
+   "reason": null
+  }
+ }
+]
