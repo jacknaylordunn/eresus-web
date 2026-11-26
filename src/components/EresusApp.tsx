@@ -996,7 +996,7 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
     return (
       <div className="flex items-center justify-center h-screen bg-background">
         <img
-          src="/icons/eresus-logo.svg"
+          src="/icons/icon-512.png"
           alt="eResus"
           className="w-24 h-24 rounded-2xl animate-pulse"
         />
@@ -3245,7 +3245,7 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
         <div className="flex flex-col items-center space-y-3">
           <img
-            src="/icons/eresus-logo.svg"
+            src="/icons/icon-512.png"
             alt="eResus"
             className="w-20 h-20 rounded-2xl shadow-lg"
           />
@@ -3301,7 +3301,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
         <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
             <img
-              src="/icons/eresus-logo.svg"
+              src="/icons/icon-512.png"
               alt="eResus"
               className="w-16 h-16 mx-auto rounded-2xl shadow-lg"
             />
