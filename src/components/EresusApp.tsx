@@ -995,7 +995,7 @@ const FirebaseProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) =
     return (
       <div className="flex items-center justify-center h-screen bg-background">
         <img
-          src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+          src="/icons/eresus-logo.svg"
           alt="eResus"
           className="w-24 h-24 rounded-2xl animate-pulse"
         />
@@ -3244,7 +3244,7 @@ const InstallInstructionsModal: React.FC<{ isOpen: boolean; onClose: () => void 
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
         <div className="flex flex-col items-center space-y-3">
           <img
-            src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+            src="/icons/eresus-logo.svg"
             alt="eResus"
             className="w-20 h-20 rounded-2xl shadow-lg"
           />
@@ -3300,7 +3300,7 @@ const AccountPromptView: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
         <div className="fixed inset-0 bg-gray-900/95 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5 max-h-[90vh] overflow-y-auto">
             <img
-              src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus/eResus.svg"
+              src="/icons/eresus-logo.svg"
               alt="eResus"
               className="w-16 h-16 mx-auto rounded-2xl shadow-lg"
             />
@@ -4809,7 +4809,7 @@ const IosAppStoreBanner: React.FC = () => {
   return (
     <div className="p-4 bg-tone-tint rounded-xl border border-tone-accent/30 flex items-center space-x-3">
       <img
-        src="https://145955222.fs1.hubspotusercontent-eu1.net/hubfs/145955222/eResus.jpg"
+        src="/icons/icon-192.png"
         className="w-12 h-12 rounded-xl flex-shrink-0"
         alt="eResus"
       />

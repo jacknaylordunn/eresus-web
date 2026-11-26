@@ -1,9 +1,15 @@
-const CACHE_NAME = 'eresus-react-v11';
+const CACHE_NAME = 'eresus-react-v12';
 
 const STATIC_URLS = [
   '/',
   '/index.html',
   '/manifest.json',
+  // Icons are local so they show with no signal
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/icons/apple-touch-icon.png',
+  '/icons/eresus-logo.svg',
   // Spoken prompts must work with no signal
   '/audio/prompts/rhythm_check_due.mp3',
   '/audio/prompts/prepare_rhythm_check.mp3',
